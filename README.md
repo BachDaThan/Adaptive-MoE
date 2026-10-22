@@ -7,7 +7,7 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 ## Cài
 
 ```bash
-pip install git+https://github.com/<ten-ban>/Adaptive-MoE
+pip install git+https://github.com/BachDaThan/Adaptive-MoE
 ```
 
 hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
