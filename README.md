@@ -7,7 +7,7 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 ## Cài
 
 ```bash
-pip install git+https://github.com/BachDaThan/Adaptive-MoE
+pip install git+https://github.com/<ten-ban>/Adaptive-MoE
 ```
 
 hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
@@ -67,26 +67,27 @@ Tùy chọn: `--ste` (gradient chảy vào ranh giới chọn expert) và `--dif
 
 ## Kết quả thí nghiệm (trạng thái: thử nghiệm)
 
-Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm tiết, Wikipedia tiếng Việt (30M ký tự, ~7.5M token), 3000 bước, **một seed**. Val loss thấp hơn là tốt hơn.
+Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm tiết, Wikipedia tiếng Việt (30M ký tự, ~7.5M token), 3000 bước. Fixed k=2 và adaptive `compute_coef=0` chạy 3 seed (trung bình, khoảng min–max), các cấu hình còn lại một seed. Val loss thấp hơn là tốt hơn.
 
 | Cấu hình | avg_k | val loss |
 |---|---|---|
 | top-k cố định, k=1 | 1.00 | 4.194 |
-| top-k cố định, k=2 | 2.00 | **4.077** |
+| top-k cố định, k=2 (3 seed) | 2.00 | **4.078** (4.077–4.080) |
 | k cố định theo layer (1,2,2,3) | 2.00 | 4.115 |
 | k cố định theo layer (1,2,3,3) | 2.25 | 4.115 |
 | adaptive + `diff_head`, `compute_coef=0.5` | 1.90 | 4.150 |
 | adaptive + `diff_head`, `diff_target=gain`, `compute_coef=0.5` | 1.88 | 4.148 |
-| adaptive + `diff_head`, `compute_coef=0` | 2.09 | 4.087 |
+| adaptive + `diff_head`, `compute_coef=0` (3 seed) | 2.10 | 4.085 (4.081–4.088) |
 
 Rút ra:
 - Router học được độ khó của token (tương quan với loss thật khoảng 0.4 đến 0.5) và số expert tăng theo độ khó (tương quan k và loss từ +0.26 đến +0.37).
-- **Chưa có bằng chứng adaptive hiệu quả hơn top-k cố định ở quy mô này.** Điểm gần nhất (`compute_coef=0`) vẫn kém fixed k=2 khoảng 0.01 nat và dùng nhiều expert hơn.
+- **Chưa có bằng chứng adaptive hiệu quả hơn top-k cố định ở quy mô này.** Cấu hình tốt nhất (`compute_coef=0`) kém fixed k=2 khoảng 0.007 nat (ppl 59.4 so với 59.0), nhất quán ở cả 3 seed, trong khi dùng nhiều hơn khoảng 5% expert.
+- Quan sát ổn định giữa các seed: khi để router tự do, các layer sâu xin nhiều expert hơn (layer 1 khoảng 1.3 đến 1.6, layer 4 khoảng 2.7 đến 2.8). Tuy vậy gán cứng k theo layer (1,2,2,3) lại kém k đồng đều, nên chưa thể dùng điều này như một công thức.
 - "Token khó" không đồng nghĩa "token được lợi khi thêm expert": nhãn dạy theo loss đưa nhiều expert cho từ hiếm và từ chức năng, trong khi từ nội dung mới là loại được lợi nhiều nhất khi thêm expert. Nhãn theo mức loss giảm được (`gain`) quá nhiễu nên đầu dự đoán không học được.
 - `compute_coef=0.5` giúp như một regularizer khi dữ liệu nhỏ và model overfit (1.9M token), nhưng làm hại khi dữ liệu đủ lớn.
 - Phân bổ k cố định theo layer không thắng k đồng đều.
 
-Giới hạn: một seed, model nhỏ, train ngắn, chưa đo tốc độ thật (số FLOP giảm nhưng vòng lặp theo expert chưa tối ưu). Kết quả ở model lớn có thể khác.
+Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ngắn, chưa đo tốc độ thật (vòng lặp theo expert chưa được tối ưu). Kết quả ở model lớn có thể khác.
 
 ## Chạy test và demo
 
