@@ -1,95 +1,100 @@
 # adaptive-moe
 
-Module PyTorch nhỏ (thử nghiệm) cho MoE **thích ứng**: số chuyên gia được kích hoạt và mức đóng góp của từng chuyên gia thay đổi theo độ khó của từng token, thay vì cố định top-6 hay top-12.
+**English** | [Tiếng Việt](README.vi.md)
 
-Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMoE`.
+A small (experimental) PyTorch module for **adaptive** Mixture-of-Experts: the number of experts activated per token, and how strongly each one contributes, change with token difficulty instead of being fixed at top-6 or top-12.
 
-## Cài
+Anyone training an MoE model can swap their MoE layer for `AdaptiveMoE`.
+
+> **Status: experimental.** The mechanism works (the router learns token difficulty and uses more experts on harder tokens), but in our experiments it did **not** beat a fixed top-k baseline. See [Experimental results](#experimental-results).
+
+## Install
 
 ```bash
 pip install git+https://github.com/BachDaThan/Adaptive-MoE
 ```
 
-hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
+or copy `adaptive_moe.py` into your project (PyTorch is the only dependency).
 
-## Thành phần
+## Components
 
-| Thành phần | Làm gì |
+| Component | What it does |
 |---|---|
-| `AdaptiveRouter` | Top-p routing: lấy expert theo xác suất giảm dần cho tới khi tổng đạt `top_p`. Token dễ dùng ít expert, token khó dùng nhiều. |
-| Strength head | Mỗi token có hệ số "sức mạnh" trong `[min_strength, 1]` nhân vào đóng góp của expert được chọn. |
-| `target_k` | Kéo số expert trung bình về gần giá trị bạn muốn (vd 3.0), dễ kiểm soát hơn phạt thô. |
-| `n_shared` | Expert luôn bật (kiểu DeepSeek), giúp chất lượng ổn khi router chỉ chọn 1 expert. |
-| Loss phụ | Cân bằng tải, phạt compute, z-loss. Gom bằng `gather_aux_loss(model)`. |
-| `moe_stats(model)` | Xem `avg_k` và `avg_strength` của từng layer sau mỗi forward. |
-| `cascade_forward` | Inference: chạy tầng nhỏ (vd 2 expert), kém tự tin thì nâng lên 4, rồi 8. Độ tự tin: `maxprob` hoặc `entropy`. |
-| `adaptive_generate` | Sinh text, mỗi bước tự chọn tầng. |
-| `max_resident` + `release()` | Chỉ giữ N expert trên GPU theo LRU; `release()` dọn bớt sau khi trả lời. |
+| `AdaptiveRouter` | Top-p routing: take experts by descending probability until their sum reaches `top_p`. Easy tokens use fewer experts, hard tokens use more. |
+| Strength head | Each token gets a learned "strength" factor in `[min_strength, 1]` that scales the contribution of the chosen experts. |
+| `target_k` | Pulls the average number of experts toward a value you choose (e.g. 3.0). |
+| `n_shared` | Always-on shared experts (DeepSeek style); keeps quality stable when the router picks a single expert. |
+| Auxiliary losses | Load balancing, compute penalty, z-loss. Collect them with `gather_aux_loss(model)`. |
+| `moe_stats(model)` | Per-layer `avg_k` and `avg_strength` after each forward pass. |
+| `diff_head` (experimental) | The router gets a head that predicts token difficulty and sets `top_p` per token. See the results below. |
+| `cascade_forward` | Inference: run a small tier first (e.g. 2 experts); if confidence is low, escalate to 4, then 8. Confidence: `maxprob` or `entropy`. |
+| `adaptive_generate` | Text generation with per-step tier selection. |
+| `max_resident` + `release()` | Keep only N experts on the GPU (LRU); `release()` frees more after a reply. |
 
-## Dùng
+## Usage
 
 ```python
 from adaptive_moe import AdaptiveMoE, gather_aux_loss, moe_stats, adaptive_generate
 
-# trong model của bạn
+# inside your model
 self.moe = AdaptiveMoE(d_model=512, d_ff=1024, n_experts=16,
                        top_p=0.7, target_k=4.0, n_shared=1)
 y, _, _ = self.moe(x)                      # x: [B, S, D]
 
-# train
+# training
 loss = task_loss + gather_aux_loss(model)
 print(moe_stats(model))                    # {"layers.0.moe": {"avg_k": ..., "avg_strength": ...}}
 
-# inference, mỗi bước tự nâng tầng
+# inference with per-step escalation
 ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
                             tiers=(2, 4, 8), min_confidence=0.6, confidence="entropy")
 ```
 
-## Lưu ý
+## Notes
 
-- `release()` và `max_resident` chỉ dùng khi inference (eval), không bật lúc train.
-- `adaptive_generate` chưa có KV cache (mỗi bước chạy lại cả chuỗi). Model thật nên tự thêm KV cache; phần chọn tầng giữ nguyên.
-- Cascade chạy lại forward khi câu khó, nên tốn thêm compute ở những bước đó.
-- `top_p`, `target_k` và các hệ số loss cần chỉnh theo model và dữ liệu của bạn.
-- Đây là phần router/layer, chưa phải model hoàn chỉnh.
+- `release()` and `max_resident` are for inference (eval) only; do not enable them during training.
+- `adaptive_generate` has no KV cache (each step re-runs the whole sequence). Real models should add their own KV cache; the tier-selection part stays the same.
+- Cascade re-runs the forward pass when a step is hard, so those steps cost extra compute.
+- `top_p`, `target_k` and the loss coefficients need tuning for your model and data.
+- This is the router/layer only, not a complete model.
 
-## Thí nghiệm trên tiếng Việt thật
+## Language-model experiment (Vietnamese text)
 
 ```bash
 pip install torch datasets
 python lm_experiment.py --mode adaptive --target_k 3.0   # adaptive
-python lm_experiment.py --mode fixed --k 3               # baseline top-k cố định
+python lm_experiment.py --mode fixed --k 3               # fixed top-k baseline
+python compare.py                                        # table of all r_*.json results
 ```
 
-Script train LM nhỏ (tokenize theo âm tiết) rồi in val loss, số expert trung bình, tương quan giữa k và loss của token, và k theo loại token (dấu câu, số, từ chức năng, tên riêng, từ hiếm, từ nội dung). Dùng `--text_file` nếu muốn dữ liệu riêng.
+The script trains a small LM (syllable-level tokenization of Vietnamese Wikipedia) and prints validation loss, average experts per token, the correlation between per-token expert count and per-token loss, and the expert count per token category (punctuation, numbers, function words, proper nouns, rare words, content words). Report labels are printed in Vietnamese. Use `--text_file` to train on your own text.
 
-Tùy chọn: `--ste` (gradient chảy vào ranh giới chọn expert) và `--diff_head` (router có đầu dự đoán độ khó của token, huấn luyện bằng loss thật, rồi đặt `top_p` theo từng token trong `[p_min, p_max]`).
+Options: `--ste` (let task-loss gradients reach the expert-selection boundary) and `--diff_head` (the router predicts token difficulty, trained on the real token loss, then sets `top_p` per token within `[p_min, p_max]`). `--layer_k 1,2,2,3` sets a fixed k per layer.
 
-## Kết quả thí nghiệm (trạng thái: thử nghiệm)
+## Experimental results
 
-Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm tiết, Wikipedia tiếng Việt (30M ký tự, ~7.5M token), 3000 bước. Fixed k=2 và adaptive `compute_coef=0` chạy 3 seed (trung bình, khoảng min–max), các cấu hình còn lại một seed. Val loss thấp hơn là tốt hơn.
+Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenization, Vietnamese Wikipedia (30M characters, about 7.5M tokens), 3000 steps. Fixed k=2 and adaptive with `compute_coef=0` were run with 3 seeds (mean and min–max range); all other configurations used one seed. Lower validation loss is better.
 
-| Cấu hình | avg_k | val loss |
+| Configuration | avg_k | val loss |
 |---|---|---|
-| top-k cố định, k=1 | 1.00 | 4.194 |
-| top-k cố định, k=2 (3 seed) | 2.00 | **4.078** (4.077–4.080) |
-| k cố định theo layer (1,2,2,3) | 2.00 | 4.115 |
-| k cố định theo layer (1,2,3,3) | 2.25 | 4.115 |
+| fixed top-k, k=1 | 1.00 | 4.194 |
+| fixed top-k, k=2 (3 seeds) | 2.00 | **4.078** (4.077–4.080) |
+| fixed per-layer k (1,2,2,3) | 2.00 | 4.115 |
+| fixed per-layer k (1,2,3,3) | 2.25 | 4.115 |
 | adaptive + `diff_head`, `compute_coef=0.5` | 1.90 | 4.150 |
 | adaptive + `diff_head`, `diff_target=gain`, `compute_coef=0.5` | 1.88 | 4.148 |
-| adaptive + `diff_head`, `compute_coef=0` (3 seed) | 2.10 | 4.085 (4.081–4.088) |
+| adaptive + `diff_head`, `compute_coef=0` (3 seeds) | 2.10 | 4.085 (4.081–4.088) |
 
-Rút ra:
-- Router học được độ khó của token (tương quan với loss thật khoảng 0.4 đến 0.5) và số expert tăng theo độ khó (tương quan k và loss từ +0.26 đến +0.37).
-- **Chưa có bằng chứng adaptive hiệu quả hơn top-k cố định ở quy mô này.** Cấu hình tốt nhất (`compute_coef=0`) kém fixed k=2 khoảng 0.007 nat (ppl 59.4 so với 59.0), nhất quán ở cả 3 seed, trong khi dùng nhiều hơn khoảng 5% expert.
-- Quan sát ổn định giữa các seed: khi để router tự do, các layer sâu xin nhiều expert hơn (layer 1 khoảng 1.3 đến 1.6, layer 4 khoảng 2.7 đến 2.8). Tuy vậy gán cứng k theo layer (1,2,2,3) lại kém k đồng đều, nên chưa thể dùng điều này như một công thức.
-- "Token khó" không đồng nghĩa "token được lợi khi thêm expert": nhãn dạy theo loss đưa nhiều expert cho từ hiếm và từ chức năng, trong khi từ nội dung mới là loại được lợi nhiều nhất khi thêm expert. Nhãn theo mức loss giảm được (`gain`) quá nhiễu nên đầu dự đoán không học được.
-- `compute_coef=0.5` giúp như một regularizer khi dữ liệu nhỏ và model overfit (1.9M token), nhưng làm hại khi dữ liệu đủ lớn.
-- Phân bổ k cố định theo layer không thắng k đồng đều.
+Takeaways:
+- The router learns token difficulty (correlation with the true loss around 0.4 to 0.5) and the number of experts rises with difficulty (correlation between k and loss from +0.26 to +0.37).
+- **No evidence that adaptive routing is more efficient than fixed top-k at this scale.** The best configuration (`compute_coef=0`) is about 0.007 nats worse than fixed k=2 (perplexity 59.4 vs 59.0), consistently across all 3 seeds, while using about 5% more experts.
+- A stable observation across seeds: when the router is free, deeper layers ask for more experts (layer 1 about 1.3 to 1.6, layer 4 about 2.7 to 2.8). However, hard-coding k per layer (1,2,2,3) was worse than uniform k, so this is not a ready-made recipe.
+- "Hard token" does not mean "token that benefits from more experts": a loss-based label sends more experts to rare words and function words, while content words gain the most from an extra expert. A label based on the loss reduction from adding experts (`gain`) was too noisy for the difficulty head to learn.
+- `compute_coef=0.5` acts as a helpful regularizer when data is small and the model overfits (1.9M tokens), but hurts once there is enough data.
 
-Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ngắn, chưa đo tốc độ thật (vòng lặp theo expert chưa được tối ưu). Kết quả ở model lớn có thể khác.
+Limitations: most configurations have a single seed, the model is small, training is short, and wall-clock speed was not measured (the per-expert loop is not optimized). Results at larger scale may differ.
 
-## Chạy test và demo
+## Tests and demo
 
 ```bash
 pip install torch
@@ -99,4 +104,4 @@ python train_demo.py
 
 ## License
 
-MIT, xem `LICENSE`.
+MIT © 2026 BachDaThan, see [LICENSE](LICENSE).
