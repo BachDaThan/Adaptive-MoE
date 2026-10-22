@@ -4,12 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptive-moe"
-version = "0.2.0"
+version = "0.3.0"
 description = "Adaptive top-p MoE routing with per-token expert count and strength, cascade inference and LRU expert offload"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["torch>=2.0"]
 license = { text = "MIT" }
+authors = [{ name = "BachDaThan" }]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+experiments = ["numpy", "datasets"]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/BachDaThan/Adaptive-MoE"
 
 [tool.setuptools]
 py-modules = ["adaptive_moe"]

@@ -1,5 +1,7 @@
 # adaptive-moe
 
+![tests](https://github.com/BachDaThan/Adaptive-MoE/actions/workflows/tests.yml/badge.svg)
+
 **English** | [Tiếng Việt](README.vi.md)
 
 A small (experimental) PyTorch module for **adaptive** Mixture-of-Experts: the number of experts activated per token, and how strongly each one contributes, change with token difficulty instead of being fixed at top-6 or top-12.
@@ -97,8 +99,8 @@ Limitations: most configurations have a single seed, the model is small, trainin
 ## Tests and demo
 
 ```bash
-pip install torch
-python test_adaptive_moe.py
+pip install torch pytest
+pytest -q                  # or: python test_adaptive_moe.py
 python train_demo.py
 ```
 

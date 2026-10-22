@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 class Expert(nn.Module):
@@ -190,13 +190,23 @@ class AdaptiveMoE(nn.Module):
         out = torch.zeros_like(flat)
         for sh in self.shared:
             out = out + sh(flat)
-        for e, expert in enumerate(self.experts):
-            idx = (weights[:, e] > 0).nonzero(as_tuple=True)[0]
-            if idx.numel() == 0:
-                continue
-            self._ensure_resident(e, flat.device)
-            y = expert(flat[idx]) * weights[idx, e].unsqueeze(-1)
-            out.index_add_(0, idx, y.to(out.dtype))
+        # Dispatch gộp: sắp xếp (token, expert) theo expert, chạy mỗi expert một lần trên
+        # lát liên tiếp. Chỉ 2 lần đồng bộ host-device thay vì một lần cho mỗi expert.
+        tok, exp = (weights > 0).nonzero(as_tuple=True)
+        if tok.numel() > 0:
+            order = exp.argsort(stable=True)
+            tok, exp = tok[order], exp[order]
+            counts = torch.bincount(exp, minlength=len(self.experts)).tolist()
+            xs = flat[tok]
+            ws = weights[tok, exp].unsqueeze(-1)
+            ys, start = [], 0
+            for e, n in enumerate(counts):
+                if n == 0:
+                    continue
+                self._ensure_resident(e, flat.device)
+                ys.append(self.experts[e](xs[start:start + n]))
+                start += n
+            out.index_add_(0, tok, (torch.cat(ys) * ws).to(out.dtype))
         aux = (self.balance_coef * info["balance_loss"]
                + self.compute_coef * info["compute_loss"]
                + self.z_coef * info["z_loss"])
@@ -278,12 +288,14 @@ def cascade_forward(model, inputs, tiers=(2, 4, 8), min_confidence=0.6, confiden
     Trả về (logits, k_đã_dùng).
     """
     logits, k = None, tiers[-1]
-    for k in tiers:
-        set_k_cap(model, k)
-        logits = model(inputs)
-        if _confidence(logits[:, -1], confidence).min().item() >= min_confidence:
-            break
-    set_k_cap(model, None)
+    try:
+        for k in tiers:
+            set_k_cap(model, k)
+            logits = model(inputs)
+            if _confidence(logits[:, -1], confidence).min().item() >= min_confidence:
+                break
+    finally:
+        set_k_cap(model, None)      # luôn bỏ trần k, kể cả khi forward lỗi
     return logits, k
 
 

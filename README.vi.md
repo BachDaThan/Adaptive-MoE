@@ -1,5 +1,7 @@
 # adaptive-moe
 
+![tests](https://github.com/BachDaThan/Adaptive-MoE/actions/workflows/tests.yml/badge.svg)
+
 [English](README.md) | **Tiếng Việt**
 
 Module PyTorch nhỏ (thử nghiệm) cho MoE **thích ứng**: số chuyên gia được kích hoạt và mức đóng góp của từng chuyên gia thay đổi theo độ khó của từng token, thay vì cố định top-6 hay top-12.
@@ -95,8 +97,8 @@ Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ng�
 ## Chạy test và demo
 
 ```bash
-pip install torch
-python test_adaptive_moe.py
+pip install torch pytest
+pytest -q                  # hoặc: python test_adaptive_moe.py
 python train_demo.py
 ```
 

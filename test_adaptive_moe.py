@@ -68,6 +68,18 @@ def test_difficulty_head():
     assert 1 <= m.moe.last_info["avg_k"].item() <= 8
 
 
+def test_matches_dense_reference():
+    # dispatch gộp phải cho kết quả giống cách tính dày: sum_e w_e * expert_e(x) (+ shared)
+    m = AdaptiveMoE(16, 32, n_experts=6, n_shared=1).eval()
+    x = torch.randn(2, 7, 16)
+    out, _, _ = m(x)
+    flat = x.reshape(-1, 16)
+    w, _ = m.router(flat, None)
+    ref = sum(sh(flat) for sh in m.shared) + sum(
+        w[:, e:e + 1] * ex(flat) for e, ex in enumerate(m.experts))
+    assert torch.allclose(out.reshape(-1, 16), ref, atol=1e-5)
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))

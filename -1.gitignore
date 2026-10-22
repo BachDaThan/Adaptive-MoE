@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+# kết quả thí nghiệm
+r_*.json
+results_*.json
