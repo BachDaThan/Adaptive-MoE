@@ -10,7 +10,7 @@ import sys
 
 
 def label(a):
-    name = a["mode"] + ("+ste" if a.get("ste") else "") + ("+diff" if a.get("diff_head") else "")
+    name = a["mode"] + ("+ste" if a.get("ste") else "") + ("+diff" if a.get("diff_head") else "") + ("+gain" if a.get("diff_target") == "gain" else "")
     budget = f"k={a['k']}" if a["mode"] == "fixed" else f"tk={a['target_k']}"
     return name, budget
 
@@ -29,7 +29,7 @@ def main():
         a, r = d["args"], d["result"]
         name, budget = label(a)
         q = r["k_by_loss_quartile"]
-        print(f"{p[-21:]:<22}{name:<16}{budget:<10}{a['seed']:>5}{a.get('max_chars', 0) // 1_000_000:>5}M{a.get('compute_coef', 0):>5}{r['val_loss']:>10.4f}"
+        print(f"{p[-21:]:<22}{name:<16}{budget:<10}{a['seed']:>5}{a.get('max_chars', 0) // 1_000_000:>5}M{(0 if a['mode'] == 'fixed' else a.get('compute_coef', 0)):>5}{r['val_loss']:>10.4f}"
               f"{r['val_ppl']:>8.1f}{r['avg_k']:>7.2f}{r['corr_k_loss']:>+14.3f}{q[3] - q[0]:>+9.2f}")
 
 

@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from adaptive_moe import AdaptiveMoE, difficulty_loss, gather_aux_loss
+from adaptive_moe import AdaptiveMoE, difficulty_loss, gather_aux_loss, set_k_cap
 from vi_data import CATS, build_vocab, categorize, encode, tokenize
 
 
@@ -175,6 +175,11 @@ def main():
     ap.add_argument("--n_shared", type=int, default=1)
     ap.add_argument("--diff_head", action="store_true",
                     help="router có đầu dự đoán độ khó (huấn luyện bằng loss thật của token) và đặt top_p theo từng token")
+    ap.add_argument("--diff_target", choices=["loss", "gain"], default="loss",
+                    help="loss: đầu độ khó học theo loss của token. gain: học theo mức loss GIẢM được "
+                         "khi thêm expert (k=1 so với k=gain_high), đo bằng 2 forward phụ")
+    ap.add_argument("--gain_every", type=int, default=4, help="cứ N bước đo gain một lần (tiết kiệm thời gian)")
+    ap.add_argument("--gain_high", type=int, default=3)
     ap.add_argument("--p_min", type=float, default=0.4)
     ap.add_argument("--p_max", type=float, default=0.95)
     ap.add_argument("--diff_coef", type=float, default=0.1)
@@ -246,7 +251,23 @@ def main():
         task = tok.mean()
         loss = task + gather_aux_loss(model)
         if args.diff_head:
-            loss = loss + args.diff_coef * difficulty_loss(model, tok)
+            if args.diff_target == "loss":
+                loss = loss + args.diff_coef * difficulty_loss(model, tok)
+            elif step % args.gain_every == 0:
+                # nhãn "lợi ích của việc thêm expert": loss(k=1) - loss(k=gain_high), không gradient
+                moes = [m for m in model.modules() if isinstance(m, AdaptiveMoE)]
+                saved = [(m.last_diff_logit, m.last_info) for m in moes]
+                model.eval()
+                with torch.no_grad():
+                    set_k_cap(model, 1)
+                    low = F.cross_entropy(model(x).view(-1, V), y.view(-1), reduction="none")
+                    set_k_cap(model, args.gain_high)
+                    high = F.cross_entropy(model(x).view(-1, V), y.view(-1), reduction="none")
+                    set_k_cap(model, None)
+                model.train()
+                for m, (dl_, inf_) in zip(moes, saved):   # khôi phục kết quả của forward chính
+                    m.last_diff_logit, m.last_info = dl_, inf_
+                loss = loss + args.diff_coef * difficulty_loss(model, low - high)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -256,7 +277,7 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
+    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     out = args.out or f"results_{args.mode}.json"
