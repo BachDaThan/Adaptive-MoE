@@ -165,6 +165,7 @@ def main():
     ap.add_argument("--compute_coef", type=float, default=0.5)
     ap.add_argument("--experts", type=int, default=8)
     ap.add_argument("--n_shared", type=int, default=1)
+    ap.add_argument("--ste", action="store_true", help="gradient của task loss chảy vào quyết định chọn expert")
     ap.add_argument("--d_model", type=int, default=256)
     ap.add_argument("--d_ff", type=int, default=512)
     ap.add_argument("--layers", type=int, default=4)
@@ -200,11 +201,13 @@ def main():
     if args.mode == "adaptive":
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, top_p=args.top_p,
                       target_k=args.target_k, compute_coef=args.compute_coef,
-                      n_shared=args.n_shared, noise_std=0.1)
+                      n_shared=args.n_shared, noise_std=0.1, ste=args.ste)
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, noise_std=0.1)
     model = LM(V, args.d_model, args.layers, args.heads, args.seq, moe_kw).to(device)
+    nn.init.normal_(model.emb.weight, std=0.02)   # init nhỏ, tránh loss khởi đầu ~177
+    nn.init.normal_(model.pos.weight, std=0.02)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.1f}M tham số | thiết bị: {device}")
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.1, betas=(0.9, 0.95))
@@ -236,7 +239,7 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
+    title = f"{args.mode}{'+ste' if args.ste else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     out = args.out or f"results_{args.mode}.json"

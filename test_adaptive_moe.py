@@ -49,6 +49,14 @@ def test_target_k_loss():
     assert info["compute_loss"].item() >= 0
 
 
+def test_ste_gives_boundary_gradient():
+    r = AdaptiveRouter(16, 8, top_p=0.7, ste=True).train()
+    x = torch.randn(30, 16, requires_grad=True)
+    w, _ = r(x)
+    (w * torch.arange(8.0)).sum().backward()
+    assert r.gate.weight.grad is not None and x.grad is not None
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))
