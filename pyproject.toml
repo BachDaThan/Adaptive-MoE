@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptive-moe"
+version = "0.2.0"
+description = "Adaptive top-p MoE routing with per-token expert count and strength, cascade inference and LRU expert offload"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["torch>=2.0"]
+license = { text = "MIT" }
+
+[tool.setuptools]
+py-modules = ["adaptive_moe"]

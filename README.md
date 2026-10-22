@@ -4,44 +4,63 @@ Module PyTorch nhỏ cho MoE **thích ứng**: số chuyên gia được kích h
 
 Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMoE`.
 
-## Ý tưởng
+## Cài
+
+```bash
+pip install git+https://github.com/<ten-ban>/Adaptive-MoE
+```
+
+hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
+
+## Thành phần
 
 | Thành phần | Làm gì |
 |---|---|
 | `AdaptiveRouter` | Top-p routing: lấy expert theo xác suất giảm dần cho tới khi tổng đạt `top_p`. Token dễ dùng ít expert, token khó dùng nhiều. |
-| Strength head | Mỗi token có hệ số "sức mạnh" trong `[min_strength, 1]` nhân vào đóng góp của các expert được chọn. |
-| `compute_loss` | Phạt số expert kỳ vọng (có gradient) để router không luôn chọn tối đa. |
-| `balance_loss` | Cân bằng tải giữa các expert (kiểu Switch Transformer). |
-| `cascade_forward` | Lúc inference: chạy tầng nhỏ (vd 2 expert), nếu độ tự tin thấp thì nâng lên 4, rồi 8. |
+| Strength head | Mỗi token có hệ số "sức mạnh" trong `[min_strength, 1]` nhân vào đóng góp của expert được chọn. |
+| `target_k` | Kéo số expert trung bình về gần giá trị bạn muốn (vd 3.0), dễ kiểm soát hơn phạt thô. |
+| `n_shared` | Expert luôn bật (kiểu DeepSeek), giúp chất lượng ổn khi router chỉ chọn 1 expert. |
+| Loss phụ | Cân bằng tải, phạt compute, z-loss. Gom bằng `gather_aux_loss(model)`. |
+| `moe_stats(model)` | Xem `avg_k` và `avg_strength` của từng layer sau mỗi forward. |
+| `cascade_forward` | Inference: chạy tầng nhỏ (vd 2 expert), kém tự tin thì nâng lên 4, rồi 8. Độ tự tin: `maxprob` hoặc `entropy`. |
+| `adaptive_generate` | Sinh text, mỗi bước tự chọn tầng. |
 | `max_resident` + `release()` | Chỉ giữ N expert trên GPU theo LRU; `release()` dọn bớt sau khi trả lời. |
 
 ## Dùng
 
 ```python
-from adaptive_moe import AdaptiveMoE, cascade_forward
+from adaptive_moe import AdaptiveMoE, gather_aux_loss, moe_stats, adaptive_generate
 
-moe = AdaptiveMoE(d_model=512, d_ff=1024, n_experts=16, top_p=0.7)
-out, aux_loss, info = moe(x)          # x: [B, S, D]
-loss = task_loss + aux_loss           # info["avg_k"] cho biết số expert trung bình
+# trong model của bạn
+self.moe = AdaptiveMoE(d_model=512, d_ff=1024, n_experts=16,
+                       top_p=0.7, target_k=4.0, n_shared=1)
+y, _, _ = self.moe(x)                      # x: [B, S, D]
 
-# inference với nâng tầng
-logits, k_used = cascade_forward(model, input_ids, tiers=(2, 4, 8), min_confidence=0.6)
+# train
+loss = task_loss + gather_aux_loss(model)
+print(moe_stats(model))                    # {"layers.0.moe": {"avg_k": ..., "avg_strength": ...}}
+
+# inference, mỗi bước tự nâng tầng
+ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
+                            tiers=(2, 4, 8), min_confidence=0.6, confidence="entropy")
 ```
 
 ## Lưu ý
 
-- Dọn dẹp bằng `release()` chỉ dùng khi inference (eval). Không bật `max_resident` lúc train.
-- Cascade chạy lại forward ở tầng cao hơn nên tốn thêm compute khi câu khó. Với model sinh text, nên áp dụng theo từng đoạn hoặc từng token thay vì cả câu.
-- `top_p`, `compute_coef`, `balance_coef` cần chỉnh theo model và dữ liệu của bạn.
+- `release()` và `max_resident` chỉ dùng khi inference (eval), không bật lúc train.
+- `adaptive_generate` chưa có KV cache (mỗi bước chạy lại cả chuỗi). Model thật nên tự thêm KV cache; phần chọn tầng giữ nguyên.
+- Cascade chạy lại forward khi câu khó, nên tốn thêm compute ở những bước đó.
+- `top_p`, `target_k` và các hệ số loss cần chỉnh theo model và dữ liệu của bạn.
 - Đây là phần router/layer, chưa phải model hoàn chỉnh.
 
-## Chạy test
+## Chạy test và demo
 
 ```bash
 pip install torch
 python test_adaptive_moe.py
+python train_demo.py
 ```
 
 ## License
 
-Chọn license thoáng (MIT hoặc Apache-2.0) để ai cũng dùng được.
+MIT, xem `LICENSE`.

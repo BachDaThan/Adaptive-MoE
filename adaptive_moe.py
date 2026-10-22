@@ -1,21 +1,25 @@
 """
-adaptive_moe.py - MoE với số chuyên gia và "sức mạnh" thay đổi theo từng token.
+adaptive_moe.py (v0.2) - MoE với số chuyên gia và "sức mạnh" thay đổi theo từng token.
 
 Thành phần:
-  AdaptiveRouter : chọn số expert theo top-p (token khó -> nhiều expert hơn),
-                   kèm "strength" (0..1) điều chỉnh mức đóng góp của expert.
-  AdaptiveMoE    : layer MoE dùng router trên, có k_cap (trần số expert) và
-                   cơ chế giữ expert trên GPU theo LRU + release() để dọn dẹp.
-  set_k_cap      : đặt trần số expert cho cả model.
-  cascade_forward: chạy tầng nhỏ trước, kém tự tin thì nâng tầng (2 -> 4 -> 8...).
+  AdaptiveRouter   : top-p routing + strength head + loss phụ (cân bằng tải, compute, z-loss).
+  AdaptiveMoE      : layer MoE thích ứng (có shared expert tùy chọn, k_cap, LRU offload).
+  set_k_cap        : đặt trần số expert cho cả model.
+  gather_aux_loss  : cộng loss phụ của mọi layer (không cần tự gom từ forward).
+  moe_stats        : thống kê avg_k / avg_strength theo từng layer.
+  cascade_forward  : chạy tầng nhỏ trước, kém tự tin thì nâng tầng.
+  adaptive_generate: sinh text, mỗi bước tự nâng tầng khi cần.
 
 Chỉ phụ thuộc PyTorch.
 """
+import math
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+__version__ = "0.2.0"
 
 
 class Expert(nn.Module):
@@ -36,11 +40,13 @@ class AdaptiveRouter(nn.Module):
     Top-p routing: lấy các expert có xác suất cao nhất cho tới khi tổng xác suất
     đạt `top_p`. Gate "nhọn" (token dễ) -> ít expert, gate phẳng (token khó) -> nhiều.
 
-    Trả về weights [T, E] (0 ở expert không được chọn) và dict thông tin/loss phụ.
+    target_k: nếu đặt, compute_loss kéo số expert trung bình về gần giá trị này
+              (dễ kiểm soát hơn phạt thô). None = phạt số expert kỳ vọng.
+    noise_std: nhiễu Gaussian lên logits khi train (giúp router khám phá).
     """
 
     def __init__(self, d_model, n_experts, min_k=1, max_k=None, top_p=0.7,
-                 min_strength=0.3, tau=0.05):
+                 min_strength=0.3, tau=0.05, target_k=None, noise_std=0.0):
         super().__init__()
         self.n_experts = n_experts
         self.min_k = min_k
@@ -48,21 +54,25 @@ class AdaptiveRouter(nn.Module):
         self.top_p = top_p
         self.min_strength = min_strength
         self.tau = tau
+        self.target_k = target_k
+        self.noise_std = noise_std
         self.gate = nn.Linear(d_model, n_experts, bias=False)
         self.strength_head = nn.Linear(d_model, 1)
 
     def forward(self, x, k_cap=None):
-        T, E = x.shape[0], self.n_experts
-        probs = F.softmax(self.gate(x).float(), dim=-1)            # [T, E]
+        E = self.n_experts
+        logits = self.gate(x).float()
+        if self.training and self.noise_std > 0:
+            logits = logits + torch.randn_like(logits) * self.noise_std
+        probs = F.softmax(logits, dim=-1)                            # [T, E]
         sorted_p, sorted_idx = probs.sort(dim=-1, descending=True)
-        cum_before = sorted_p.cumsum(-1) - sorted_p                 # xác suất tích lũy trước expert j
+        cum_before = sorted_p.cumsum(-1) - sorted_p                  # xác suất tích lũy trước expert j
 
         cap = min(self.max_k, k_cap) if k_cap else self.max_k
         cap = max(cap, self.min_k)
 
-        pos = torch.arange(E, device=x.device).unsqueeze(0)         # [1, E]
-        keep = (cum_before < self.top_p) | (pos < self.min_k)
-        keep = keep & (pos < cap)
+        pos = torch.arange(E, device=x.device).unsqueeze(0)          # [1, E]
+        keep = ((cum_before < self.top_p) | (pos < self.min_k)) & (pos < cap)
 
         w_sorted = sorted_p * keep
         w_sorted = w_sorted / w_sorted.sum(-1, keepdim=True).clamp_min(1e-9)
@@ -75,19 +85,25 @@ class AdaptiveRouter(nn.Module):
             self.strength_head(x).float())
         weights = weights * strength
 
-        # loss phụ
-        # 1) cân bằng tải (kiểu Switch): f_i * P_i * E
+        # --- loss phụ ---
+        # 1) cân bằng tải (kiểu Switch): E * sum(f_i * P_i)
         f = hard_mask.mean(0) / hard_mask.sum(-1).mean().clamp_min(1.0)
         balance = E * (f * probs.mean(0)).sum()
-        # 2) phạt compute: số expert "mềm" kỳ vọng, có gradient
-        soft_keep = torch.sigmoid((self.top_p - cum_before) / self.tau)
-        compute = soft_keep.sum(-1).mean() / E
+        # 2) compute: số expert "mềm" kỳ vọng (có gradient)
+        soft_k = torch.sigmoid((self.top_p - cum_before) / self.tau).sum(-1).mean()
+        if self.target_k is None:
+            compute = soft_k / E
+        else:
+            compute = ((soft_k - self.target_k) / E) ** 2
+        # 3) z-loss: giữ logits không phình to
+        z_loss = torch.logsumexp(logits, dim=-1).pow(2).mean()
 
         info = {
             "avg_k": hard_mask.sum(-1).mean().detach(),
             "avg_strength": strength.mean().detach(),
             "balance_loss": balance,
             "compute_loss": compute,
+            "z_loss": z_loss,
         }
         return weights.to(x.dtype), info
 
@@ -95,22 +111,28 @@ class AdaptiveRouter(nn.Module):
 class AdaptiveMoE(nn.Module):
     """
     Layer MoE thích ứng. forward(x[B,S,D]) -> (out[B,S,D], aux_loss, info).
-    Tổng loss: task_loss + aux_loss.
+    Cũng lưu `last_aux` và `last_info` để dùng với gather_aux_loss / moe_stats.
 
-    max_resident: (chỉ dùng khi eval/inference) số expert tối đa giữ trên device,
-    các expert còn lại nằm trên CPU và được nạp theo LRU. None = tắt.
+    n_shared: số expert luôn bật (kiểu DeepSeek). Giúp chất lượng ổn khi router chọn k=1.
+    max_resident: (chỉ khi eval) số expert tối đa giữ trên device, còn lại nằm CPU, nạp theo LRU.
     """
 
     def __init__(self, d_model, d_ff, n_experts, min_k=1, max_k=None, top_p=0.7,
-                 min_strength=0.3, balance_coef=0.01, compute_coef=0.01,
+                 min_strength=0.3, target_k=None, noise_std=0.0, n_shared=0,
+                 balance_coef=0.01, compute_coef=0.01, z_coef=1e-3,
                  max_resident=None):
         super().__init__()
         self.experts = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_experts))
-        self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p, min_strength)
+        self.shared = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_shared))
+        self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p,
+                                     min_strength, target_k=target_k, noise_std=noise_std)
         self.balance_coef = balance_coef
         self.compute_coef = compute_coef
+        self.z_coef = z_coef
         self.k_cap = None
         self.max_resident = max_resident
+        self.last_aux = None
+        self.last_info = None
         self._lru = OrderedDict()   # expert_id -> None, thứ tự dùng gần nhất
 
     def _ensure_resident(self, e, device):
@@ -139,6 +161,8 @@ class AdaptiveMoE(nn.Module):
         flat = x.reshape(-1, D)
         weights, info = self.router(flat, self.k_cap)
         out = torch.zeros_like(flat)
+        for sh in self.shared:
+            out = out + sh(flat)
         for e, expert in enumerate(self.experts):
             idx = (weights[:, e] > 0).nonzero(as_tuple=True)[0]
             if idx.numel() == 0:
@@ -146,10 +170,17 @@ class AdaptiveMoE(nn.Module):
             self._ensure_resident(e, flat.device)
             y = expert(flat[idx]) * weights[idx, e].unsqueeze(-1)
             out.index_add_(0, idx, y.to(out.dtype))
-        aux = self.balance_coef * info["balance_loss"] + self.compute_coef * info["compute_loss"]
+        aux = (self.balance_coef * info["balance_loss"]
+               + self.compute_coef * info["compute_loss"]
+               + self.z_coef * info["z_loss"])
+        self.last_aux = aux
+        self.last_info = {k: v.detach() for k, v in info.items()}
         return out.reshape(B, S, D), aux, info
 
 
+# ----------------------------------------------------------------------------
+# Tiện ích cho cả model
+# ----------------------------------------------------------------------------
 def set_k_cap(model: nn.Module, k):
     """Đặt trần số expert cho mọi AdaptiveMoE trong model (None = bỏ trần)."""
     for m in model.modules():
@@ -157,21 +188,82 @@ def set_k_cap(model: nn.Module, k):
             m.k_cap = k
 
 
-@torch.no_grad()
-def cascade_forward(model, inputs, tiers=(2, 4, 8), min_confidence=0.6):
-    """
-    Chạy tầng nhỏ trước; nếu độ tự tin (max prob của token cuối) thấp hơn
-    `min_confidence` thì nâng lên tầng kế tiếp.
+def gather_aux_loss(model: nn.Module):
+    """Tổng loss phụ của mọi AdaptiveMoE sau một lần forward. loss = task_loss + gather_aux_loss(model)."""
+    total = None
+    for m in model.modules():
+        if isinstance(m, AdaptiveMoE) and m.last_aux is not None:
+            total = m.last_aux if total is None else total + m.last_aux
+    if total is None:
+        p = next(model.parameters(), None)
+        return torch.zeros((), device=p.device if p is not None else "cpu")
+    return total
 
-    `model(inputs)` phải trả về logits [B, S, V].
+
+def moe_stats(model: nn.Module):
+    """Thống kê của lần forward gần nhất: {tên layer: {avg_k, avg_strength}}."""
+    stats = {}
+    for name, m in model.named_modules():
+        if isinstance(m, AdaptiveMoE) and m.last_info is not None:
+            stats[name] = {
+                "avg_k": float(m.last_info["avg_k"]),
+                "avg_strength": float(m.last_info["avg_strength"]),
+            }
+    return stats
+
+
+# ----------------------------------------------------------------------------
+# Inference: nâng tầng theo độ tự tin
+# ----------------------------------------------------------------------------
+def _confidence(last_logits, mode="maxprob"):
+    """Độ tự tin mỗi mẫu trong batch, thang 0..1."""
+    p = F.softmax(last_logits.float(), dim=-1)
+    if mode == "maxprob":
+        return p.max(-1).values
+    if mode == "entropy":
+        ent = -(p * torch.log(p.clamp_min(1e-12))).sum(-1)
+        return 1.0 - ent / math.log(p.shape[-1])
+    raise ValueError("mode phải là 'maxprob' hoặc 'entropy'")
+
+
+@torch.no_grad()
+def cascade_forward(model, inputs, tiers=(2, 4, 8), min_confidence=0.6, confidence="maxprob"):
+    """
+    Chạy tầng nhỏ trước; nếu độ tự tin (token cuối) thấp hơn `min_confidence`
+    thì nâng lên tầng kế tiếp. `model(inputs)` phải trả về logits [B, S, V].
     Trả về (logits, k_đã_dùng).
     """
-    logits = None
+    logits, k = None, tiers[-1]
     for k in tiers:
         set_k_cap(model, k)
         logits = model(inputs)
-        conf = F.softmax(logits[:, -1].float(), dim=-1).max(-1).values
-        if conf.min().item() >= min_confidence:
+        if _confidence(logits[:, -1], confidence).min().item() >= min_confidence:
             break
     set_k_cap(model, None)
     return logits, k
+
+
+@torch.no_grad()
+def adaptive_generate(model, input_ids, max_new_tokens=32, tiers=(2, 4, 8),
+                      min_confidence=0.6, confidence="maxprob", temperature=0.0,
+                      eos_id=None):
+    """
+    Sinh text, mỗi bước tự chọn tầng (token dễ dùng ít expert, token khó nâng tầng).
+    Chưa có KV cache: mỗi bước chạy lại toàn bộ chuỗi (đủ cho demo/nghiên cứu;
+    model thật nên tự thêm KV cache).
+    Trả về (ids, ks): ids [B, S+new], ks là danh sách tầng đã dùng cho từng bước.
+    """
+    ids = input_ids
+    ks = []
+    for _ in range(max_new_tokens):
+        logits, k = cascade_forward(model, ids, tiers, min_confidence, confidence)
+        last = logits[:, -1].float()
+        if temperature and temperature > 0:
+            nxt = torch.multinomial(F.softmax(last / temperature, dim=-1), 1)
+        else:
+            nxt = last.argmax(-1, keepdim=True)
+        ids = torch.cat([ids, nxt], dim=1)
+        ks.append(k)
+        if eos_id is not None and (nxt == eos_id).all():
+            break
+    return ids, ks
