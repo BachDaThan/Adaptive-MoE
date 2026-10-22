@@ -46,9 +46,13 @@ class AdaptiveRouter(nn.Module):
     """
 
     def __init__(self, d_model, n_experts, min_k=1, max_k=None, top_p=0.7,
-                 min_strength=0.3, tau=0.05, target_k=None, noise_std=0.0, ste=False):
+                 min_strength=0.3, tau=0.05, target_k=None, noise_std=0.0, ste=False,
+                 difficulty=False, p_min=0.4, p_max=0.95):
         super().__init__()
         self.ste = ste
+        self.difficulty = difficulty
+        self.p_min = p_min
+        self.p_max = p_max
         self.n_experts = n_experts
         self.min_k = min_k
         self.max_k = max_k or n_experts
@@ -59,6 +63,8 @@ class AdaptiveRouter(nn.Module):
         self.noise_std = noise_std
         self.gate = nn.Linear(d_model, n_experts, bias=False)
         self.strength_head = nn.Linear(d_model, 1)
+        if difficulty:
+            self.diff_head = nn.Linear(d_model, 1)   # dự đoán độ khó của token (0..1)
 
     def forward(self, x, k_cap=None):
         E = self.n_experts
@@ -72,10 +78,17 @@ class AdaptiveRouter(nn.Module):
         cap = min(self.max_k, k_cap) if k_cap else self.max_k
         cap = max(cap, self.min_k)
 
+        d_logit = None
+        if self.difficulty:
+            # top_p theo từng token: token được dự đoán khó -> top_p cao -> nhiều expert hơn
+            d_logit = self.diff_head(x).float().squeeze(-1)
+            top_p = (self.p_min + (self.p_max - self.p_min) * torch.sigmoid(d_logit.detach())).unsqueeze(-1)
+        else:
+            top_p = self.top_p
         pos = torch.arange(E, device=x.device).unsqueeze(0)          # [1, E]
-        keep = ((cum_before < self.top_p) | (pos < self.min_k)) & (pos < cap)
+        keep = ((cum_before < top_p) | (pos < self.min_k)) & (pos < cap)
 
-        soft_keep = torch.sigmoid((self.top_p - cum_before) / self.tau)
+        soft_keep = torch.sigmoid((top_p - cum_before) / self.tau)
         keep_f = keep.float()
         if self.ste and self.training:
             # straight-through: forward dùng quyết định cứng, backward cho gradient của
@@ -114,6 +127,8 @@ class AdaptiveRouter(nn.Module):
             "compute_loss": compute,
             "z_loss": z_loss,
         }
+        if d_logit is not None:
+            info["diff_logit"] = d_logit
         return weights.to(x.dtype), info
 
 
@@ -127,14 +142,16 @@ class AdaptiveMoE(nn.Module):
     """
 
     def __init__(self, d_model, d_ff, n_experts, min_k=1, max_k=None, top_p=0.7,
-                 min_strength=0.3, target_k=None, noise_std=0.0, ste=False, n_shared=0,
+                 min_strength=0.3, target_k=None, noise_std=0.0, ste=False,
+                 difficulty=False, p_min=0.4, p_max=0.95, n_shared=0,
                  balance_coef=0.01, compute_coef=0.01, z_coef=1e-3,
                  max_resident=None):
         super().__init__()
         self.experts = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_experts))
         self.shared = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_shared))
         self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p,
-                                     min_strength, target_k=target_k, noise_std=noise_std, ste=ste)
+                                     min_strength, target_k=target_k, noise_std=noise_std, ste=ste,
+                                     difficulty=difficulty, p_min=p_min, p_max=p_max)
         self.balance_coef = balance_coef
         self.compute_coef = compute_coef
         self.z_coef = z_coef
@@ -142,6 +159,7 @@ class AdaptiveMoE(nn.Module):
         self.max_resident = max_resident
         self.last_aux = None
         self.last_info = None
+        self.last_diff_logit = None
         self._lru = OrderedDict()   # expert_id -> None, thứ tự dùng gần nhất
 
     def _ensure_resident(self, e, device):
@@ -183,7 +201,8 @@ class AdaptiveMoE(nn.Module):
                + self.compute_coef * info["compute_loss"]
                + self.z_coef * info["z_loss"])
         self.last_aux = aux
-        self.last_info = {k: v.detach() for k, v in info.items()}
+        self.last_diff_logit = info.get("diff_logit")
+        self.last_info = {k: v.detach() for k, v in info.items() if k != "diff_logit"}
         return out.reshape(B, S, D), aux, info
 
 
@@ -207,6 +226,22 @@ def gather_aux_loss(model: nn.Module):
         p = next(model.parameters(), None)
         return torch.zeros((), device=p.device if p is not None else "cpu")
     return total
+
+
+def difficulty_loss(model: nn.Module, token_loss):
+    """
+    Loss huấn luyện "đầu dự đoán độ khó" của router (chỉ dùng khi difficulty=True).
+    token_loss: loss CE từng token, cùng thứ tự flatten với đầu vào (B*S).
+    Mục tiêu = phân vị của loss trong batch (0 = dễ nhất, 1 = khó nhất), đã detach.
+    """
+    t = token_loss.detach().reshape(-1).float()
+    target = t.argsort().argsort().float() / max(1, t.numel() - 1)
+    total = None
+    for m in model.modules():
+        if isinstance(m, AdaptiveMoE) and m.last_diff_logit is not None:
+            l = F.binary_cross_entropy_with_logits(m.last_diff_logit, target)
+            total = l if total is None else total + l
+    return total if total is not None else torch.zeros((), device=t.device)
 
 
 def moe_stats(model: nn.Module):

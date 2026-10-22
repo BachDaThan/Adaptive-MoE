@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from adaptive_moe import (AdaptiveMoE, AdaptiveRouter, adaptive_generate,
-                          cascade_forward, gather_aux_loss, moe_stats, set_k_cap)
+                          cascade_forward, difficulty_loss, gather_aux_loss, moe_stats, set_k_cap)
 
 
 class TinyLM(nn.Module):
@@ -55,6 +55,17 @@ def test_ste_gives_boundary_gradient():
     w, _ = r(x)
     (w * torch.arange(8.0)).sum().backward()
     assert r.gate.weight.grad is not None and x.grad is not None
+
+
+def test_difficulty_head():
+    m = TinyLM(difficulty=True)
+    ids = torch.randint(0, 100, (4, 10))
+    logits = m(ids)
+    tok = nn.functional.cross_entropy(logits.view(-1, 100), ids.view(-1), reduction="none")
+    loss = tok.mean() + gather_aux_loss(m) + 0.1 * difficulty_loss(m, tok)
+    loss.backward()
+    assert m.moe.router.diff_head.weight.grad is not None
+    assert 1 <= m.moe.last_info["avg_k"].item() <= 8
 
 
 def test_stats():

@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from adaptive_moe import AdaptiveMoE, gather_aux_loss
+from adaptive_moe import AdaptiveMoE, difficulty_loss, gather_aux_loss
 from vi_data import CATS, build_vocab, categorize, encode, tokenize
 
 
@@ -98,7 +98,7 @@ def evaluate(model, val_ids, val_cat, seq, bs, device, vocab):
     C_in = val_cat[: n * seq].reshape(n, seq)
     C_tgt = val_cat[1: n * seq + 1].reshape(n, seq)
 
-    losses, ks, layer_ks = [], [], []
+    losses, ks, layer_ks, diffs = [], [], [], []
     for i in range(0, n, bs):
         x = torch.from_numpy(X[i:i + bs]).to(device)
         y = torch.from_numpy(Y[i:i + bs]).to(device)
@@ -106,6 +106,9 @@ def evaluate(model, val_ids, val_cat, seq, bs, device, vocab):
         logits = model(x)
         loss = F.cross_entropy(logits.reshape(-1, vocab), y.reshape(-1), reduction="none").view(b, seq)
         per_layer = torch.stack([m.last_info["k_per_token"].view(b, seq) for m in moes])  # [L,b,S]
+        if moes[0].last_diff_logit is not None:
+            d = torch.stack([torch.sigmoid(m.last_diff_logit).view(b, seq) for m in moes]).mean(0)
+            diffs.append(d.cpu().numpy())
         losses.append(loss.cpu().numpy())
         ks.append(per_layer.mean(0).cpu().numpy())
         layer_ks.append(per_layer.mean((1, 2)).cpu().numpy() * b)
@@ -131,6 +134,9 @@ def evaluate(model, val_ids, val_cat, seq, bs, device, vocab):
                           "k": float(ks[m].mean())}
         return rows
 
+    if diffs:
+        dd = np.concatenate(diffs)
+        res["corr_pred_difficulty_loss"] = float(np.corrcoef(dd.ravel(), losses.ravel())[0, 1])
     res["by_target_category"] = table(C_tgt)
     res["by_input_category"] = table(C_in)
 
@@ -146,6 +152,8 @@ def print_report(res, title):
     print(f"val_loss={res['val_loss']:.4f}  ppl={res['val_ppl']:.1f}  avg_k={res['avg_k']:.2f}")
     print("avg_k theo layer:", " ".join(f"{v:.2f}" for v in res["avg_k_per_layer"]))
     print(f"tương quan Pearson(k, loss của token) = {res['corr_k_loss']:+.3f}")
+    if "corr_pred_difficulty_loss" in res:
+        print(f"tương quan Pearson(độ khó dự đoán, loss thật) = {res['corr_pred_difficulty_loss']:+.3f}")
     print("k theo tứ phân vị loss (dễ -> khó):", " ".join(f"{v:.2f}" for v in res["k_by_loss_quartile"]))
     for key, label in [("by_target_category", "Theo loại token SẮP ĐƯỢC DỰ ĐOÁN (độ khó thật)"),
                        ("by_input_category", "Theo loại token ĐẦU VÀO (cái router nhìn thấy)")]:
@@ -165,6 +173,11 @@ def main():
     ap.add_argument("--compute_coef", type=float, default=0.5)
     ap.add_argument("--experts", type=int, default=8)
     ap.add_argument("--n_shared", type=int, default=1)
+    ap.add_argument("--diff_head", action="store_true",
+                    help="router có đầu dự đoán độ khó (huấn luyện bằng loss thật của token) và đặt top_p theo từng token")
+    ap.add_argument("--p_min", type=float, default=0.4)
+    ap.add_argument("--p_max", type=float, default=0.95)
+    ap.add_argument("--diff_coef", type=float, default=0.1)
     ap.add_argument("--ste", action="store_true", help="gradient của task loss chảy vào quyết định chọn expert")
     ap.add_argument("--d_model", type=int, default=256)
     ap.add_argument("--d_ff", type=int, default=512)
@@ -201,7 +214,8 @@ def main():
     if args.mode == "adaptive":
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, top_p=args.top_p,
                       target_k=args.target_k, compute_coef=args.compute_coef,
-                      n_shared=args.n_shared, noise_std=0.1, ste=args.ste)
+                      n_shared=args.n_shared, noise_std=0.1, ste=args.ste,
+                      difficulty=args.diff_head, p_min=args.p_min, p_max=args.p_max)
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, noise_std=0.1)
@@ -228,8 +242,11 @@ def main():
         x = torch.stack([train_ids[i:i + args.seq] for i in ix]).to(device)
         y = torch.stack([train_ids[i + 1:i + args.seq + 1] for i in ix]).to(device)
         logits = model(x)
-        task = F.cross_entropy(logits.view(-1, V), y.view(-1))
+        tok = F.cross_entropy(logits.view(-1, V), y.view(-1), reduction="none")
+        task = tok.mean()
         loss = task + gather_aux_loss(model)
+        if args.diff_head:
+            loss = loss + args.diff_coef * difficulty_loss(model, tok)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -239,7 +256,7 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}{'+ste' if args.ste else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
+    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     out = args.out or f"results_{args.mode}.json"

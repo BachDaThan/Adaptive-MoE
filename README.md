@@ -7,7 +7,7 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 ## Cài
 
 ```bash
-pip install git+https://github.com/BachDaThan/Adaptive-MoE
+pip install git+https://github.com/<ten-ban>/Adaptive-MoE
 ```
 
 hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
@@ -62,6 +62,8 @@ python lm_experiment.py --mode fixed --k 3               # baseline top-k cố �
 ```
 
 Script train LM nhỏ (tokenize theo âm tiết) rồi in val loss, số expert trung bình, tương quan giữa k và loss của token, và k theo loại token (dấu câu, số, từ chức năng, tên riêng, từ hiếm, từ nội dung). Dùng `--text_file` nếu muốn dữ liệu riêng.
+
+Tùy chọn: `--ste` (gradient chảy vào ranh giới chọn expert) và `--diff_head` (router có đầu dự đoán độ khó của token, huấn luyện bằng loss thật, rồi đặt `top_p` theo từng token trong `[p_min, p_max]`).
 
 ## Chạy test và demo
 
