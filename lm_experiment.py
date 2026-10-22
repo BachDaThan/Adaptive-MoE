@@ -72,7 +72,8 @@ class LM(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(vocab, d)
         self.pos = nn.Embedding(seq, d)
-        self.blocks = nn.ModuleList(Block(d, heads, moe_kw) for _ in range(layers))
+        kws = moe_kw if isinstance(moe_kw, list) else [moe_kw] * layers
+        self.blocks = nn.ModuleList(Block(d, heads, kws[i]) for i in range(layers))
         self.ln_f = nn.LayerNorm(d)
         self.head = nn.Linear(d, vocab, bias=False)
         self.head.weight = self.emb.weight          # weight tying
@@ -180,6 +181,8 @@ def main():
                          "khi thêm expert (k=1 so với k=gain_high), đo bằng 2 forward phụ")
     ap.add_argument("--gain_every", type=int, default=4, help="cứ N bước đo gain một lần (tiết kiệm thời gian)")
     ap.add_argument("--gain_high", type=int, default=3)
+    ap.add_argument("--layer_k", default=None,
+                    help="k cố định riêng cho từng layer, vd 1,2,2,3 (dùng với --mode fixed)")
     ap.add_argument("--p_min", type=float, default=0.4)
     ap.add_argument("--p_max", type=float, default=0.95)
     ap.add_argument("--diff_coef", type=float, default=0.1)
@@ -224,6 +227,11 @@ def main():
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, noise_std=0.1)
+    if args.layer_k:
+        ks = [int(v) for v in args.layer_k.split(",")]
+        assert len(ks) == args.layers, "--layer_k phải có đúng một số cho mỗi layer"
+        moe_kw = [dict(moe_kw, min_k=k, max_k=k, top_p=1.0, compute_coef=0.0, target_k=None,
+                       difficulty=False) for k in ks]
     model = LM(V, args.d_model, args.layers, args.heads, args.seq, moe_kw).to(device)
     nn.init.normal_(model.emb.weight, std=0.02)   # init nhỏ, tránh loss khởi đầu ~177
     nn.init.normal_(model.pos.weight, std=0.02)
@@ -277,7 +285,7 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
+    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     out = args.out or f"results_{args.mode}.json"
