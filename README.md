@@ -7,7 +7,7 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 ## Cài
 
 ```bash
-pip install git+https://github.com/BachDaThan/Adaptive-MoE
+pip install git+https://github.com/<ten-ban>/Adaptive-MoE
 ```
 
 hoặc chép `adaptive_moe.py` vào project (chỉ cần PyTorch).
@@ -52,6 +52,16 @@ ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
 - Cascade chạy lại forward khi câu khó, nên tốn thêm compute ở những bước đó.
 - `top_p`, `target_k` và các hệ số loss cần chỉnh theo model và dữ liệu của bạn.
 - Đây là phần router/layer, chưa phải model hoàn chỉnh.
+
+## Thí nghiệm trên tiếng Việt thật
+
+```bash
+pip install torch datasets
+python lm_experiment.py --mode adaptive --target_k 3.0   # adaptive
+python lm_experiment.py --mode fixed --k 3               # baseline top-k cố định
+```
+
+Script train LM nhỏ (tokenize theo âm tiết) rồi in val loss, số expert trung bình, tương quan giữa k và loss của token, và k theo loại token (dấu câu, số, từ chức năng, tên riêng, từ hiếm, từ nội dung). Dùng `--text_file` nếu muốn dữ liệu riêng.
 
 ## Chạy test và demo
 
