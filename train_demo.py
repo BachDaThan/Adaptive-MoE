@@ -1,7 +1,8 @@
 """
 Demo train nhỏ trên CPU: một nửa vị trí có token kế tiếp cố định (dễ),
-nửa còn lại là ngẫu nhiên có điều kiện (khó). In loss và số expert trung bình
-để bạn tự quan sát router học ra sao. Không có cam kết về kết quả cụ thể.
+nửa còn lại là ngẫu nhiên có điều kiện (khó). In loss, số expert trung bình và
+số expert cho token dễ / khó. Token khó ở đây là nhiễu thuần nên mức loss tối ưu
+là khoảng 2.08 (= nửa ln 64), demo này kiểm tra pipeline train chứ không chứng minh tính thích ứng.
 
     python train_demo.py
 """
@@ -19,7 +20,7 @@ class Demo(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(V, D)
         self.moe = AdaptiveMoE(D, 128, n_experts=8, top_p=0.7, target_k=3.0,
-                               n_shared=1, noise_std=0.1)
+                               compute_coef=0.5, n_shared=1, noise_std=0.1)
         self.head = nn.Linear(D, V)
 
     def forward(self, x):
@@ -48,4 +49,7 @@ for step in range(301):
     opt.step()
     if step % 50 == 0:
         s = moe_stats(model)["moe"]
-        print(f"step {step:3d}  task_loss={task.item():.3f}  avg_k={s['avg_k']:.2f}  strength={s['avg_strength']:.2f}")
+        k = model.moe.last_info["k_per_token"].view(B, S)
+        hard = x >= V // 2
+        print(f"step {step:3d}  task_loss={task.item():.3f}  avg_k={s['avg_k']:.2f}  "
+              f"k_easy={k[~hard].mean():.2f}  k_hard={k[hard].mean():.2f}  strength={s['avg_strength']:.2f}")

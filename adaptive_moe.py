@@ -94,12 +94,13 @@ class AdaptiveRouter(nn.Module):
         if self.target_k is None:
             compute = soft_k / E
         else:
-            compute = ((soft_k - self.target_k) / E) ** 2
+            compute = ((soft_k - self.target_k) / self.target_k) ** 2
         # 3) z-loss: giữ logits không phình to
         z_loss = torch.logsumexp(logits, dim=-1).pow(2).mean()
 
         info = {
             "avg_k": hard_mask.sum(-1).mean().detach(),
+            "k_per_token": hard_mask.sum(-1).detach(),
             "avg_strength": strength.mean().detach(),
             "balance_loss": balance,
             "compute_loss": compute,
