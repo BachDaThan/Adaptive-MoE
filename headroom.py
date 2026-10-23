@@ -8,10 +8,9 @@ Quy trình: train 1 model elastic (k ngẫu nhiên 1/2/4), chạy val ở k=1 v�
 gain = loss(k=1) - loss(k=2). Với ngân sách f (tỉ lệ token được nâng lên k=2), so các cách chọn:
   random   : bốc ngẫu nhiên (baseline = 'fixed trộn')
   entropy  : cascade - nâng token mà dự đoán k=1 kém chắc chắn nhất
-  learned  : MLP nhỏ trên hidden state k=1 dự đoán gain
-  oracle   : biết trước gain thật (trần lý thuyết, gian lận)
+  learn_*  : MLP nhỏ dự đoán gain từ đặc trưng sớm (emb), sau layer 1 (l1) hoặc cuối mạng (fin)
+(oracle đã bỏ: chọn theo loss thật cộng cả nhiễu từng token nên cho số >100%, không phải trần có nghĩa)
 Xấp xỉ: ghép loss ở mức token (bỏ qua ảnh hưởng chéo giữa token qua attention).
-Nếu oracle ≈ random thì không bộ phân bổ nào thắng nổi fixed ở quy mô này.
 """
 import argparse
 import torch
@@ -46,33 +45,41 @@ def train_model(train, args, device):
 
 @torch.no_grad()
 def collect(model, data, n_batches, args, device, seed):
+    """Trả về loss k=1, loss k=2, và các nhóm đặc trưng: emb (trước mọi layer), L1 (sau layer 1), final (+entropy, maxprob)."""
     g = torch.Generator().manual_seed(seed)
     cap = {}
-    hook = model.norm.register_forward_hook(lambda m, i, o: cap.__setitem__("h", o.detach()))
+    hooks = [
+        model.emb.register_forward_hook(lambda m, i, o: cap.__setitem__("emb", o.detach())),
+        model.blocks[0].register_forward_hook(lambda m, i, o: cap.__setitem__("l1", o[0].detach())),
+        model.norm.register_forward_hook(lambda m, i, o: cap.__setitem__("fin", o.detach())),
+    ]
     model.eval(); set_window(model, None)
-    L1, L2, H, E, P = [], [], [], [], []
+    acc = {n: [] for n in ("L1", "L2", "emb", "l1", "fin", "E", "P")}
+    flat = lambda t: t.float().reshape(-1, t.shape[-1])
     for _ in range(n_batches):
         x, y = batch(data, 16, args.L, device, g)
-        out = {}
         for k in (1, 2):
             set_k_cap(model, k)
             lg, _ = model(x, None)
             lg = lg.float().view(-1, lg.shape[-1])
-            out[k] = F.cross_entropy(lg, y.view(-1), reduction="none")
+            acc["L%d" % k].append(F.cross_entropy(lg, y.view(-1), reduction="none"))
             if k == 1:
                 p = lg.softmax(-1)
-                E.append(-(p * p.clamp_min(1e-9).log()).sum(-1))
-                P.append(p.max(-1).values)
-                H.append(cap["h"].float().reshape(-1, cap["h"].shape[-1]))
-        L1.append(out[1]); L2.append(out[2])
-    hook.remove(); set_k_cap(model, None)
-    return [torch.cat(t) for t in (L1, L2, H, E, P)]
+                acc["E"].append(-(p * p.clamp_min(1e-9).log()).sum(-1))
+                acc["P"].append(p.max(-1).values)
+                for n in ("emb", "l1", "fin"):
+                    acc[n].append(flat(cap[n]))
+    for h in hooks:
+        h.remove()
+    set_k_cap(model, None)
+    d = {n: torch.cat(v) for n, v in acc.items()}
+    d["feat_emb"] = d["emb"]
+    d["feat_l1"] = d["l1"]
+    d["feat_fin"] = torch.cat([d["fin"], d["E"][:, None], d["P"][:, None]], 1)
+    return d
 
 
-def fit_predictor(tr, args, device):
-    L1, L2, H, E, P = tr
-    X = torch.cat([H, E[:, None], P[:, None]], 1)
-    y = (L1 - L2)
+def fit_predictor(X, y, device):
     net = nn.Sequential(nn.Linear(X.shape[1], 128), nn.GELU(), nn.Linear(128, 1)).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=0.01)
     N = X.shape[0]
@@ -91,33 +98,35 @@ def main(args):
     model = train_model(train, args, device)
     tr = collect(model, train, 100, args, device, seed=5)
     va = collect(model, val, 40, args, device, seed=7)
-    net = fit_predictor(tr, args, device)
-    L1, L2, H, E, P = va
-    N = L1.numel()
-    gain = L1 - L2
-    with torch.no_grad():
-        pred = net(torch.cat([H, E[:, None], P[:, None]], 1)).squeeze(-1)
-    corr = torch.corrcoef(torch.stack([pred, gain]))[0, 1].item()
-    print(f"\nval: {N:,} token | loss k=1: {L1.mean():.4f} | loss k=2: {L2.mean():.4f} "
+    N = va["L1"].numel()
+    gain = va["L1"] - va["L2"]
+    ytr = tr["L1"] - tr["L2"]
+    print(f"\nval: {N:,} token | loss k=1: {va['L1'].mean():.4f} | loss k=2: {va['L2'].mean():.4f} "
           f"| gain trung bình/token: {gain.mean():.4f}")
-    print(f"tương quan(dự đoán gain, gain thật) = {corr:.3f}")
     g = torch.Generator(device=device).manual_seed(0)
-    scores = {"random": torch.rand(N, device=device, generator=g), "entropy": E,
-              "learned": pred, "oracle": gain}
-    total = (L1.mean() - L2.mean()).item()
-    print("\nloss val khi nâng f token lên k=2 (trong ngoặc: % mức gain của k=2 đầy đủ lấy lại được)")
-    print("f".ljust(6) + "".join(n.rjust(18) for n in scores))
+    scores = {"random": torch.rand(N, device=device, generator=g), "entropy": va["E"]}
+    corrs = {}
+    for name in ("emb", "l1", "fin"):
+        net = fit_predictor(tr["feat_" + name], ytr, device)
+        with torch.no_grad():
+            p = net(va["feat_" + name]).squeeze(-1)
+        scores["learn_" + name] = p
+        corrs[name] = torch.corrcoef(torch.stack([p, gain]))[0, 1].item()
+    print("tương quan(dự đoán, gain thật): " + ", ".join(f"{k}={v:.3f}" for k, v in corrs.items()))
+    total = (va["L1"].mean() - va["L2"].mean()).item()
+    print("\n% mức gain của k=2 đầy đủ lấy lại được khi nâng f token lên k=2")
+    print("(entropy/learn_fin cần chạy xong k=1 cả mạng rồi mới quyết định; learn_emb quyết định TRƯỚC khi tính; learn_l1 sau layer 1)")
+    print("f".ljust(6) + "".join(n.rjust(13) for n in scores))
     for f in (0.1, 0.25, 0.5, 0.75):
         n = int(f * N)
         row = f"{f:<6}"
         for name, s in scores.items():
             sel = s.topk(n).indices
-            loss = (L1.sum() - gain[sel].sum()) / N
-            share = 100 * (L1.mean() - loss).item() / total
-            row += f"{loss.item():.4f} ({share:3.0f}%)".rjust(18)
+            loss = (va["L1"].sum() - gain[sel].sum()) / N
+            share = 100 * (va["L1"].mean() - loss).item() / total
+            row += f"{share:12.0f}%"
         print(row)
-    print("\nĐọc: random ~ f% (fixed trộn). Nếu learned/entropy chỉ ngang random thì không có đất cho bộ phân bổ.")
-    print("Nếu oracle cao hơn random nhiều mà learned thấp: cần tín hiệu tốt hơn. Nếu learned gần oracle: có hướng thắng fixed.")
+    print("\nrandom ~ f% là baseline 'fixed trộn'. Cột nào cao hơn random rõ rệt ở f=0.25 là tín hiệu dùng được.")
 
 
 if __name__ == "__main__":
