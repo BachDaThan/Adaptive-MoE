@@ -127,6 +127,30 @@ Takeaways:
 
 Limitations: most configurations have a single seed, the model is small, training is short, and wall-clock speed was not measured (the per-expert loop is not optimized). Results at larger scale may differ.
 
+## Elastic k, uniform k in 1..4 (one seed)
+
+Train once with `--mode random --uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4` (8 experts/layer, 19.3M params, 3000 steps, same data as above), then force k at inference.
+
+| Model | k=1 | k=2 | k=3 | k=4 |
+|---|---|---|---|---|
+| Elastic (trained with k~U{1..4}), forced k at eval | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
+| Fixed top-k, trained and run at that k | 4.110\* | 4.0780 | 4.0720 | 4.0727 |
+
+\* *fixed top-1 with raw gate probabilities (`--no_renorm`). Fixed k=2 is the 3-seed mean; k=3 and k=4 are one seed each.*
+
+**Reading:** A single elastic model is within about 0.0015 nats of a dedicated fixed-k model at k=2..4, and at k=1 it is not worse than a dedicated top-1 model (4.101 vs 4.110). Seed-to-seed noise is about 0.002 to 0.004 nats, so only the k=1 row is clearly different from the fixed baselines' trend, and it needs more seeds. Quality is flat from k=2 to k=4 at this scale, so the budget knob matters mostly between k=1 and k=2.
+
+Training with random k averaged 2.5 experts per token, but evaluated with random k it scored 4.082 (ppl 59.2); forcing a single k at inference is better than leaving k random.
+
+### Measured speed (CUDA, batch 32x128; ratio vs using all experts)
+
+| Experts | k | inference | train |
+|---|---|---|---|
+| 8 | 1 / 2 / 4 | 0.42x / 0.48x / 0.66x | 0.43x / 0.50x / 0.66x |
+| 32 | 1 / 8 / 16 | 0.43x / 0.48x / 0.62x | 0.18x / 0.36x / 0.56x |
+
+Using fewer experts is faster in practice, but not proportionally at inference (32 experts, k=1 is 0.43x, not 1/32). Fixed per-step overhead (attention, embedding, dispatch) dominates at small k.
+
 ## Benchmark
 
 `python bench.py` measures real throughput (tokens per second, inference and training) when every token is forced to use exactly k experts, so you can check whether using fewer experts is actually faster on your hardware. Example: `python bench.py --experts 32 --d_ff 128 --ks 1,4,8,16,32`.
