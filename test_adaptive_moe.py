@@ -120,6 +120,13 @@ def test_random_k_control():
     assert 1.4 < nz.float().mean().item() < 1.6
 
 
+def test_no_renorm_top1_gives_router_gradient():
+    r = AdaptiveRouter(16, 8, min_k=1, max_k=1, top_p=1.0, renorm=False)
+    w, _ = r(torch.randn(20, 16))
+    (w * torch.arange(8.0)).sum().backward()
+    assert r.gate.weight.grad.abs().sum() > 0
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))

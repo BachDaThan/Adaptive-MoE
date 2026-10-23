@@ -47,8 +47,9 @@ class AdaptiveRouter(nn.Module):
 
     def __init__(self, d_model, n_experts, min_k=1, max_k=None, top_p=0.7,
                  min_strength=0.3, tau=0.05, target_k=None, noise_std=0.0, ste=False,
-                 difficulty=False, p_min=0.4, p_max=0.95, rand_k=None):
+                 difficulty=False, p_min=0.4, p_max=0.95, rand_k=None, renorm=True):
         super().__init__()
+        self.renorm = renorm   # False: giữ nguyên xác suất gate (kiểu Switch), top-1 vẫn có gradient cho router
         self.ste = ste
         self.rand_k = rand_k   # (lo, hi, frac_hi): đối chứng, k ngẫu nhiên theo token
         self.difficulty = difficulty
@@ -101,7 +102,8 @@ class AdaptiveRouter(nn.Module):
             free = ((pos >= self.min_k) & (pos < cap)).float()
             keep_f = keep_f + (soft_keep - soft_keep.detach()) * free
         w_sorted = sorted_p * keep_f
-        w_sorted = w_sorted / w_sorted.sum(-1, keepdim=True).clamp_min(1e-9)
+        if self.renorm:
+            w_sorted = w_sorted / w_sorted.sum(-1, keepdim=True).clamp_min(1e-9)
 
         weights = torch.zeros_like(probs).scatter(1, sorted_idx, w_sorted)
         hard_mask = torch.zeros_like(probs).scatter(1, sorted_idx, keep.float())
@@ -152,14 +154,14 @@ class AdaptiveMoE(nn.Module):
                  min_strength=0.3, target_k=None, noise_std=0.0, ste=False,
                  difficulty=False, p_min=0.4, p_max=0.95, n_shared=0,
                  balance_coef=0.01, compute_coef=0.01, z_coef=1e-3,
-                 max_resident=None, d_ff_shared=None, rand_k=None):
+                 max_resident=None, d_ff_shared=None, rand_k=None, renorm=True):
         super().__init__()
         self.experts = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_experts))
         self.shared = nn.ModuleList(Expert(d_model, d_ff_shared or d_ff) for _ in range(n_shared))
         self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p,
                                      min_strength, target_k=target_k, noise_std=noise_std, ste=ste,
                                      difficulty=difficulty, p_min=p_min, p_max=p_max,
-                                     rand_k=rand_k)
+                                     rand_k=rand_k, renorm=renorm)
         self.balance_coef = balance_coef
         self.compute_coef = compute_coef
         self.z_coef = z_coef
