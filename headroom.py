@@ -55,15 +55,22 @@ def collect(model, data, n_batches, args, device, seed):
         model.norm.register_forward_hook(lambda m, i, o: cap.__setitem__("fin", o.detach())),
     ]
     model.eval(); set_window(model, None)
+    ks_eval = sorted({k for k in (1, 2, 3, args.k_hi) if k <= args.k_hi})
     acc = {n: [] for n in ("L1", "L2", "emb", "l1", "fin", "E", "P")}
+    lk = {k: [] for k in ks_eval}
     flat = lambda t: t.float().reshape(-1, t.shape[-1])
     for _ in range(n_batches):
         x, y = batch(data, 16, args.L, device, g)
-        for k in (1, args.k_hi):
+        for k in ks_eval:
             set_k_cap(model, k)
             lg, _ = model(x, None)
             lg = lg.float().view(-1, lg.shape[-1])
-            acc["L1" if k == 1 else "L2"].append(F.cross_entropy(lg, y.view(-1), reduction="none"))
+            ce = F.cross_entropy(lg, y.view(-1), reduction="none")
+            lk[k].append(ce)
+            if k == 1:
+                acc["L1"].append(ce)
+            if k == args.k_hi:
+                acc["L2"].append(ce)
             if k == 1:
                 p = lg.softmax(-1)
                 acc["E"].append(-(p * p.clamp_min(1e-9).log()).sum(-1))
@@ -74,6 +81,7 @@ def collect(model, data, n_batches, args, device, seed):
         h.remove()
     set_k_cap(model, None)
     d = {n: torch.cat(v) for n, v in acc.items()}
+    d["Lk"] = {k: torch.cat(v) for k, v in lk.items()}
     d["feat_emb"] = d["emb"]
     d["feat_l1"] = d["l1"]
     d["feat_fin"] = torch.cat([d["fin"], d["E"][:, None], d["P"][:, None]], 1)
@@ -94,19 +102,23 @@ def fit_predictor(X, y, device):
 
 
 def load_bpe(train, val, vocab):
-    """BPE byte-level, vocab cỡ lm_experiment (16000), huấn luyện trên chính văn bản đang dùng."""
+    """BPE byte-level cỡ lm_experiment (16000). Chia train/val THEO DÒNG NGẪU NHIÊN để val cùng phân phối."""
+    import random
     from tokenizers import Tokenizer, models, trainers, pre_tokenizers
     text = bytes(torch.cat([train, val]).tolist()).decode("utf-8", errors="ignore")
     lines = [l for l in text.split("\n") if l.strip()]
+    random.Random(0).shuffle(lines)
+    cut_l = int(len(lines) * 0.95)
+    tr_lines, va_lines = lines[:cut_l], lines[cut_l:]
     tok = Tokenizer(models.BPE())
     tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    tr = trainers.BpeTrainer(vocab_size=vocab, special_tokens=["<unk>"],
-                             initial_alphabet=pre_tokenizers.ByteLevel.alphabet(), show_progress=False)
-    tok.train_from_iterator(lines, tr)
-    ids = torch.tensor([i for enc in tok.encode_batch(lines) for i in enc.ids], dtype=torch.long)
-    cut = int(len(ids) * 0.95)
-    print(f"BPE: {len(ids):,} token | vocab {tok.get_vocab_size()} | train {cut:,} | val {len(ids) - cut:,}")
-    return ids[:cut], ids[cut:], tok.get_vocab_size()
+    trn = trainers.BpeTrainer(vocab_size=vocab, special_tokens=["<unk>"],
+                              initial_alphabet=pre_tokenizers.ByteLevel.alphabet(), show_progress=False)
+    tok.train_from_iterator(tr_lines, trn)
+    enc = lambda ls: torch.tensor([i for e in tok.encode_batch(ls) for i in e.ids], dtype=torch.long)
+    tr_ids, va_ids = enc(tr_lines), enc(va_lines)
+    print(f"BPE: vocab {tok.get_vocab_size()} | train {len(tr_ids):,} | val {len(va_ids):,} token (chia theo dòng ngẫu nhiên)")
+    return tr_ids, va_ids, tok.get_vocab_size()
 
 
 def main(args):
@@ -146,6 +158,18 @@ def main(args):
             share = 100 * (va["L1"].mean() - loss).item() / total
             row += f"{share:12.0f}%"
         print(row)
+    if args.k_hi > 2:
+        print("\nSO VỚI FIXED k CÙNG CHI PHÍ TRUNG BÌNH (cost = 1 + f*(k_hi-1)) - đây mới là baseline công bằng")
+        for m in sorted(m for m in va["Lk"] if 1 < m < args.k_hi):
+            fixed = 100 * (va["L1"].mean() - va["Lk"][m].mean()).item() / total
+            f = (m - 1) / (args.k_hi - 1)
+            n = int(f * N)
+            parts = []
+            for name, s_ in scores.items():
+                sel = s_.topk(n).indices
+                loss = (va["L1"].sum() - gain[sel].sum()) / N
+                parts.append(f"{name}={100 * (va['L1'].mean() - loss).item() / total:.0f}%")
+            print(f"cost {m}: fixed k={m} lấy {fixed:.0f}% gain | phân bổ k=1/k={args.k_hi} với f={f:.2f}: " + ", ".join(parts))
     print("\nrandom ~ f% là baseline 'fixed trộn'. Cột nào cao hơn random rõ rệt ở f=0.25 là tín hiệu dùng được.")
 
 
