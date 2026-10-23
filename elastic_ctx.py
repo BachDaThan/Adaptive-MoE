@@ -255,7 +255,7 @@ def train_one(name, rand_w, train, val, args, device):
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(1)
     model = CtxLM(d=args.d, n_layers=args.layers, n_experts=8, d_ff=2 * args.d,
-                  min_k=1, max_k=8, top_p=0.9, n_shared=1, compute_coef=0.0).to(device)
+                  min_k=1, max_k=8, top_p=args.top_p, n_shared=1, compute_coef=0.0).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
     choices = torch.tensor([w for w in (8, 16, 32, 64, 128, args.L) if w <= args.L], device=device)
     print(f"--- {name}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M tham số ---")
@@ -306,7 +306,7 @@ def run_grid(args, device):
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(1)
     model = CtxLM(d=args.d, n_layers=args.layers, n_experts=8, d_ff=2 * args.d,
-                  min_k=1, max_k=8, top_p=0.9, n_shared=1, compute_coef=0.0).to(device)
+                  min_k=1, max_k=8, top_p=args.top_p, n_shared=1, compute_coef=0.0).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
     ks = (1, 2, 4, 8)
     Ws = [w for w in (8, 16, 32, 64, 128, args.L) if w <= args.L]
@@ -355,6 +355,7 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--sink", type=int, default=4)
+    ap.add_argument("--top_p", type=float, default=0.9, help="đặt 0.999 để k_cap thật sự là giới hạn chặn")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     if a.selftest:
