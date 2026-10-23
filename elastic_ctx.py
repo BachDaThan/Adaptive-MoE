@@ -239,9 +239,9 @@ def batch(data, B, L, device, g):
 
 
 @torch.no_grad()
-def eval_w(model, val, W, L, device, sink, n=40):
+def eval_w(model, val, W, L, device, sink, n=40, k=2):
     g = torch.Generator().manual_seed(123)
-    model.eval(); set_window(model, W, sink); set_k_cap(model, 2)
+    model.eval(); set_window(model, W, sink); set_k_cap(model, k)
     tot = 0.0
     for _ in range(n):
         x, y = batch(val, 16, L, device, g)
@@ -290,10 +290,60 @@ def run_train(args, device):
     print("(W = %d là ngữ cảnh đầy đủ)" % args.L)
 
 
+def decode_speed(model, val, W, k, device, sink, n_new=128, P=128):
+    prompt = val[:P][None].to(device)
+    generate_ctx(model, prompt, 8, window=W, sink=sink, tiers=(k,))   # khởi động
+    if device == "cuda": torch.cuda.synchronize()
+    t0 = time.time()
+    generate_ctx(model, prompt, n_new, window=W, sink=sink, tiers=(k,))
+    if device == "cuda": torch.cuda.synchronize()
+    return n_new / (time.time() - t0)
+
+
+def run_grid(args, device):
+    """Train MỘT model co giãn cả k lẫn W, rồi đo lưới (k x W): val loss / tok/s (có cache)."""
+    train, val = load_bytes(args.text, args.hf, args.field, args.mb, args.config)
+    torch.manual_seed(0)
+    g = torch.Generator().manual_seed(1)
+    model = CtxLM(d=args.d, n_layers=args.layers, n_experts=8, d_ff=2 * args.d,
+                  min_k=1, max_k=8, top_p=0.9, n_shared=1, compute_coef=0.0).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+    ks = (1, 2, 4, 8)
+    Ws = [w for w in (8, 16, 32, 64, 128, args.L) if w <= args.L]
+    choices = torch.tensor(Ws, device=device)
+    t0 = time.time()
+    for step in range(args.steps + 1):
+        model.train()
+        set_k_cap(model, ks[torch.randint(len(ks), (1,)).item()])
+        set_window(model, choices[torch.randint(len(Ws), (args.B,), device=device)], args.sink)
+        x, y = batch(train, args.B, args.L, device, g)
+        lg, _ = model(x, None)
+        loss = F.cross_entropy(lg.float().view(-1, lg.shape[-1]), y.view(-1))
+        opt.zero_grad(); loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step()
+        if step % 500 == 0:
+            print(f"step {step} loss={loss.item():.3f} {time.time() - t0:.0f}s")
+    set_window(model, None); set_k_cap(model, None)
+    print("\n===== val loss / tok/s (decode có KV cache), hàng = k, cột = W =====")
+    print("k\\W".ljust(5) + "".join(str(w).rjust(15) for w in Ws))
+    print("KV".ljust(5) + "".join(str(args.sink + w if w < args.L else args.L).rjust(15) for w in Ws) + "   (token KV giữ)")
+    for k in ks:
+        row = str(k).ljust(5)
+        for w in Ws:
+            W = None if w == args.L else w
+            l = eval_w(model, val, W, args.L, device, args.sink, k=k)
+            v = decode_speed(model, val, W, k, device, args.sink)
+            row += f"{l:.4f}/{v:5.0f}".rjust(15)
+        print(row)
+    print("(tok/s ở model nhỏ bị chi phối bởi overhead Python, chỉ mang tính tham khảo)")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--train", action="store_true")
+    ap.add_argument("--grid", action="store_true")
     ap.add_argument("--text", default=None)
     ap.add_argument("--hf", default=None, help="tên dataset HF, ví dụ lấy từ lm_experiment.py")
     ap.add_argument("--config", default=None)
@@ -312,3 +362,5 @@ if __name__ == "__main__":
             raise SystemExit(1)
     if a.train:
         run_train(a, dev)
+    if a.grid:
+        run_grid(a, dev)
