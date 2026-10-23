@@ -204,8 +204,23 @@ def selftest(device):
 
 
 # ---------------- thí nghiệm: train W ngẫu nhiên vs train đủ ngữ cảnh ----------------
-def load_bytes(path):
-    if path and os.path.exists(path):
+def load_hf(name, field, mb, config=None):
+    from datasets import load_dataset
+    ds = load_dataset(name, config, split="train", streaming=True)
+    buf, n = [], 0
+    for ex in ds:
+        t = ex[field]
+        buf.append(t)
+        n += len(t.encode("utf-8"))
+        if n >= mb * 1_000_000:
+            break
+    return "\n".join(buf).encode("utf-8")
+
+
+def load_bytes(path, hf=None, field="text", mb=8, config=None):
+    if hf:
+        data = load_hf(hf, field, mb, config)
+    elif path and os.path.exists(path):
         data = open(path, "rb").read()
     else:
         print("!! Không có --text, dùng file .py/.md trong thư mục (quá nhỏ, chỉ để chạy thử)")
@@ -261,7 +276,7 @@ def train_one(name, rand_w, train, val, args, device):
 
 
 def run_train(args, device):
-    train, val = load_bytes(args.text)
+    train, val = load_bytes(args.text, args.hf, args.field, args.mb, args.config)
     res = {}
     for name, rw in (("full-context", False), ("random-window", True)):
         m = train_one(name, rw, train, val, args, device)
@@ -280,6 +295,10 @@ if __name__ == "__main__":
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--train", action="store_true")
     ap.add_argument("--text", default=None)
+    ap.add_argument("--hf", default=None, help="tên dataset HF, ví dụ lấy từ lm_experiment.py")
+    ap.add_argument("--config", default=None)
+    ap.add_argument("--field", default="text")
+    ap.add_argument("--mb", type=int, default=8, help="số MB text lấy từ HF")
     ap.add_argument("--L", type=int, default=256)
     ap.add_argument("--B", type=int, default=32)
     ap.add_argument("--d", type=int, default=128)
