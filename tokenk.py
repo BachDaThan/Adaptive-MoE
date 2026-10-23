@@ -72,9 +72,9 @@ def caps_for(rule, f, x, tabs, device, rg=None):
 
 
 def train_model(train, args, device, vocab, tabs):
-    random.seed(0)
-    torch.manual_seed(0)
-    g = torch.Generator().manual_seed(1)
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    g = torch.Generator().manual_seed(1 + args.seed)
     model = CtxLM(vocab=vocab, d=args.d, n_layers=args.layers, n_experts=args.experts, d_ff=2 * args.d,
                   min_k=1, max_k=8, top_p=args.top_p, n_shared=1, compute_coef=0.0).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
@@ -118,6 +118,22 @@ def eval_rule(model, val, rule, f, tabs, args, device, n=40):
     return tot / n, frac / n
 
 
+@torch.no_grad()
+def eval_layers(model, val, layers, args, device, n=40):
+    """Đối thủ 'fixed top-k' ở chi phí 1.5: k=2 chỉ ở một số layer, k=1 ở các layer còn lại (cùng cho mọi token)."""
+    g = torch.Generator().manual_seed(123)
+    model.eval()
+    for i, b in enumerate(model.blocks):
+        b.moe.k_cap = 2 if i in layers else 1
+    tot = 0.0
+    for _ in range(n):
+        x, y = batch(val, 16, args.L, device, g)
+        lg, _ = model(x, None)
+        tot += F.cross_entropy(lg.float().view(-1, lg.shape[-1]), y.view(-1)).item()
+    set_k_cap(model, None)
+    return tot / n
+
+
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if not selftest(device):
@@ -132,7 +148,7 @@ def main(args):
     l1, _ = eval_rule(model, val, "k1", 0, tabs, args, device)
     l2, _ = eval_rule(model, val, "k2", 1, tabs, args, device)
     total = l1 - l2
-    print(f"\nval loss: k=1 {l1:.4f} | k=2 {l2:.4f} | gain {total:.4f} nat  (train_mode={args.train_mode})")
+    print(f"\nval loss: k=1 {l1:.4f} | k=2 {l2:.4f} | gain {total:.4f} nat  (train_mode={args.train_mode}, seed={args.seed})")
     print("Mọi luật dưới đây chạy THẬT trong từng layer; chi phí expert ~ 1 + 'nâng'.")
     print("luật".ljust(9) + "f".rjust(6) + "nâng".rjust(8) + "loss".rjust(9) + "gain lấy lại".rjust(14))
     res = {}
@@ -141,6 +157,14 @@ def main(args):
             loss, frac = eval_rule(model, val, rule, f, tabs, args, device)
             res[(rule, f)] = loss
             print(rule.ljust(9) + f"{f:6.2f}" + f"{frac:8.2f}" + f"{loss:9.4f}" + f"{100 * (l1 - loss) / total:13.0f}%")
+    half = args.layers // 2
+    patterns = [tuple(range(half)), tuple(range(half, args.layers)), tuple(range(0, args.layers, 2)),
+                tuple(range(1, args.layers, 2))]
+    print(f"\nĐỐI THỦ fixed ở chi phí {1 + half / args.layers:.2f}: k=2 chỉ ở vài layer (model chưa train riêng cho kiểu này)")
+    for p in patterns:
+        loss = eval_layers(model, val, p, args, device)
+        print(f"  k=2 ở layer {list(p)}: loss {loss:.4f} | lấy lại {100 * (l1 - loss) / total:.0f}%")
+    print("  (so với rare/random ở f=0.50 phía trên, cùng chi phí)")
     print("\nrare so với random cùng f (số âm = rare tốt hơn, đơn vị nat):")
     for f in fs:
         print(f"  f={f}: {res[('rare', f)] - res[('random', f)]:+.4f}")
@@ -164,5 +188,6 @@ if __name__ == "__main__":
     ap.add_argument("--experts", type=int, default=32)
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--top_p", type=float, default=0.999)
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--train_mode", choices=("random", "rare"), default="random")
     main(ap.parse_args())
