@@ -83,13 +83,13 @@ Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm ti�
 | adaptive + `diff_head`, `compute_coef=0.5` | 1.90 | 4.150 |
 | adaptive + `diff_head`, `diff_target=gain`, `compute_coef=0.5` | 1.88 | 4.148 |
 | adaptive + `diff_head`, `compute_coef=0` (3 seed) | 2.10 | 4.085 (4.081–4.088) |
-| expert mịn: 32 expert (d_ff=128), top-8 cố định | 8.00 | 4.141 |
-| expert mịn: 32 expert (d_ff=128), adaptive + `diff_head`, `compute_coef=0` | 7.15 | 4.123 |
+| 32 expert (expert định tuyến d_ff=128, dùng chung d_ff=512), top-8 cố định | 8.00 | 4.113 |
+| 32 expert (expert định tuyến d_ff=128, dùng chung d_ff=512), adaptive + `diff_head`, `compute_coef=0` | 7.08 | 4.126 |
 
 Rút ra:
 - Router học được độ khó của token (tương quan với loss thật khoảng 0.4 đến 0.5) và số expert tăng theo độ khó (tương quan k và loss từ +0.26 đến +0.37).
 - **Chưa có bằng chứng adaptive hiệu quả hơn top-k cố định ở quy mô này.** Cấu hình tốt nhất (`compute_coef=0`) kém fixed k=2 khoảng 0.007 nat (ppl 59.4 so với 59.0), nhất quán ở cả 3 seed, trong khi dùng nhiều hơn khoảng 5% expert.
-- Với expert mịn hơn (32 thay vì 8, cùng tổng tham số), adaptive thắng top-8 cố định ở lần chạy duy nhất có (4.123 so với 4.141) trong khi dùng ít hơn khoảng 11% expert, và k phân hóa rộng hơn nhiều (từ 4.9 ở nhóm token dễ nhất đến 8.4 ở nhóm khó nhất). Lưu ý: mới một seed, và cấu hình 32 expert này kém hơn bản 8 expert về tuyệt đối (4.078), một phần do expert dùng chung bị teo theo `d_ff`; dùng `--d_ff_shared` để giữ nó rộng. Đây là xu hướng đáng chú ý, chưa phải chiến thắng tuyệt đối.
+- Expert mịn hơn (32 thay vì 8, tổng tham số tương đương): lần chạy đầu có vẻ ủng hộ adaptive, nhưng đó là hiệu ứng giả do expert dùng chung bị teo theo `d_ff`. Khi giữ expert dùng chung rộng (`--d_ff_shared 512`), top-8 cố định (4.113) thắng adaptive (4.126), dù adaptive dùng ít hơn khoảng 11% expert và k phân hóa rộng (4.8 ở nhóm token dễ nhất, 8.3 ở nhóm khó nhất). Đây là đánh đổi chất lượng lấy compute, không phải chiến thắng miễn phí; cần chạy top-7 cố định ở cùng ngân sách mới đánh giá được. Cấu hình 32 expert này cũng kém bản 8 expert (4.078) khi train ngắn như vậy.
 - Quan sát ổn định giữa các seed: khi để router tự do, các layer sâu xin nhiều expert hơn (layer 1 khoảng 1.3 đến 1.6, layer 4 khoảng 2.7 đến 2.8). Tuy vậy gán cứng k theo layer (1,2,2,3) lại kém k đồng đều, nên chưa thể dùng điều này như một công thức.
 - "Token khó" không đồng nghĩa "token được lợi khi thêm expert": nhãn dạy theo loss đưa nhiều expert cho từ hiếm và từ chức năng, trong khi từ nội dung mới là loại được lợi nhiều nhất khi thêm expert. Nhãn theo mức loss giảm được (`gain`) quá nhiễu nên đầu dự đoán không học được.
 - `compute_coef=0.5` giúp như một regularizer khi dữ liệu nhỏ và model overfit (1.9M token), nhưng làm hại khi dữ liệu đủ lớn.
