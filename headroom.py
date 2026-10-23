@@ -56,7 +56,7 @@ def collect(model, data, n_batches, args, device, seed):
     ]
     model.eval(); set_window(model, None)
     ks_eval = sorted({k for k in (1, 2, 3, args.k_hi) if k <= args.k_hi})
-    acc = {n: [] for n in ("L1", "L2", "emb", "l1", "fin", "E", "P")}
+    acc = {n: [] for n in ("L1", "L2", "emb", "l1", "fin", "E", "P", "tok")}
     lk = {k: [] for k in ks_eval}
     flat = lambda t: t.float().reshape(-1, t.shape[-1])
     for _ in range(n_batches):
@@ -72,6 +72,7 @@ def collect(model, data, n_batches, args, device, seed):
             if k == args.k_hi:
                 acc["L2"].append(ce)
             if k == 1:
+                acc["tok"].append(x.reshape(-1))
                 p = lg.softmax(-1)
                 acc["E"].append(-(p * p.clamp_min(1e-9).log()).sum(-1))
                 acc["P"].append(p.max(-1).values)
@@ -136,7 +137,10 @@ def main(args):
     print(f"\nval: {N:,} token | loss k=1: {va['L1'].mean():.4f} | loss k={args.k_hi}: {va['L2'].mean():.4f} "
           f"| gain trung bình/token: {gain.mean():.4f}")
     g = torch.Generator(device=device).manual_seed(0)
-    scores = {"random": torch.rand(N, device=device, generator=g), "entropy": va["E"]}
+    counts = torch.bincount(train.to(device), minlength=vocab).float()
+    logf = torch.log(counts[va["tok"]] + 1)
+    scores = {"random": torch.rand(N, device=device, generator=g), "entropy": va["E"],
+              "rare": -logf, "common": logf}
     corrs = {}
     for name in ("emb", "l1", "fin"):
         net = fit_predictor(tr["feat_" + name], ytr, device)
@@ -147,8 +151,8 @@ def main(args):
     print("tương quan(dự đoán, gain thật): " + ", ".join(f"{k}={v:.3f}" for k, v in corrs.items()))
     total = (va["L1"].mean() - va["L2"].mean()).item()
     print("\n% mức gain của k=k_hi đầy đủ lấy lại được khi nâng f token lên k=k_hi")
-    print("(entropy/learn_fin cần chạy xong k=1 cả mạng rồi mới quyết định; learn_emb quyết định TRƯỚC khi tính; learn_l1 sau layer 1)")
-    print("f".ljust(6) + "".join(n.rjust(13) for n in scores))
+    print("(rare/common: luật tần suất token, không cần học; entropy/learn_fin cần chạy xong k=1 cả mạng rồi mới quyết định; learn_emb quyết định TRƯỚC khi tính; learn_l1 sau layer 1)")
+    print("f".ljust(6) + "".join(n.rjust(11) for n in scores))
     for f in (0.1, 0.25, 0.5, 0.75):
         n = int(f * N)
         row = f"{f:<6}"
@@ -156,7 +160,7 @@ def main(args):
             sel = s.topk(n).indices
             loss = (va["L1"].sum() - gain[sel].sum()) / N
             share = 100 * (va["L1"].mean() - loss).item() / total
-            row += f"{share:12.0f}%"
+            row += f"{share:10.0f}%"
         print(row)
     if args.k_hi > 2:
         print("\nSO VỚI FIXED k CÙNG CHI PHÍ TRUNG BÌNH (cost = 1 + f*(k_hi-1)) - đây mới là baseline công bằng")
