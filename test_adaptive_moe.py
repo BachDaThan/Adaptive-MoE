@@ -80,6 +80,38 @@ def test_matches_dense_reference():
     assert torch.allclose(out.reshape(-1, 16), ref, atol=1e-5)
 
 
+def test_state_dict_roundtrip():
+    a = TinyLM(difficulty=True, n_shared=1).eval()
+    b = TinyLM(difficulty=True, n_shared=1).eval()
+    b.load_state_dict(a.state_dict())
+    ids = torch.randint(0, 100, (2, 9))
+    assert torch.allclose(a(ids), b(ids), atol=1e-6)
+
+
+def test_small_shapes_are_finite():
+    m = TinyLM().eval()
+    for shape in [(1, 1), (1, 5), (3, 1)]:
+        out = m(torch.randint(0, 100, shape))
+        assert out.shape == (*shape, 100) and torch.isfinite(out).all()
+
+
+def test_extreme_inputs_stay_finite():
+    r = AdaptiveRouter(16, 8, top_p=0.7)
+    w, info = r(torch.randn(40, 16) * 1e3)
+    assert torch.isfinite(w).all()
+    assert all(torch.isfinite(v).all() for v in info.values())
+
+
+def test_bf16_autocast_cpu():
+    m = TinyLM(difficulty=True)
+    ids = torch.randint(0, 100, (2, 8))
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        logits = m(ids)
+        loss = nn.functional.cross_entropy(logits.float().view(-1, 100), ids.view(-1)) + gather_aux_loss(m)
+    loss.backward()
+    assert torch.isfinite(loss)
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))
