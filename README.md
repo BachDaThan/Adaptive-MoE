@@ -91,6 +91,10 @@ Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenizat
 | 32 experts (same), fixed top-7 | 7.00 | 4.119 |
 | 32 experts (same), fixed top-6 | 6.00 | 4.126 |
 
+![Validation loss vs average experts: adaptive routing vs fixed top-k](docs/loss_vs_k.png)
+
+Points below the fixed top-k line are better at the same budget; every adaptive point sits on or above it. Note the right panel spans only 0.015 nats.
+
 Takeaways:
 - The router learns token difficulty (correlation with the true loss around 0.4 to 0.5) and the number of experts rises with difficulty (correlation between k and loss from +0.26 to +0.37).
 - **No evidence that adaptive routing is more efficient than fixed top-k at this scale.** The best configuration (`compute_coef=0`) is about 0.007 nats worse than fixed k=2 (perplexity 59.4 vs 59.0), consistently across all 3 seeds, while using about 5% more experts.

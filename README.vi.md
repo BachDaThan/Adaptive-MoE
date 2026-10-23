@@ -88,6 +88,10 @@ Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm ti�
 | 32 expert (như trên), top-7 cố định | 7.00 | 4.119 |
 | 32 expert (như trên), top-6 cố định | 6.00 | 4.126 |
 
+![Val loss theo số expert trung bình: adaptive so với top-k cố định](docs/loss_vs_k.png)
+
+Điểm nằm dưới đường top-k cố định là tốt hơn ở cùng ngân sách; mọi điểm adaptive đều nằm trên hoặc ngay trên đường đó. Lưu ý biểu đồ bên phải chỉ trải trong 0.015 nat.
+
 Rút ra:
 - Router học được độ khó của token (tương quan với loss thật khoảng 0.4 đến 0.5) và số expert tăng theo độ khó (tương quan k và loss từ +0.26 đến +0.37).
 - **Chưa có bằng chứng adaptive hiệu quả hơn top-k cố định ở quy mô này.** Cấu hình tốt nhất (`compute_coef=0`) kém fixed k=2 khoảng 0.007 nat (ppl 59.4 so với 59.0), nhất quán ở cả 3 seed, trong khi dùng nhiều hơn khoảng 5% expert.
