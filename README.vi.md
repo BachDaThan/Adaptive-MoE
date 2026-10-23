@@ -125,6 +125,30 @@ Rút ra:
 
 Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ngắn, chưa đo tốc độ thật (vòng lặp theo expert chưa được tối ưu). Kết quả ở model lớn có thể khác.
 
+## Elastic k, phân phối đều k trong khoảng 1..4 (1 seed)
+
+Huấn luyện một lần với k ngẫu nhiên đều trên {1..4}, sau đó ép cố định k lúc suy luận:
+
+| Mô hình | k=1 | k=2 | k=3 | k=4 |
+|---|---|---|---|---|
+| Elastic, ép k lúc eval | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
+| Fixed top-k (train và chạy cùng k) | 4.110\* | 4.0780 | 4.0720 | 4.0727 |
+
+\* *fixed top-1 với xác suất cổng thô (`--no_renorm`). Cố định k=2 là giá trị trung bình của 3 seed; k=3 và k=4 sử dụng 1 seed.*
+
+**Nhận xét:** Một mô hình elastic duy nhất chỉ lệch tối đa khoảng 0.0015 nat so với mô hình fixed-k riêng biệt ở khoảng k=2..4, và ở k=1 thậm chí không tệ hơn mô hình top-1 được huấn luyện riêng (4.101 so với 4.110). Nhiễu giữa các seed rơi vào khoảng 0.002 đến 0.004 nat, vì vậy chỉ có hàng k=1 là có sự khác biệt rõ rệt so với xu hướng của baseline cố định, cấu hình này sẽ cần thêm seed để đánh giá chính xác hơn. Chất lượng mô hình gần như đi ngang từ k=2 đến k=4 ở quy mô này, do đó việc điều chỉnh chi phí tính toán (budget) chủ yếu có ý nghĩa rõ rệt trong khoảng từ k=1 đến k=2.
+
+Quá trình huấn luyện với k ngẫu nhiên đạt trung bình 2.5 expert trên mỗi token, nhưng nếu đánh giá (eval) bằng k ngẫu nhiên thì kết quả đạt 4.082 (ppl 59.2); việc ép một mức k cố định khi suy luận mang lại hiệu quả tốt hơn là để k ngẫu nhiên.
+
+### Tốc độ đo thực tế (CUDA, batch 32x128; tỷ lệ so với khi dùng tất cả expert)
+
+| Số Expert | k | suy luận (inference) | huấn luyện (train) |
+|---|---|---|---|
+| 8 | 1 / 2 / 4 | 0.42x / 0.48x / 0.66x | 0.43x / 0.50x / 0.66x |
+| 32 | 1 / 8 / 16 | 0.43x / 0.48x / 0.62x | 0.18x / 0.36x / 0.56x |
+
+Sử dụng ít expert hơn giúp tăng tốc độ trong thực tế, nhưng không tỷ lệ thuận hoàn toàn lúc suy luận (ví dụ với 32 experts, k=1 đạt tốc độ 0.43x chứ không phải là 1/32). Chi phí cố định cho mỗi bước (attention, embedding, dispatch) chiếm tỷ trọng lớn khi k nhỏ.
+
 ## Đo tốc độ
 
 `python bench.py` đo tốc độ thật (token mỗi giây, suy luận và train) khi mọi token bị ép dùng đúng k expert, để kiểm tra dùng ít expert hơn có nhanh hơn thật trên phần cứng của bạn không. Ví dụ: `python bench.py --experts 32 --d_ff 128 --ks 1,4,8,16,32`.
