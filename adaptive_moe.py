@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 
 class Expert(nn.Module):
@@ -77,12 +77,16 @@ class AdaptiveRouter(nn.Module):
         sorted_p, sorted_idx = probs.sort(dim=-1, descending=True)
         cum_before = sorted_p.cumsum(-1) - sorted_p                  # xác suất tích lũy trước expert j
 
-        cap = min(self.max_k, k_cap) if k_cap else self.max_k
-        cap = max(cap, self.min_k)
+        if torch.is_tensor(k_cap):
+            # trần theo TỪNG token: tensor số nguyên [T] hoặc [T,1], T = B*S theo thứ tự flatten
+            cap = k_cap.reshape(-1, 1).to(x.device).long().clamp(min=self.min_k, max=self.max_k)
+        else:
+            cap = min(self.max_k, k_cap) if k_cap else self.max_k
+            cap = max(cap, self.min_k)
         if self.rand_k is not None:
             # đối chứng: mỗi token nhận k=hi với xác suất frac_hi, ngược lại k=lo (không dựa vào độ khó)
             lo, hi, frac = self.rand_k
-            if k_cap:   # đánh giá: ép mọi token dùng đúng k_cap expert
+            if not torch.is_tensor(k_cap) and k_cap:   # đánh giá: ép mọi token dùng đúng k_cap expert
                 cap = torch.full((x.shape[0], 1), int(k_cap), device=x.device, dtype=torch.long)
             elif frac is None:   # đồng đều trên {lo, ..., hi}
                 cap = torch.randint(lo, hi + 1, (x.shape[0], 1), device=x.device)
@@ -235,7 +239,10 @@ class AdaptiveMoE(nn.Module):
 # Tiện ích cho cả model
 # ----------------------------------------------------------------------------
 def set_k_cap(model: nn.Module, k):
-    """Đặt trần số expert cho mọi AdaptiveMoE trong model (None = bỏ trần)."""
+    """Đặt trần số expert cho mọi AdaptiveMoE trong model (None = bỏ trần).
+
+    k có thể là số nguyên (cùng trần cho mọi token) hoặc tensor số nguyên [B*S] (trần riêng từng token,
+    thứ tự flatten của đầu vào)."""
     for m in model.modules():
         if isinstance(m, AdaptiveMoE):
             m.k_cap = k
