@@ -60,6 +60,22 @@ ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
 - `top_p`, `target_k` and the loss coefficients need tuning for your model and data.
 - This is the router/layer only, not a complete model.
 
+## Elastic k: train once, choose k at inference
+
+Training with a random per-token k gives one model that can be run at either budget, with a small gap between them (one seed: 4.096 at k=1 and 4.082 at k=2 on the Vietnamese LM below, a 0.014-nat difference; a model trained only for top-1 with raw gate probabilities reached 4.110).
+
+```python
+from adaptive_moe import AdaptiveMoE, set_k_cap
+
+moe = AdaptiveMoE(d_model=512, d_ff=1024, n_experts=8, min_k=1, max_k=2, top_p=1.0,
+                  compute_coef=0.0, rand_k=(1, 2, 0.5))   # training: each token gets k=1 or k=2 at random
+# inference: pick the budget for the whole model
+set_k_cap(model, 1)   # exactly 1 expert per token (cheap)
+set_k_cap(model, 2)   # exactly 2 experts per token
+```
+
+With `rand_k` set, `k_cap` forces an exact k (without it, the per-token random choice is used). Use `lm_experiment.py --mode random --eval_cascade` to reproduce the numbers.
+
 ## Language-model experiment (Vietnamese text)
 
 ```bash
@@ -90,6 +106,8 @@ Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenizat
 | adaptive + `diff_head`, `compute_coef=0` (3 seeds) | 2.10 | 4.085 (4.081–4.088) |
 | adaptive + `diff_head`, `compute_coef=0`, low budget (3 seeds) | 1.46 | 4.090 (4.083–4.098) |
 | random per-token k in {1,2}, 46% of tokens get 2 (control, 1 seed) | 1.46 | 4.092 |
+| random-k training (50/50), then run at k=1 (`--eval_cascade`) | 1.00 | 4.096 |
+| random-k training (50/50), then run at k=2 | 2.00 | 4.082 |
 | 32 experts (routed d_ff=128, shared d_ff=512), fixed top-8 | 8.00 | 4.113 |
 | 32 experts (routed d_ff=128, shared d_ff=512), adaptive + `diff_head`, `compute_coef=0` | 7.08 | 4.126 |
 | 32 experts (same), fixed top-7 | 7.00 | 4.119 |
@@ -101,7 +119,7 @@ Points below the fixed top-k line are better at the same budget. The renormalize
 
 Takeaways:
 - The router learns token difficulty (correlation with the true loss around 0.4 to 0.5) and the number of experts rises with difficulty (correlation between k and loss from +0.26 to +0.37).
-- **Learned allocation does not beat random allocation at equal budget.** At about 1.46 experts per token (8 experts), adaptive routing with `compute_coef=0` reached 4.090 (3 seeds: 4.083 to 4.098), while a control that gives each token k=1 or k=2 at random with the same average budget reached 4.092 (1 seed). Fixed k=1 with raw gate probabilities (`--no_renorm`) reaches 4.110; the renormalized k=1 baseline (4.194) was handicapped because a single renormalized expert gives the router no task gradient. Against that corrected reference, the adaptive and random points at k≈1.46 lie within about 0.005 nats of the straight line between k=1 (4.110) and k=2 (4.078): a plain linear trade-off of roughly 0.03 nats per routed expert, not a special gain. (With raw gate probabilities at both ends, fixed k=2 gives 4.083, so the reference line runs from 4.110 to 4.083, about 0.027 nats per routed expert; the adaptive and random points sit about 0.005 to 0.007 nats below it, comparable to seed noise.) At about 2 experts per token (8 experts) and at 32 experts, adaptive routing was slightly worse than fixed top-k at equal budget (about 0.007 nats).
+- **Learned allocation does not beat random allocation at equal budget.** At about 1.46 experts per token (8 experts), adaptive routing with `compute_coef=0` reached 4.090 (3 seeds: 4.083 to 4.098), while a control that gives each token k=1 or k=2 at random with the same average budget reached 4.092 (1 seed). Fixed k=1 with raw gate probabilities (`--no_renorm`) reaches 4.110; the renormalized k=1 baseline (4.194) was handicapped because a single renormalized expert gives the router no task gradient. Against that corrected reference, the adaptive and random points at k≈1.46 lie within about 0.005 nats of the straight line between k=1 (4.110) and k=2 (4.078): a plain linear trade-off of roughly 0.03 nats per routed expert, not a special gain. (With raw gate probabilities at both ends, fixed k=2 gives 4.083, so the reference line runs from 4.110 to 4.083, about 0.027 nats per routed expert; the adaptive and random points sit about 0.005 to 0.007 nats below it, comparable to seed noise.) Escalating tokens by the model's own uncertainty (entropy of a cheap k=1 pass) beat random escalation by only 0.0014 nats at a 50% budget (`--eval_cascade`), and the whole range between all-k=1 and all-k=2 spans just 0.014 nats, so there is almost nothing for a controller to gain. (The "oracle" column in that report is not an achievable ceiling: with hindsight it picks the better of two noisy per-token losses.) At about 2 experts per token (8 experts) and at 32 experts, adaptive routing was slightly worse than fixed top-k at equal budget (about 0.007 nats).
 - Finer-grained experts (32 instead of 8, similar total parameters): a first run appeared to favor adaptive routing, but that was an artifact of the shared expert shrinking along with `d_ff`. With the shared expert kept wide (`--d_ff_shared 512`), fixed top-8 (4.113) beats adaptive (4.126), which uses about 11% fewer experts and spreads k widely (4.8 on the easiest quartile to 8.3 on the hardest). The fixed top-7 (4.119) and top-6 (4.126) controls settle it: adaptive at k=7.08 matches fixed top-6 while using more experts, so it loses at equal budget by about 0.007 nats, the same gap seen with 8 experts. The fixed curve is also very flat (about 0.0065 nats per expert between k=6 and k=8), which leaves little headroom for any allocation scheme at this scale. This 32-expert setup is also worse than the 8-expert baseline (4.078) at this short training length.
 - A stable observation across seeds: when the router is free, deeper layers ask for more experts (layer 1 about 1.3 to 1.6, layer 4 about 2.7 to 2.8). However, hard-coding k per layer (1,2,2,3) was worse than uniform k, so this is not a ready-made recipe.
 - "Hard token" does not mean "token that benefits from more experts": a loss-based label sends more experts to rare words and function words, while content words gain the most from an extra expert. A label based on the loss reduction from adding experts (`gain`) was too noisy for the difficulty head to learn.

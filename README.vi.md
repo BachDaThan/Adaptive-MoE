@@ -58,6 +58,22 @@ ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
 - `top_p`, `target_k` và các hệ số loss cần chỉnh theo model và dữ liệu của bạn.
 - Đây là phần router/layer, chưa phải model hoàn chỉnh.
 
+## Elastic k: train một lần, chọn k lúc suy luận
+
+Train với k ngẫu nhiên theo token cho ra một model chạy được ở cả hai mức ngân sách, chênh lệch nhỏ (một seed: 4.096 ở k=1 và 4.082 ở k=2 trên LM tiếng Việt bên dưới, chênh 0.014 nat; model chỉ train cho top-1 với xác suất gate giữ nguyên đạt 4.110).
+
+```python
+from adaptive_moe import AdaptiveMoE, set_k_cap
+
+moe = AdaptiveMoE(d_model=512, d_ff=1024, n_experts=8, min_k=1, max_k=2, top_p=1.0,
+                  compute_coef=0.0, rand_k=(1, 2, 0.5))   # lúc train: mỗi token nhận k=1 hoặc k=2 ngẫu nhiên
+# lúc suy luận: chọn ngân sách cho cả model
+set_k_cap(model, 1)   # đúng 1 expert mỗi token (rẻ)
+set_k_cap(model, 2)   # đúng 2 expert mỗi token
+```
+
+Khi đặt `rand_k`, `k_cap` ép đúng k (không đặt thì dùng lựa chọn ngẫu nhiên theo token). Dùng `lm_experiment.py --mode random --eval_cascade` để tái hiện số liệu.
+
 ## Thí nghiệm trên tiếng Việt thật
 
 ```bash
@@ -87,6 +103,8 @@ Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm ti�
 | adaptive + `diff_head`, `compute_coef=0` (3 seed) | 2.10 | 4.085 (4.081–4.088) |
 | adaptive + `diff_head`, `compute_coef=0`, ngân sách thấp (3 seed) | 1.46 | 4.090 (4.083–4.098) |
 | k ngẫu nhiên theo token trong {1,2}, 46% token nhận 2 (đối chứng, 1 seed) | 1.46 | 4.092 |
+| train với k ngẫu nhiên (50/50), rồi chạy ở k=1 (`--eval_cascade`) | 1.00 | 4.096 |
+| train với k ngẫu nhiên (50/50), rồi chạy ở k=2 | 2.00 | 4.082 |
 | 32 expert (expert định tuyến d_ff=128, dùng chung d_ff=512), top-8 cố định | 8.00 | 4.113 |
 | 32 expert (expert định tuyến d_ff=128, dùng chung d_ff=512), adaptive + `diff_head`, `compute_coef=0` | 7.08 | 4.126 |
 | 32 expert (như trên), top-7 cố định | 7.00 | 4.119 |
@@ -98,7 +116,7 @@ Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm ti�
 
 Rút ra:
 - Router học được độ khó của token (tương quan với loss thật khoảng 0.4 đến 0.5) và số expert tăng theo độ khó (tương quan k và loss từ +0.26 đến +0.37).
-- **Phân bổ đã học không thắng phân bổ ngẫu nhiên ở cùng ngân sách.** Ở khoảng 1.46 expert mỗi token (8 expert), adaptive với `compute_coef=0` đạt 4.090 (3 seed: 4.083 đến 4.098), còn đối chứng cho mỗi token k=1 hoặc k=2 ngẫu nhiên với cùng ngân sách trung bình đạt 4.092 (1 seed). Top-1 cố định với xác suất gate giữ nguyên (`--no_renorm`) đạt 4.110; baseline k=1 chuẩn hóa (4.194) bị thiệt vì một expert đã chuẩn hóa không cho router gradient từ task loss. So với mốc đã sửa, các điểm adaptive và ngẫu nhiên ở k≈1.46 nằm trong khoảng 0.005 nat so với đường thẳng nối k=1 (4.110) và k=2 (4.078): một đánh đổi tuyến tính khoảng 0.03 nat mỗi expert định tuyến, không phải lợi ích đặc biệt. (Khi cả hai đầu cùng giữ nguyên gate, k=2 cho 4.083, nên đường tham chiếu chạy từ 4.110 đến 4.083, khoảng 0.027 nat mỗi expert định tuyến; các điểm adaptive và ngẫu nhiên nằm thấp hơn đường đó khoảng 0.005 đến 0.007 nat, tương đương nhiễu giữa các seed.) Ở khoảng 2 expert mỗi token (8 expert) và ở 32 expert, adaptive thua nhẹ top-k cố định ở cùng ngân sách (khoảng 0.007 nat).
+- **Phân bổ đã học không thắng phân bổ ngẫu nhiên ở cùng ngân sách.** Ở khoảng 1.46 expert mỗi token (8 expert), adaptive với `compute_coef=0` đạt 4.090 (3 seed: 4.083 đến 4.098), còn đối chứng cho mỗi token k=1 hoặc k=2 ngẫu nhiên với cùng ngân sách trung bình đạt 4.092 (1 seed). Top-1 cố định với xác suất gate giữ nguyên (`--no_renorm`) đạt 4.110; baseline k=1 chuẩn hóa (4.194) bị thiệt vì một expert đã chuẩn hóa không cho router gradient từ task loss. So với mốc đã sửa, các điểm adaptive và ngẫu nhiên ở k≈1.46 nằm trong khoảng 0.005 nat so với đường thẳng nối k=1 (4.110) và k=2 (4.078): một đánh đổi tuyến tính khoảng 0.03 nat mỗi expert định tuyến, không phải lợi ích đặc biệt. (Khi cả hai đầu cùng giữ nguyên gate, k=2 cho 4.083, nên đường tham chiếu chạy từ 4.110 đến 4.083, khoảng 0.027 nat mỗi expert định tuyến; các điểm adaptive và ngẫu nhiên nằm thấp hơn đường đó khoảng 0.005 đến 0.007 nat, tương đương nhiễu giữa các seed.) Nâng tầng theo độ bất định của chính model (entropy của lượt k=1 rẻ) chỉ hơn nâng ngẫu nhiên 0.0014 nat ở ngân sách 50% (`--eval_cascade`), và toàn bộ khoảng từ toàn k=1 đến toàn k=2 chỉ trải 0.014 nat, nên gần như không còn gì để bộ điều khiển lấy thêm. (Cột "oracle" trong báo cáo đó không phải trần đạt được: nhìn lại với hindsight nó chọn cái tốt hơn trong hai loss nhiễu của từng token.) Ở khoảng 2 expert mỗi token (8 expert) và ở 32 expert, adaptive thua nhẹ top-k cố định ở cùng ngân sách (khoảng 0.007 nat).
 - Expert mịn hơn (32 thay vì 8, tổng tham số tương đương): lần chạy đầu có vẻ ủng hộ adaptive, nhưng đó là hiệu ứng giả do expert dùng chung bị teo theo `d_ff`. Khi giữ expert dùng chung rộng (`--d_ff_shared 512`), top-8 cố định (4.113) thắng adaptive (4.126), dù adaptive dùng ít hơn khoảng 11% expert và k phân hóa rộng (4.8 ở nhóm token dễ nhất, 8.3 ở nhóm khó nhất). Hai bản đối chứng top-7 (4.119) và top-6 (4.126) cho câu trả lời: adaptive ở k=7.08 chỉ ngang top-6 cố định mà dùng nhiều expert hơn, tức thua ở cùng ngân sách khoảng 0.007 nat, đúng bằng khoảng cách ở bản 8 expert. Đường cong của bản cố định cũng rất phẳng (khoảng 0.0065 nat mỗi expert từ k=6 đến k=8), nên ở quy mô này gần như không còn chỗ cho cách phân bổ nào. Cấu hình 32 expert này cũng kém bản 8 expert (4.078) khi train ngắn như vậy.
 - Quan sát ổn định giữa các seed: khi để router tự do, các layer sâu xin nhiều expert hơn (layer 1 khoảng 1.3 đến 1.6, layer 4 khoảng 2.7 đến 2.8). Tuy vậy gán cứng k theo layer (1,2,2,3) lại kém k đồng đều, nên chưa thể dùng điều này như một công thức.
 - "Token khó" không đồng nghĩa "token được lợi khi thêm expert": nhãn dạy theo loss đưa nhiều expert cho từ hiếm và từ chức năng, trong khi từ nội dung mới là loại được lợi nhiều nhất khi thêm expert. Nhãn theo mức loss giảm được (`gain`) quá nhiễu nên đầu dự đoán không học được.
