@@ -142,6 +142,41 @@ Train once with `--mode random --uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4` 
 
 Training with random k averaged 2.5 experts per token, but evaluated with random k it scored 4.082 (ppl 59.2); forcing a single k at inference is better than leaving k random.
 
+## Elastic context window (sink + sliding window) and joint elastic k x W
+
+**Setup:** byte-level LM, 3.9M params (d=128, 4 layers, 8 experts), sequence length 256, 8 MB of Vietnamese Wikipedia (`wikimedia/wikipedia 20231101.vi`), 3000 steps, sink = 4, top_p = 0.9. A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W`. At inference the KV cache keeps only `sink + W` tokens; this is checked to give identical outputs to re-running the whole sequence with the same mask (`--selftest`).
+
+### Window only (k = 2): val loss when W is forced at inference
+
+| Training | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
+|---|---|---|---|---|---|---|
+| Full context | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
+| Random W per sample | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
+
+Two runs of this experiment (same seed, GPU nondeterminism) agree: random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context (difference within +-0.0015).
+
+### Joint elastic k and W (one model trained with k in {1,2,4,8} and W in {8..256})
+
+val loss (rows: k, columns: W; KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256)
+
+| k | W=8 | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|
+| 1 | 1.2165 | 1.2095 | 1.2043 | 1.2023 | 1.2017 | 1.2018 |
+| 2 | 1.2060 | 1.1992 | 1.1939 | 1.1922 | 1.1914 | 1.1915 |
+| 4 | 1.2054 | 1.1988 | 1.1935 | 1.1917 | 1.1909 | 1.1910 |
+| 8 | 1.2056 | 1.1989 | 1.1936 | 1.1918 | 1.1910 | 1.1911 |
+
+A second run of the same grid was shifted up by about 0.0025 in every cell, so compare cells within one run.
+
+**Observations:**
+- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0007 nats; to 36 tokens (W=32) about 0.0024; to 20 tokens (W=16) about 0.008.
+- k=1 costs about 0.010 nats versus k=2. k=2, 4 and 8 are within 0.0005 of each other. With `top_p = 0.9` the router may already keep fewer experts than the cap, so the cap may not bind for k>=4; see "Open question".
+- Spending budget on k is worth more than on W: (k=2, W=16) beats (k=1, W=64) with a smaller cache.
+- Decode tok/s was flat (about 75-83) because this small model is dominated by Python overhead, so no speed claim is made here.
+
+**Open question:** rerun with `--top_p 0.999` to check whether the k cap actually binds at k=4 and k=8.  
+**Limitations:** single seed per configuration, sequence length only 256.
+
 ### Measured speed (CUDA, batch 32x128; ratio vs using all experts)
 
 | Experts | k | inference | train |
