@@ -140,6 +140,41 @@ Huấn luyện một lần với k ngẫu nhiên đều trên {1..4}, sau đó �
 
 Quá trình huấn luyện với k ngẫu nhiên đạt trung bình 2.5 expert trên mỗi token, nhưng nếu đánh giá (eval) bằng k ngẫu nhiên thì kết quả đạt 4.082 (ppl 59.2); việc ép một mức k cố định khi suy luận mang lại hiệu quả tốt hơn là để k ngẫu nhiên.
 
+## Cửa sổ ngữ cảnh co giãn (sink + sliding window) và đồng thời co giãn k x W
+
+**Cấu hình thực nghiệm:** byte-level LM, 3.9M tham số (d=128, 4 layers, 8 experts), chiều dài chuỗi 256, sử dụng 8 MB dữ liệu từ tiếng Việt Wikipedia (`wikimedia/wikipedia 20231101.vi`), chạy 3000 steps, cấu hình bộ nhớ đệm cố định `sink = 4`, và `top_p = 0.9`. Một token ở vị trí $i$ sẽ chú ý (attend) đến các vị trí $j$ thỏa mãn `j < sink` hoặc `i - j < W`. Khi suy luận, KV cache chỉ giữ lại tối đa `sink + W` token; cơ chế này đã được kiểm tra chéo qua lệnh `--selftest` để đảm bảo kết quả đầu ra khớp tuyệt đối so với việc chạy lại toàn bộ chuỗi bằng cùng một mặt nạ (mask).
+
+### Chỉ co giãn cửa sổ (cố định k = 2): val loss khi ép mức W lúc suy luận
+
+| Cách huấn luyện | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
+|---|---|---|---|---|---|---|
+| Ngữ cảnh đầy đủ (Full context) | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
+| W ngẫu nhiên theo từng mẫu | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
+
+Hai lượt chạy thử nghiệm (cùng seed, có hiện tượng bất định cấu trúc của GPU) cho ra kết quả đồng nhất: Huấn luyện với W ngẫu nhiên giúp cải thiện rõ rệt ở các giá trị W nhỏ (giảm khoảng 0.02 nat ở W=8, và 0.01 nat ở W=16) và hầu như không làm suy giảm chất lượng khi chạy ở ngữ cảnh đầy đủ (chênh lệch nằm trong khoảng sai số +-0.0015).
+
+### Đồng thời co giãn cả k và W (một mô hình duy nhất được train với k thuộc {1,2,4,8} và W thuộc {8..256})
+
+val loss (Hàng đại diện cho $k$, cột đại diện cho $W$; Số lượng KV token được giữ lại tương ứng: 12 / 20 / 36 / 68 / 132 / 256)
+
+| k | W=8 | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|
+| 1 | 1.2165 | 1.2095 | 1.2043 | 1.2023 | 1.2017 | 1.2018 |
+| 2 | 1.2060 | 1.1992 | 1.1939 | 1.1922 | 1.1914 | 1.1915 |
+| 4 | 1.2054 | 1.1988 | 1.1935 | 1.1917 | 1.1909 | 1.1910 |
+| 8 | 1.2056 | 1.1989 | 1.1936 | 1.1918 | 1.1910 | 1.1911 |
+
+*Lưu ý: Lượt chạy thứ hai của cùng ma trận này cho kết quả val loss bị dịch chuyển tăng lên khoảng 0.0025 ở tất cả các ô, vì vậy khuyến nghị so sánh đối chiếu giữa các ô trong cùng một lượt chạy.*
+
+**Nhận xét & Quan sát:**
+- Việc giảm kích thước bộ nhớ đệm từ 256 xuống còn 68 token (W=64) chỉ làm tốn thêm khoảng 0.0007 nat; xuống 36 token (W=32) tốn khoảng 0.0024 nat; và xuống 20 token (W=16) tốn khoảng 0.008 nat.
+- Mức cấu hình k=1 làm suy giảm khoảng 0.010 nat so với k=2. Trong khi đó, các mức k=2, k=4 và k=8 cho kết quả cực kỳ sát nhau (chênh lệch dưới 0.0005 nat). Nguyên nhân có thể do cài đặt `top_p = 0.9` đã vô tình khiến router tự kích hoạt ít expert hơn mức trần, khiến cho giới hạn k>=4 không được kích hoạt triệt để (xem thêm phần "Câu hỏi mở").
+- Dành tài nguyên tính toán (budget) cho expert ($k$) mang lại hiệu quả cao hơn cho cửa sổ ngữ cảnh ($W$): Cấu hình (k=2, W=16) cho kết quả tốt hơn hẳn (k=1, W=64) dù sử dụng dung lượng cache nhỏ hơn nhiều.
+- Tốc độ giải mã (Decode tok/s) đi ngang (dao động khoảng 75-83) do mô hình quá nhỏ này bị nghẽn cổ chai bởi các chi phí xử lý overhead của Python, vì thế phần này không đưa ra kết luận về cải thiện tốc độ phần cứng.
+
+**Câu hỏi mở:** Cần chạy lại thử nghiệm với thiết lập `--top_p 0.999` để kiểm tra xem giới hạn trần của k thực sự có tác dụng ràng buộc ở mức k=4 và k=8 hay không.  
+**Hạn chế:** Thử nghiệm mới thực hiện trên 1 seed duy nhất cho mỗi cấu hình, độ dài chuỗi giới hạn ở mức 256.
+
 ### Tốc độ đo thực tế (CUDA, batch 32x128; tỷ lệ so với khi dùng tất cả expert)
 
 | Số Expert | k | suy luận (inference) | huấn luyện (train) |
