@@ -72,7 +72,7 @@ set_k_cap(model, 1)   # đúng 1 expert mỗi token (rẻ)
 set_k_cap(model, 2)   # đúng 2 expert mỗi token
 ```
 
-Khi đặt `rand_k`, `k_cap` ép đúng k (không đặt thì dùng lựa chọn ngẫu nhiên theo token). Dùng `lm_experiment.py --mode random --eval_cascade` để tái hiện số liệu.
+Khi đặt `rand_k`, `k_cap` ép đúng k (không đặt thì dùng lựa chọn ngẫu nhiên theo token). Dùng `lm_experiment.py --mode random --eval_cascade` để tái hiện số liệu. Muốn khoảng rộng hơn: `--uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4` train với k lấy đồng đều từ 1 đến 4 và báo val loss ở từng k ép cố định.
 
 ## Thí nghiệm trên tiếng Việt thật
 
@@ -124,6 +124,10 @@ Rút ra:
 - Phân bổ k cố định theo layer không thắng k đồng đều.
 
 Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ngắn, chưa đo tốc độ thật (vòng lặp theo expert chưa được tối ưu). Kết quả ở model lớn có thể khác.
+
+## Đo tốc độ
+
+`python bench.py` đo tốc độ thật (token mỗi giây, suy luận và train) khi mọi token bị ép dùng đúng k expert, để kiểm tra dùng ít expert hơn có nhanh hơn thật trên phần cứng của bạn không. Ví dụ: `python bench.py --experts 32 --d_ff 128 --ks 1,4,8,16,32`.
 
 ## Chạy test và demo
 

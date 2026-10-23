@@ -11,7 +11,7 @@ import sys
 
 def label(a):
     name = a["mode"] + ("+ste" if a.get("ste") else "") + ("+diff" if a.get("diff_head") else "") + ("+gain" if a.get("diff_target") == "gain" else "")
-    budget = (f"L{a['layer_k']}" if a.get("layer_k") else f"k={a['k']}") if a["mode"] == "fixed" else (f"rnd{a['k_lo']}/{a['k_hi']}@{a['frac_hi']}" if a["mode"] == "random" else f"tk={a['target_k']}")
+    budget = (f"L{a['layer_k']}" if a.get("layer_k") else f"k={a['k']}") if a["mode"] == "fixed" else ((f"rnd{a['k_lo']}-{a['k_hi']}uni" if a.get("uniform_k") else f"rnd{a['k_lo']}/{a['k_hi']}@{a['frac_hi']}") if a["mode"] == "random" else f"tk={a['target_k']}")
     return name, budget
 
 

@@ -134,6 +134,16 @@ def test_random_k_forced_by_cap():
     assert ((w2 > 0).sum(-1) == 2).all() and ((w1 > 0).sum(-1) == 1).all()
 
 
+def test_uniform_random_k():
+    r = AdaptiveRouter(16, 8, min_k=1, max_k=4, top_p=1.0, rand_k=(1, 4, None))
+    w, _ = r(torch.randn(4000, 16))
+    nz = (w > 0).sum(-1)
+    assert nz.min() >= 1 and nz.max() <= 4
+    assert 2.3 < nz.float().mean().item() < 2.7
+    w3, _ = r(torch.randn(50, 16), k_cap=3)
+    assert ((w3 > 0).sum(-1) == 3).all()
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))

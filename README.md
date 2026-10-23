@@ -74,7 +74,7 @@ set_k_cap(model, 1)   # exactly 1 expert per token (cheap)
 set_k_cap(model, 2)   # exactly 2 experts per token
 ```
 
-With `rand_k` set, `k_cap` forces an exact k (without it, the per-token random choice is used). Use `lm_experiment.py --mode random --eval_cascade` to reproduce the numbers.
+With `rand_k` set, `k_cap` forces an exact k (without it, the per-token random choice is used). Use `lm_experiment.py --mode random --eval_cascade` to reproduce the numbers. For a wider range, `--uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4` trains with k drawn uniformly from 1 to 4 and reports the validation loss at each forced k.
 
 ## Language-model experiment (Vietnamese text)
 
@@ -126,6 +126,10 @@ Takeaways:
 - `compute_coef=0.5` acts as a helpful regularizer when data is small and the model overfits (1.9M tokens), but hurts once there is enough data.
 
 Limitations: most configurations have a single seed, the model is small, training is short, and wall-clock speed was not measured (the per-expert loop is not optimized). Results at larger scale may differ.
+
+## Benchmark
+
+`python bench.py` measures real throughput (tokens per second, inference and training) when every token is forced to use exactly k experts, so you can check whether using fewer experts is actually faster on your hardware. Example: `python bench.py --experts 32 --d_ff 128 --ks 1,4,8,16,32`.
 
 ## Tests and demo
 

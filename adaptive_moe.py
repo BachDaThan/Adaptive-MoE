@@ -51,7 +51,7 @@ class AdaptiveRouter(nn.Module):
         super().__init__()
         self.renorm = renorm   # False: giữ nguyên xác suất gate (kiểu Switch), top-1 vẫn có gradient cho router
         self.ste = ste
-        self.rand_k = rand_k   # (lo, hi, frac_hi): đối chứng, k ngẫu nhiên theo token
+        self.rand_k = rand_k   # (lo, hi, frac_hi) hoặc (lo, hi, None)=đồng đều: k ngẫu nhiên theo token
         self.difficulty = difficulty
         self.p_min = p_min
         self.p_max = p_max
@@ -84,6 +84,8 @@ class AdaptiveRouter(nn.Module):
             lo, hi, frac = self.rand_k
             if k_cap:   # đánh giá: ép mọi token dùng đúng k_cap expert
                 cap = torch.full((x.shape[0], 1), int(k_cap), device=x.device, dtype=torch.long)
+            elif frac is None:   # đồng đều trên {lo, ..., hi}
+                cap = torch.randint(lo, hi + 1, (x.shape[0], 1), device=x.device)
             else:
                 cap = lo + (torch.rand(x.shape[0], 1, device=x.device) < frac).long() * (hi - lo)
 

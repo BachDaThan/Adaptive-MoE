@@ -190,6 +190,27 @@ def cascade_eval(model, val_ids, seq, bs, device, vocab, k_lo, k_hi, qs):
     return {"loss_k_lo": float(lo.mean()), "loss_k_hi": float(hi.mean()), "rows": rows}
 
 
+@torch.no_grad()
+def eval_forced_k(model, val_ids, seq, bs, device, vocab, ks):
+    """Val loss khi ép mọi token dùng đúng k expert (model train với k ngẫu nhiên)."""
+    model.eval()
+    n = (len(val_ids) - 1) // seq
+    X = val_ids[: n * seq].reshape(n, seq)
+    Y = val_ids[1: n * seq + 1].reshape(n, seq)
+    out = {}
+    for k in ks:
+        set_k_cap(model, k)
+        tot = 0.0
+        for i in range(0, n, bs):
+            x = torch.from_numpy(X[i:i + bs]).to(device)
+            y = torch.from_numpy(Y[i:i + bs]).to(device)
+            lg = model(x).float()
+            tot += F.cross_entropy(lg.reshape(-1, vocab), y.reshape(-1), reduction="sum").item()
+        out[k] = tot / (n * seq)
+    set_k_cap(model, None)
+    return out
+
+
 def print_cascade(c, k_lo, k_hi):
     print(f"\n===== Nâng tầng k={k_lo} -> k={k_hi} (loss k={k_lo}: {c['loss_k_lo']:.4f}, k={k_hi}: {c['loss_k_hi']:.4f}) =====")
     print(f"{'q nâng':>8}{'avg_k':>7}{'entropy':>10}{'ngẫu nhiên':>12}{'oracle':>9}{'entropy - ngẫu nhiên':>22}")
@@ -222,6 +243,8 @@ def main():
     ap.add_argument("--target_k", type=float, default=3.0)
     ap.add_argument("--k_lo", type=int, default=1, help="--mode random: k thấp")
     ap.add_argument("--k_hi", type=int, default=2, help="--mode random: k cao")
+    ap.add_argument("--uniform_k", action="store_true", help="--mode random: k đồng đều trên {k_lo..k_hi} (bỏ qua frac_hi)")
+    ap.add_argument("--eval_ks", default=None, help="sau khi train, đo val loss khi ép mọi token dùng đúng k, vd 1,2,3,4")
     ap.add_argument("--frac_hi", type=float, default=0.46, help="--mode random: tỉ lệ token nhận k cao (avg_k = k_lo + frac*(k_hi-k_lo))")
     ap.add_argument("--top_p", type=float, default=0.7)
     ap.add_argument("--compute_coef", type=float, default=0.5)
@@ -286,7 +309,7 @@ def main():
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=1, max_k=args.k_hi,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared,
                       d_ff_shared=args.d_ff_shared, noise_std=0.1, renorm=not args.no_renorm,
-                      rand_k=(args.k_lo, args.k_hi, args.frac_hi))
+                      rand_k=(args.k_lo, args.k_hi, None if args.uniform_k else args.frac_hi))
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, d_ff_shared=args.d_ff_shared,
@@ -349,7 +372,8 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" k={args.k_lo}/{args.k_hi} frac_hi={args.frac_hi}" if args.mode == "random" else f" target_k={args.target_k}")
+    rnd = "uniform" if args.uniform_k else f"frac_hi={args.frac_hi}"
+    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" k={args.k_lo}/{args.k_hi} {rnd}" if args.mode == "random" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     if args.eval_cascade:
@@ -358,6 +382,13 @@ def main():
                          [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
         print_cascade(c, k_lo, k_hi)
         res["cascade"] = c
+    if args.eval_ks:
+        ks_list = [int(v) for v in args.eval_ks.split(",")]
+        fk = eval_forced_k(model, val_ids, args.seq, args.bs, device, V, ks_list)
+        print("\n===== Val loss khi ép k cố định lúc suy luận =====")
+        for k, v in fk.items():
+            print(f"k={k}: val_loss={v:.4f}  ppl={math.exp(v):.1f}")
+        res["forced_k"] = {str(k): v for k, v in fk.items()}
     out = args.out or f"results_{args.mode}.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"args": vars(args), "result": res}, f, ensure_ascii=False, indent=2)
