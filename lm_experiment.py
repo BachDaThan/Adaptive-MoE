@@ -148,6 +148,56 @@ def evaluate(model, val_ids, val_cat, seq, bs, device, vocab):
     return res
 
 
+@torch.no_grad()
+def cascade_eval(model, val_ids, seq, bs, device, vocab, k_lo, k_hi, qs):
+    """
+    Mô phỏng nâng tầng bằng teacher forcing: chạy toàn bộ ở k_lo và ở k_hi, rồi với phần q token
+    bị nâng thì lấy loss của k_hi, còn lại lấy loss của k_lo. Ba cách chọn token để nâng:
+      entropy: token có entropy cao nhất ở lượt k_lo (bộ điều khiển dùng độ bất định của chính model)
+      random : ngẫu nhiên (kỳ vọng = nội suy tuyến tính giữa k_lo và k_hi)
+      oracle : token có mức loss giảm nhiều nhất khi thêm expert (trần lý thuyết, không dùng được thật)
+    Lưu ý: lượt k_hi thấy ngữ cảnh k_hi ở mọi token nên đây là ước lượng lạc quan so với sinh thật.
+    """
+    model.eval()
+    n = (len(val_ids) - 1) // seq
+    X = val_ids[: n * seq].reshape(n, seq)
+    Y = val_ids[1: n * seq + 1].reshape(n, seq)
+    lo, hi, ent = [], [], []
+    for i in range(0, n, bs):
+        x = torch.from_numpy(X[i:i + bs]).to(device)
+        y = torch.from_numpy(Y[i:i + bs]).to(device)
+        set_k_cap(model, k_lo)
+        lg = model(x).float()
+        lo.append(F.cross_entropy(lg.reshape(-1, vocab), y.reshape(-1), reduction="none").cpu())
+        p = F.softmax(lg, dim=-1)
+        ent.append((-(p * torch.log(p.clamp_min(1e-12))).sum(-1)).reshape(-1).cpu())
+        set_k_cap(model, k_hi)
+        hi.append(F.cross_entropy(model(x).float().reshape(-1, vocab), y.reshape(-1), reduction="none").cpu())
+    set_k_cap(model, None)
+    lo, hi, ent = (torch.cat(a).numpy() for a in (lo, hi, ent))
+    N = len(lo)
+    gain = lo - hi
+    order_ent = np.argsort(-ent)
+    order_or = np.argsort(-gain)
+    rows = []
+    for q in qs:
+        m = int(q * N)
+        l_ent = (lo.sum() - lo[order_ent[:m]].sum() + hi[order_ent[:m]].sum()) / N
+        l_or = (lo.sum() - lo[order_or[:m]].sum() + hi[order_or[:m]].sum()) / N
+        l_rand = lo.mean() + q * (hi.mean() - lo.mean())
+        rows.append({"q": q, "avg_k": k_lo + q * (k_hi - k_lo), "entropy": float(l_ent),
+                     "random": float(l_rand), "oracle": float(l_or)})
+    return {"loss_k_lo": float(lo.mean()), "loss_k_hi": float(hi.mean()), "rows": rows}
+
+
+def print_cascade(c, k_lo, k_hi):
+    print(f"\n===== Nâng tầng k={k_lo} -> k={k_hi} (loss k={k_lo}: {c['loss_k_lo']:.4f}, k={k_hi}: {c['loss_k_hi']:.4f}) =====")
+    print(f"{'q nâng':>8}{'avg_k':>7}{'entropy':>10}{'ngẫu nhiên':>12}{'oracle':>9}{'entropy - ngẫu nhiên':>22}")
+    for r in c["rows"]:
+        print(f"{r['q']:>8.2f}{r['avg_k']:>7.2f}{r['entropy']:>10.4f}{r['random']:>12.4f}{r['oracle']:>9.4f}"
+              f"{r['entropy'] - r['random']:>+22.4f}")
+
+
 def print_report(res, title):
     print(f"\n===== {title} =====")
     print(f"val_loss={res['val_loss']:.4f}  ppl={res['val_ppl']:.1f}  avg_k={res['avg_k']:.2f}")
@@ -177,6 +227,8 @@ def main():
     ap.add_argument("--compute_coef", type=float, default=0.5)
     ap.add_argument("--experts", type=int, default=8)
     ap.add_argument("--n_shared", type=int, default=1)
+    ap.add_argument("--eval_cascade", action="store_true",
+                    help="sau khi train: so sánh nâng k theo độ bất định với chọn ngẫu nhiên và với oracle (dùng với --mode random)")
     ap.add_argument("--no_renorm", action="store_true",
                     help="không chuẩn hóa lại trọng số expert (kiểu Switch): top-1 vẫn có gradient cho router")
     ap.add_argument("--d_ff_shared", type=int, default=None, help="độ rộng expert dùng chung (mặc định = d_ff)")
@@ -300,6 +352,12 @@ def main():
     title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" k={args.k_lo}/{args.k_hi} frac_hi={args.frac_hi}" if args.mode == "random" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
+    if args.eval_cascade:
+        k_lo, k_hi = (args.k_lo, args.k_hi)
+        c = cascade_eval(model, val_ids, args.seq, args.bs, device, V, k_lo, k_hi,
+                         [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        print_cascade(c, k_lo, k_hi)
+        res["cascade"] = c
     out = args.out or f"results_{args.mode}.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"args": vars(args), "result": res}, f, ensure_ascii=False, indent=2)

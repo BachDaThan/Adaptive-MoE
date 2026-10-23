@@ -127,6 +127,13 @@ def test_no_renorm_top1_gives_router_gradient():
     assert r.gate.weight.grad.abs().sum() > 0
 
 
+def test_random_k_forced_by_cap():
+    r = AdaptiveRouter(16, 8, min_k=1, max_k=2, top_p=1.0, rand_k=(1, 2, 0.5))
+    w2, _ = r(torch.randn(100, 16), k_cap=2)
+    w1, _ = r(torch.randn(100, 16), k_cap=1)
+    assert ((w2 > 0).sum(-1) == 2).all() and ((w1 > 0).sum(-1) == 1).all()
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))

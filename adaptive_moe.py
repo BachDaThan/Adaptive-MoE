@@ -82,7 +82,10 @@ class AdaptiveRouter(nn.Module):
         if self.rand_k is not None:
             # đối chứng: mỗi token nhận k=hi với xác suất frac_hi, ngược lại k=lo (không dựa vào độ khó)
             lo, hi, frac = self.rand_k
-            cap = lo + (torch.rand(x.shape[0], 1, device=x.device) < frac).long() * (hi - lo)
+            if k_cap:   # đánh giá: ép mọi token dùng đúng k_cap expert
+                cap = torch.full((x.shape[0], 1), int(k_cap), device=x.device, dtype=torch.long)
+            else:
+                cap = lo + (torch.rand(x.shape[0], 1, device=x.device) < frac).long() * (hi - lo)
 
         d_logit = None
         if self.difficulty:
