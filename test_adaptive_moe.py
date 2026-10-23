@@ -112,6 +112,14 @@ def test_bf16_autocast_cpu():
     assert torch.isfinite(loss)
 
 
+def test_random_k_control():
+    r = AdaptiveRouter(16, 8, min_k=1, max_k=2, top_p=1.0, rand_k=(1, 2, 0.5))
+    w, _ = r(torch.randn(2000, 16))
+    nz = (w > 0).sum(-1)
+    assert nz.min() >= 1 and nz.max() <= 2
+    assert 1.4 < nz.float().mean().item() < 1.6
+
+
 def test_stats():
     m = TinyLM()
     m(torch.randint(0, 100, (2, 5)))

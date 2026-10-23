@@ -167,9 +167,12 @@ def print_report(res, title):
 # ----------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["adaptive", "fixed"], default="adaptive")
+    ap.add_argument("--mode", choices=["adaptive", "fixed", "random"], default="adaptive")
     ap.add_argument("--k", type=int, default=3, help="số expert khi --mode fixed")
     ap.add_argument("--target_k", type=float, default=3.0)
+    ap.add_argument("--k_lo", type=int, default=1, help="--mode random: k thấp")
+    ap.add_argument("--k_hi", type=int, default=2, help="--mode random: k cao")
+    ap.add_argument("--frac_hi", type=float, default=0.46, help="--mode random: tỉ lệ token nhận k cao (avg_k = k_lo + frac*(k_hi-k_lo))")
     ap.add_argument("--top_p", type=float, default=0.7)
     ap.add_argument("--compute_coef", type=float, default=0.5)
     ap.add_argument("--experts", type=int, default=8)
@@ -225,6 +228,11 @@ def main():
                       target_k=args.target_k, compute_coef=args.compute_coef,
                       n_shared=args.n_shared, d_ff_shared=args.d_ff_shared, noise_std=0.1, ste=args.ste,
                       difficulty=args.diff_head, p_min=args.p_min, p_max=args.p_max)
+    elif args.mode == "random":   # đối chứng: k ngẫu nhiên theo token, cùng ngân sách trung bình
+        moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=1, max_k=args.k_hi,
+                      top_p=1.0, compute_coef=0.0, n_shared=args.n_shared,
+                      d_ff_shared=args.d_ff_shared, noise_std=0.1,
+                      rand_k=(args.k_lo, args.k_hi, args.frac_hi))
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
                       top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, d_ff_shared=args.d_ff_shared,
@@ -287,7 +295,7 @@ def main():
             print(f"step {step:5d}  loss={task.item():.3f}  avg_k={sum(ks) / len(ks):.2f}  "
                   f"{time.time() - t0:.0f}s")
 
-    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" target_k={args.target_k}")
+    title = f"{args.mode}{'+ste' if args.ste else ''}{'+diff' if args.diff_head else ''}{'+gain' if args.diff_head and args.diff_target == 'gain' else ''}" + (f" k={args.layer_k or args.k}" if args.mode == "fixed" else f" k={args.k_lo}/{args.k_hi} frac_hi={args.frac_hi}" if args.mode == "random" else f" target_k={args.target_k}")
     res = evaluate(model, val_ids, val_cat, args.seq, args.bs, device, V)
     print_report(res, title)
     out = args.out or f"results_{args.mode}.json"

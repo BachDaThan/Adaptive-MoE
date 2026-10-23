@@ -8,7 +8,7 @@ A small (experimental) PyTorch module for **adaptive** Mixture-of-Experts: the n
 
 Anyone training an MoE model can swap their MoE layer for `AdaptiveMoE`.
 
-> **Status: experimental.** The mechanism works (the router learns token difficulty and uses more experts on harder tokens), but in our experiments it did **not** beat a fixed top-k baseline. See [Experimental results](#experimental-results).
+> **Status: experimental.** The mechanism works (the router learns token difficulty and uses more experts on harder tokens), but results are mixed: adaptive routing was slightly worse than fixed top-k at equal budget in most settings, and matched fixed k=2 with fewer experts in one low-budget run (single seed, control pending). See [Experimental results](#experimental-results).
 
 ## Install
 
@@ -86,6 +86,7 @@ Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenizat
 | adaptive + `diff_head`, `compute_coef=0.5` | 1.90 | 4.150 |
 | adaptive + `diff_head`, `diff_target=gain`, `compute_coef=0.5` | 1.88 | 4.148 |
 | adaptive + `diff_head`, `compute_coef=0` (3 seeds) | 2.10 | 4.085 (4.081–4.088) |
+| adaptive + `diff_head`, `compute_coef=0`, low budget (1 seed) | 1.46 | 4.083 |
 | 32 experts (routed d_ff=128, shared d_ff=512), fixed top-8 | 8.00 | 4.113 |
 | 32 experts (routed d_ff=128, shared d_ff=512), adaptive + `diff_head`, `compute_coef=0` | 7.08 | 4.126 |
 | 32 experts (same), fixed top-7 | 7.00 | 4.119 |
@@ -93,11 +94,11 @@ Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenizat
 
 ![Validation loss vs average experts: adaptive routing vs fixed top-k](docs/loss_vs_k.png)
 
-Points below the fixed top-k line are better at the same budget; every adaptive point sits on or above it. Note the right panel spans only 0.015 nats.
+Points below the fixed top-k line are better at the same budget. At 8 experts the adaptive point at k≈1.5 (`compute_coef=0`, one seed) lies far below the straight line between fixed k=1 and k=2 and close to fixed k=2 itself; that line is only a rough guide (see the caveats below). The right panel spans only 0.015 nats.
 
 Takeaways:
 - The router learns token difficulty (correlation with the true loss around 0.4 to 0.5) and the number of experts rises with difficulty (correlation between k and loss from +0.26 to +0.37).
-- **No evidence that adaptive routing is more efficient than fixed top-k at this scale.** The best configuration (`compute_coef=0`) is about 0.007 nats worse than fixed k=2 (perplexity 59.4 vs 59.0), consistently across all 3 seeds, while using about 5% more experts.
+- **Mixed evidence on efficiency.** At about 2 experts per token (8 experts) and at 32 experts, adaptive routing was slightly worse than fixed top-k at equal budget (about 0.007 nats). In the low-budget regime (about 1.5 experts per token, 8 experts) with `compute_coef=0`, one run matched fixed k=2 within 0.005 nats (4.083 vs 4.078) while using 1.46 instead of 2 routed experts (about 18% fewer expert evaluations if the always-on shared expert is counted). Caveats: one seed; the fixed k=1 baseline is handicapped because a single renormalized expert gives the router no task gradient, so the straight line between k=1 and k=2 overstates fixed performance at fractional budgets; a random-k control (`--mode random`) is needed to show the learned allocation, not just the average budget, is what helps.
 - Finer-grained experts (32 instead of 8, similar total parameters): a first run appeared to favor adaptive routing, but that was an artifact of the shared expert shrinking along with `d_ff`. With the shared expert kept wide (`--d_ff_shared 512`), fixed top-8 (4.113) beats adaptive (4.126), which uses about 11% fewer experts and spreads k widely (4.8 on the easiest quartile to 8.3 on the hardest). The fixed top-7 (4.119) and top-6 (4.126) controls settle it: adaptive at k=7.08 matches fixed top-6 while using more experts, so it loses at equal budget by about 0.007 nats, the same gap seen with 8 experts. The fixed curve is also very flat (about 0.0065 nats per expert between k=6 and k=8), which leaves little headroom for any allocation scheme at this scale. This 32-expert setup is also worse than the 8-expert baseline (4.078) at this short training length.
 - A stable observation across seeds: when the router is free, deeper layers ask for more experts (layer 1 about 1.3 to 1.6, layer 4 about 2.7 to 2.8). However, hard-coding k per layer (1,2,2,3) was worse than uniform k, so this is not a ready-made recipe.
 - "Hard token" does not mean "token that benefits from more experts": a loss-based label sends more experts to rare words and function words, while content words gain the most from an extra expert. A label based on the loss reduction from adding experts (`gain`) was too noisy for the difficulty head to learn.

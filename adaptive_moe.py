@@ -47,9 +47,10 @@ class AdaptiveRouter(nn.Module):
 
     def __init__(self, d_model, n_experts, min_k=1, max_k=None, top_p=0.7,
                  min_strength=0.3, tau=0.05, target_k=None, noise_std=0.0, ste=False,
-                 difficulty=False, p_min=0.4, p_max=0.95):
+                 difficulty=False, p_min=0.4, p_max=0.95, rand_k=None):
         super().__init__()
         self.ste = ste
+        self.rand_k = rand_k   # (lo, hi, frac_hi): đối chứng, k ngẫu nhiên theo token
         self.difficulty = difficulty
         self.p_min = p_min
         self.p_max = p_max
@@ -77,6 +78,10 @@ class AdaptiveRouter(nn.Module):
 
         cap = min(self.max_k, k_cap) if k_cap else self.max_k
         cap = max(cap, self.min_k)
+        if self.rand_k is not None:
+            # đối chứng: mỗi token nhận k=hi với xác suất frac_hi, ngược lại k=lo (không dựa vào độ khó)
+            lo, hi, frac = self.rand_k
+            cap = lo + (torch.rand(x.shape[0], 1, device=x.device) < frac).long() * (hi - lo)
 
         d_logit = None
         if self.difficulty:
@@ -147,13 +152,14 @@ class AdaptiveMoE(nn.Module):
                  min_strength=0.3, target_k=None, noise_std=0.0, ste=False,
                  difficulty=False, p_min=0.4, p_max=0.95, n_shared=0,
                  balance_coef=0.01, compute_coef=0.01, z_coef=1e-3,
-                 max_resident=None, d_ff_shared=None):
+                 max_resident=None, d_ff_shared=None, rand_k=None):
         super().__init__()
         self.experts = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_experts))
         self.shared = nn.ModuleList(Expert(d_model, d_ff_shared or d_ff) for _ in range(n_shared))
         self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p,
                                      min_strength, target_k=target_k, noise_std=noise_std, ste=ste,
-                                     difficulty=difficulty, p_min=p_min, p_max=p_max)
+                                     difficulty=difficulty, p_min=p_min, p_max=p_max,
+                                     rand_k=rand_k)
         self.balance_coef = balance_coef
         self.compute_coef = compute_coef
         self.z_coef = z_coef
