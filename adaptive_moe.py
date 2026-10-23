@@ -138,6 +138,8 @@ class AdaptiveMoE(nn.Module):
     Cũng lưu `last_aux` và `last_info` để dùng với gather_aux_loss / moe_stats.
 
     n_shared: số expert luôn bật (kiểu DeepSeek). Giúp chất lượng ổn khi router chọn k=1.
+    d_ff_shared: độ rộng FFN của expert dùng chung (mặc định = d_ff). Nên đặt riêng khi d_ff của
+    expert định tuyến rất nhỏ (nhiều expert mịn), để expert dùng chung không bị teo theo.
     max_resident: (chỉ khi eval) số expert tối đa giữ trên device, còn lại nằm CPU, nạp theo LRU.
     """
 
@@ -145,10 +147,10 @@ class AdaptiveMoE(nn.Module):
                  min_strength=0.3, target_k=None, noise_std=0.0, ste=False,
                  difficulty=False, p_min=0.4, p_max=0.95, n_shared=0,
                  balance_coef=0.01, compute_coef=0.01, z_coef=1e-3,
-                 max_resident=None):
+                 max_resident=None, d_ff_shared=None):
         super().__init__()
         self.experts = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_experts))
-        self.shared = nn.ModuleList(Expert(d_model, d_ff) for _ in range(n_shared))
+        self.shared = nn.ModuleList(Expert(d_model, d_ff_shared or d_ff) for _ in range(n_shared))
         self.router = AdaptiveRouter(d_model, n_experts, min_k, max_k, top_p,
                                      min_strength, target_k=target_k, noise_std=noise_std, ste=ste,
                                      difficulty=difficulty, p_min=p_min, p_max=p_max)

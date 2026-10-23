@@ -86,10 +86,13 @@ Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenizat
 | adaptive + `diff_head`, `compute_coef=0.5` | 1.90 | 4.150 |
 | adaptive + `diff_head`, `diff_target=gain`, `compute_coef=0.5` | 1.88 | 4.148 |
 | adaptive + `diff_head`, `compute_coef=0` (3 seeds) | 2.10 | 4.085 (4.081–4.088) |
+| fine-grained: 32 experts (d_ff=128), fixed top-8 | 8.00 | 4.141 |
+| fine-grained: 32 experts (d_ff=128), adaptive + `diff_head`, `compute_coef=0` | 7.15 | 4.123 |
 
 Takeaways:
 - The router learns token difficulty (correlation with the true loss around 0.4 to 0.5) and the number of experts rises with difficulty (correlation between k and loss from +0.26 to +0.37).
 - **No evidence that adaptive routing is more efficient than fixed top-k at this scale.** The best configuration (`compute_coef=0`) is about 0.007 nats worse than fixed k=2 (perplexity 59.4 vs 59.0), consistently across all 3 seeds, while using about 5% more experts.
+- With finer-grained experts (32 instead of 8, same total parameters) adaptive routing beat fixed top-8 in the single run we have (4.123 vs 4.141) while using about 11% fewer experts, and the router spread was much wider (k from 4.9 on the easiest quartile to 8.4 on the hardest). Caveats: one seed, and this 32-expert setup is worse in absolute terms than the 8-expert baseline (4.078), partly because the shared expert shrank with `d_ff`; use `--d_ff_shared` to keep it wide. So this is a promising trend, not yet an absolute win.
 - A stable observation across seeds: when the router is free, deeper layers ask for more experts (layer 1 about 1.3 to 1.6, layer 4 about 2.7 to 2.8). However, hard-coding k per layer (1,2,2,3) was worse than uniform k, so this is not a ready-made recipe.
 - "Hard token" does not mean "token that benefits from more experts": a loss-based label sends more experts to rare words and function words, while content words gain the most from an extra expert. A label based on the loss reduction from adding experts (`gain`) was too noisy for the difficulty head to learn.
 - `compute_coef=0.5` acts as a helpful regularizer when data is small and the model overfits (1.9M tokens), but hurts once there is enough data.

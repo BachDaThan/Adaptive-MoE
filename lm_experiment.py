@@ -174,6 +174,7 @@ def main():
     ap.add_argument("--compute_coef", type=float, default=0.5)
     ap.add_argument("--experts", type=int, default=8)
     ap.add_argument("--n_shared", type=int, default=1)
+    ap.add_argument("--d_ff_shared", type=int, default=None, help="độ rộng expert dùng chung (mặc định = d_ff)")
     ap.add_argument("--diff_head", action="store_true",
                     help="router có đầu dự đoán độ khó (huấn luyện bằng loss thật của token) và đặt top_p theo từng token")
     ap.add_argument("--diff_target", choices=["loss", "gain"], default="loss",
@@ -222,11 +223,12 @@ def main():
     if args.mode == "adaptive":
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, top_p=args.top_p,
                       target_k=args.target_k, compute_coef=args.compute_coef,
-                      n_shared=args.n_shared, noise_std=0.1, ste=args.ste,
+                      n_shared=args.n_shared, d_ff_shared=args.d_ff_shared, noise_std=0.1, ste=args.ste,
                       difficulty=args.diff_head, p_min=args.p_min, p_max=args.p_max)
     else:  # top-k cố định: min_k = max_k = k, top_p = 1
         moe_kw = dict(d_ff=args.d_ff, n_experts=args.experts, min_k=args.k, max_k=args.k,
-                      top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, noise_std=0.1)
+                      top_p=1.0, compute_coef=0.0, n_shared=args.n_shared, d_ff_shared=args.d_ff_shared,
+                      noise_std=0.1)
     if args.layer_k:
         ks = [int(v) for v in args.layer_k.split(",")]
         assert len(ks) == args.layers, "--layer_k phải có đúng một số cho mỗi layer"
