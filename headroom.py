@@ -20,13 +20,14 @@ from adaptive_moe import set_k_cap
 from elastic_ctx import CtxLM, set_window, load_bytes, batch
 
 
-def train_model(train, args, device):
+def train_model(train, args, device, vocab):
     torch.manual_seed(0)
     g = torch.Generator().manual_seed(1)
-    model = CtxLM(d=args.d, n_layers=args.layers, n_experts=8, d_ff=2 * args.d,
-                  min_k=1, max_k=8, top_p=args.top_p, n_shared=1, compute_coef=0.0).to(device)
+    model = CtxLM(vocab=vocab, d=args.d, n_layers=args.layers, n_experts=args.experts, d_ff=2 * args.d,
+                  min_k=1, max_k=max(8, 2 * args.k_hi), top_p=args.top_p, n_shared=1,
+                  compute_coef=0.0).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
-    ks = (1, 2, 4)
+    ks = tuple(sorted({1, 2, args.k_hi, 2 * args.k_hi}))
     for step in range(args.steps + 1):
         model.train()
         set_window(model, None)
@@ -58,11 +59,11 @@ def collect(model, data, n_batches, args, device, seed):
     flat = lambda t: t.float().reshape(-1, t.shape[-1])
     for _ in range(n_batches):
         x, y = batch(data, 16, args.L, device, g)
-        for k in (1, 2):
+        for k in (1, args.k_hi):
             set_k_cap(model, k)
             lg, _ = model(x, None)
             lg = lg.float().view(-1, lg.shape[-1])
-            acc["L%d" % k].append(F.cross_entropy(lg, y.view(-1), reduction="none"))
+            acc["L1" if k == 1 else "L2"].append(F.cross_entropy(lg, y.view(-1), reduction="none"))
             if k == 1:
                 p = lg.softmax(-1)
                 acc["E"].append(-(p * p.clamp_min(1e-9).log()).sum(-1))
@@ -92,16 +93,35 @@ def fit_predictor(X, y, device):
     return net
 
 
+def load_bpe(train, val, vocab):
+    """BPE byte-level, vocab cỡ lm_experiment (16000), huấn luyện trên chính văn bản đang dùng."""
+    from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+    text = bytes(torch.cat([train, val]).tolist()).decode("utf-8", errors="ignore")
+    lines = [l for l in text.split("\n") if l.strip()]
+    tok = Tokenizer(models.BPE())
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tr = trainers.BpeTrainer(vocab_size=vocab, special_tokens=["<unk>"],
+                             initial_alphabet=pre_tokenizers.ByteLevel.alphabet(), show_progress=False)
+    tok.train_from_iterator(lines, tr)
+    ids = torch.tensor([i for enc in tok.encode_batch(lines) for i in enc.ids], dtype=torch.long)
+    cut = int(len(ids) * 0.95)
+    print(f"BPE: {len(ids):,} token | vocab {tok.get_vocab_size()} | train {cut:,} | val {len(ids) - cut:,}")
+    return ids[:cut], ids[cut:], tok.get_vocab_size()
+
+
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train, val = load_bytes(args.text, args.hf, args.field, args.mb, args.config)
-    model = train_model(train, args, device)
+    vocab = 256
+    if args.bpe:
+        train, val, vocab = load_bpe(train, val, args.vocab)
+    model = train_model(train, args, device, vocab)
     tr = collect(model, train, 100, args, device, seed=5)
     va = collect(model, val, 40, args, device, seed=7)
     N = va["L1"].numel()
     gain = va["L1"] - va["L2"]
     ytr = tr["L1"] - tr["L2"]
-    print(f"\nval: {N:,} token | loss k=1: {va['L1'].mean():.4f} | loss k=2: {va['L2'].mean():.4f} "
+    print(f"\nval: {N:,} token | loss k=1: {va['L1'].mean():.4f} | loss k={args.k_hi}: {va['L2'].mean():.4f} "
           f"| gain trung bình/token: {gain.mean():.4f}")
     g = torch.Generator(device=device).manual_seed(0)
     scores = {"random": torch.rand(N, device=device, generator=g), "entropy": va["E"]}
@@ -114,7 +134,7 @@ def main(args):
         corrs[name] = torch.corrcoef(torch.stack([p, gain]))[0, 1].item()
     print("tương quan(dự đoán, gain thật): " + ", ".join(f"{k}={v:.3f}" for k, v in corrs.items()))
     total = (va["L1"].mean() - va["L2"].mean()).item()
-    print("\n% mức gain của k=2 đầy đủ lấy lại được khi nâng f token lên k=2")
+    print("\n% mức gain của k=k_hi đầy đủ lấy lại được khi nâng f token lên k=k_hi")
     print("(entropy/learn_fin cần chạy xong k=1 cả mạng rồi mới quyết định; learn_emb quyết định TRƯỚC khi tính; learn_l1 sau layer 1)")
     print("f".ljust(6) + "".join(n.rjust(13) for n in scores))
     for f in (0.1, 0.25, 0.5, 0.75):
@@ -142,4 +162,8 @@ if __name__ == "__main__":
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--top_p", type=float, default=0.999)
+    ap.add_argument("--bpe", action="store_true", help="dùng BPE thay vì byte (k ảnh hưởng nhiều hơn)")
+    ap.add_argument("--vocab", type=int, default=16000)
+    ap.add_argument("--experts", type=int, default=8)
+    ap.add_argument("--k_hi", type=int, default=2, help="so sánh k=1 với k=k_hi")
     main(ap.parse_args())
