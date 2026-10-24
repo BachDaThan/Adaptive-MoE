@@ -2,8 +2,9 @@
 regcheck.py - elastic có thật sự hơn fixed khi dữ liệu ít, hay chỉ vì fixed bị overfit?
 Mỗi cấu hình train 3000 bước, đo val mỗi --eval_every bước trên 2 nửa val độc lập:
   chọn bước tốt nhất trên nửa A (= dừng sớm), báo loss nửa B tại bước đó (bestB) và ở bước cuối (finalB).
-Cấu hình: fixed-k1, fixed-k1+drop, fixed-k2, fixed-k2+drop, fixed-k2+wd (weight decay 0.1), elastic (k ngẫu nhiên
-theo token trong {1,2}; báo ở k=1 và k=2).  Dropout 0.1 trên embedding và đầu ra MoE mỗi layer.
+Cấu hình: fixed-k1/k2/k4 (+drop = dropout 0.1, +drop2 = 0.2, +wd = weight decay 0.1), elastic (k ngẫu nhiên theo
+token trong {1,2}; báo ở k=1 và k=2), elastic+drop, và lịch k theo layer sched-* (cần --layers 4).
+Dropout đặt trên embedding và đầu ra MoE mỗi layer.
 Cần adaptive_moe.py 0.3.1, elastic_ctx.py, headroom.py, layerk.py cạnh file này.
 
 python regcheck.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --experts 32 --L 128 --seed 0
@@ -19,7 +20,11 @@ from layerk import eval_cfg
 
 # (tên, k cố định hoặc None = elastic, dropout, weight decay)
 CONFIGS = [("fixed-k1", 1, 0.0, 0.01), ("fixed-k1+drop", 1, 0.1, 0.01), ("fixed-k2", 2, 0.0, 0.01),
-           ("fixed-k2+drop", 2, 0.1, 0.01), ("fixed-k2+wd", 2, 0.0, 0.1), ("elastic", None, 0.0, 0.01)]
+           ("fixed-k2+drop", 2, 0.1, 0.01), ("fixed-k2+wd", 2, 0.0, 0.1), ("elastic", None, 0.0, 0.01),
+           # vòng 2: elastic có dropout, dropout mạnh hơn, k=4, và lịch k theo layer có dropout
+           ("elastic+drop", None, 0.1, 0.01), ("fixed-k2+drop2", 2, 0.2, 0.01), ("fixed-k4+drop", 4, 0.1, 0.01),
+           ("sched-1124+drop", (1, 1, 2, 4), 0.1, 0.01), ("sched-4211+drop", (4, 2, 1, 1), 0.1, 0.01),
+           ("sched-1122+drop", (1, 1, 2, 2), 0.1, 0.01)]
 
 
 def add_dropout(model, p):
@@ -41,13 +46,21 @@ def run_one(name, k, drop, wd, train, vA, vB, vocab, args, device):
     if drop > 0:
         add_dropout(model, drop)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=wd)
-    ks = [k] if k else [1, 2]
-    hist = {kk: [] for kk in ks}
+    L = args.layers
+    if k is None:
+        ks = [(1,) * L, (2,) * L]
+    elif isinstance(k, tuple):
+        assert len(k) == L, "lịch k theo layer cần đúng số layer"
+        ks = [k]
+    else:
+        ks = [(k,) * L]
+    hist = {cfg: [] for cfg in ks}
     for step in range(args.steps + 1):
         model.train()
         x, y = batch(train, args.B, args.L, device, g)
-        if k:
-            set_k_cap(model, k)
+        if k is not None:
+            for b, kk in zip(model.blocks, ks[0]):
+                b.moe.k_cap = kk
         else:
             f = random.choice((0.0, 0.25, 0.5, 0.75, 1.0))
             set_k_cap(model, 1 + (torch.rand(x.numel(), device=device) < f).long())
@@ -57,15 +70,14 @@ def run_one(name, k, drop, wd, train, vA, vB, vocab, args, device):
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         if step > 0 and (step % args.eval_every == 0 or step == args.steps):
-            for kk in ks:
-                cfg = (kk,) * args.layers
+            for cfg in ks:
                 a = eval_cfg(model, vA, cfg, args, device, 111, n=20)
                 b = eval_cfg(model, vB, cfg, args, device, 222, n=20)
-                hist[kk].append((step, a, b, loss.item()))
-    for kk in ks:
-        best = min(hist[kk], key=lambda t: t[1])
-        fin = hist[kk][-1]
-        row = name if k else f"elastic@k{kk}"
+                hist[cfg].append((step, a, b, loss.item()))
+    for cfg in ks:
+        best = min(hist[cfg], key=lambda t: t[1])
+        fin = hist[cfg][-1]
+        row = name if k is not None else f"{name}@k{cfg[0]}"
         print(f"RESULT seed={args.seed} row={row} best_step={best[0]} bestB={best[2]:.4f} finalB={fin[2]:.4f} "
               f"final_train_loss={fin[3]:.3f}", flush=True)
     del model, opt
@@ -80,9 +92,17 @@ def main(args):
     half = len(val) // 2
     vA, vB = val[:half], val[half:]
     only = set(args.only.split(",")) if args.only else None
-    for name, k, drop, wd in CONFIGS:
-        if only and name not in only:
-            continue
+    valid = [c[0] for c in CONFIGS]
+    if only:
+        bad = sorted(only - set(valid))
+        if bad:
+            raise SystemExit(f"[regcheck] tên cấu hình không có trong file này: {bad}\n"
+                             f"Các tên hợp lệ: {valid}\n"
+                             "Nếu thiếu elastic+drop / fixed-k4+drop / sched-*: file regcheck.py trên máy chạy là bản cũ, hãy thay bằng bản mới.")
+    todo = [c for c in CONFIGS if not only or c[0] in only]
+    print(f"[regcheck] seed={args.seed} sẽ chạy {len(todo)} cấu hình: {[c[0] for c in todo]}", flush=True)
+    for name, k, drop, wd in todo:
+        print(f"[regcheck] bắt đầu {name}", flush=True)
         run_one(name, k, drop, wd, train, vA, vB, vocab, args, device)
 
 

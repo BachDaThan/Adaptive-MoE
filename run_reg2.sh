@@ -6,7 +6,7 @@ set -u
 SEEDS=("$@")
 if [ ${#SEEDS[@]} -eq 0 ]; then SEEDS=(0); fi
 for SEED in "${SEEDS[@]}"; do
-  python regcheck.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --experts 32 --L 128 --seed "$SEED" \
+  python -u regcheck.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --experts 32 --L 128 --seed "$SEED" \
     --only elastic+drop,fixed-k2+drop2,fixed-k4+drop,sched-1124+drop,sched-4211+drop,sched-1122+drop 2>&1 | tee "log_reg2_s${SEED}.txt"
 done
 python summarize_reg.py "log_reg*_s*.txt"
