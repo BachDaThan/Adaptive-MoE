@@ -13,7 +13,7 @@ for SEED in "${SEEDS[@]}"; do
     python -u regcheck.py $COMMON --seed "$SEED" \
       --only elastic+drop2,elastic+drop3,fixed-k2+drop3,fixed-k1+drop2 2>&1 | tee "log_reg3A_s${SEED}.txt"
   elif [ "$STAGE" = "B" ]; then
-    python -u regcheck.py $COMMON --seed "$SEED" --steps 6000 --tag -6k \
+    python -u regcheck.py $COMMON --seed "$SEED" --steps 6000 --tag=-6k \
       --only elastic+drop,elastic+drop2,fixed-k2+drop,fixed-k2+drop2 2>&1 | tee "log_reg3B_s${SEED}.txt"
   else
     echo "Phần phải là A hoặc B"; exit 1

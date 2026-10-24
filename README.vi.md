@@ -10,7 +10,7 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 
 > **Trạng thái: thử nghiệm.** Cơ chế hoạt động (router học được độ khó của token và dùng nhiều expert hơn cho token khó), nhưng không thắng các baseline đơn giản: adaptive routing hơi kém top-k cố định ở cùng ngân sách trong phần lớn cấu hình, và ở ngân sách thấp chỉ ngang việc chọn k ngẫu nhiên theo token với cùng ngân sách trung bình. Xem [Kết quả thí nghiệm](#kết-quả-thí-nghiệm-trạng-thái-thử-nghiệm).
 >
-> Điều có tác dụng thật là **huấn luyện co giãn**: train với k ngẫu nhiên (và/hoặc cửa sổ ngữ cảnh ngẫu nhiên) thì cùng một model chạy được ở mọi mức ngân sách, không mất gì khi dữ liệu dồi dào. Khi dữ liệu ít, nó tốt hơn train k cố định thông thường và thua k cố định có dropout nếu bản elastic không có dropout, nhưng elastic kết hợp dropout hơn k cố định cùng dropout khoảng 0.02 nat. Xem [Huấn luyện co giãn](#huấn-luyện-co-giãn-một-model-nhiều-mức-ngân-sách).
+> Điều có tác dụng thật là **huấn luyện co giãn**: train với k ngẫu nhiên (và/hoặc cửa sổ ngữ cảnh ngẫu nhiên) thì cùng một model chạy được ở mọi mức ngân sách, không mất gì khi dữ liệu dồi dào. Khi dữ liệu ít, nó tốt hơn train k cố định thông thường và thua k cố định có dropout nếu bản elastic không có dropout, nhưng elastic kết hợp dropout hơn k cố định cùng dropout khoảng 0.02 nat; khi mỗi bên được chỉnh dropout riêng, chênh lệch còn khoảng 0.01 nat ở k=2 (trong mức nhiễu) và 0.03 nat ở k=1. Xem [Huấn luyện co giãn](#huấn-luyện-co-giãn-một-model-nhiều-mức-ngân-sách).
 
 ## Cài
 
@@ -119,7 +119,7 @@ Giới hạn: phần lớn cấu hình chỉ một seed, model nhỏ, train ng�
 
 Tóm tắt các thí nghiệm bên dưới (model nhỏ, train ngắn; đa số cấu hình chạy 1 đến 3 seed):
 
-- **Elastic k:** train với trần số expert ngẫu nhiên rồi chọn k lúc suy luận. Khi dữ liệu dồi dào, một model elastic lệch khoảng 0.0015 nat so với các model fixed-k riêng. Khi dữ liệu ít, nó hơn train fixed-k thông thường (khoảng 0.03 đến 0.04 nat ở bước dừng sớm, 0.08 nat ở bước cuối) nhưng thua fixed-k có dropout khoảng 0.06 nat nếu bản elastic không có dropout; elastic kết hợp dropout lại hơn fixed-k cùng dropout khoảng 0.02 nat (mục 4).
+- **Elastic k:** train với trần số expert ngẫu nhiên rồi chọn k lúc suy luận. Khi dữ liệu dồi dào, một model elastic lệch khoảng 0.0015 nat so với các model fixed-k riêng. Khi dữ liệu ít, nó hơn train fixed-k thông thường (khoảng 0.03 đến 0.04 nat ở bước dừng sớm, 0.08 nat ở bước cuối) nhưng thua fixed-k có dropout khoảng 0.06 nat nếu bản elastic không có dropout; elastic kết hợp dropout lại hơn fixed-k cùng dropout khoảng 0.02 nat; khi mỗi bên được chỉnh dropout riêng, chênh lệch còn khoảng 0.01 nat ở k=2 (trong mức nhiễu) và 0.03 nat ở k=1 (mục 4).
 - **KV cache và cửa sổ ngữ cảnh:** sinh văn bản với KV cache khớp hoàn toàn với chạy lại cả chuỗi; cửa sổ sink + trượt chặn cache ở `sink + W` token mà gần như không mất chất lượng (mục 2 và 3).
 - **Phân bổ k thông minh hơn không thắng một k cố định ở cùng chi phí trung bình.** Chỉ có hiệu ứng nhỏ trong khoảng chi phí giữa k=1 và k=2 (mục 5). Lịch k theo layer từng có vẻ tốt trên model elastic **không đứng vững** khi train từ đầu, và cũng không thắng k đồng đều khi có dropout (mục 5.3 và 4.2).
 
@@ -273,12 +273,40 @@ Chênh lệch `bestB` theo từng seed (số âm = vế trái tốt hơn):
 | sched-4211+drop − fixed-k2+drop  | +0.0171 | +0.0244 | +0.0208    |
 
 - **Elastic cộng dồn với dropout.** elastic+drop@k2 (4.4870) là cấu hình tốt nhất trong mọi bảng. Cùng dropout 0.1, elastic hơn k cố định khoảng 0.025 nat ở k=2 và 0.017 nat ở k=1, cùng dấu ở cả hai seed (độ lớn dao động nhiều, từ 0.012 đến 0.039 ở k=2). Thêm dropout cho elastic giúp 0.084 nat. Nên kết luận "k cố định có dropout thắng elastic" ở trên chỉ đúng với elastic không có dropout.
-- **Dropout mạnh hơn thu hẹp khoảng cách.** fixed-k2+drop2 (dropout 0.2) hơn fixed-k2+drop 0.020 nat và chỉ kém elastic+drop@k2 (dropout 0.1) 0.005 nat, cùng dấu ở hai seed nhưng nằm trong mức nhiễu. Chưa chạy elastic với dropout 0.2 nên chưa biết elastic có còn hơn khi cả hai đều được chỉnh dropout.
+- **Dropout mạnh hơn thu hẹp khoảng cách.** fixed-k2+drop2 (dropout 0.2) hơn fixed-k2+drop 0.020 nat và chỉ kém elastic+drop@k2 (dropout 0.1) 0.005 nat, cùng dấu ở hai seed nhưng nằm trong mức nhiễu. Vòng 3A bên dưới chạy elastic với dropout 0.2 và 0.3 để trả lời câu hỏi này.
 - **k=4 không rõ hơn k=2.** fixed-k4+drop hơn fixed-k2+drop 0.008 nat ở bestB nhưng khác dấu giữa hai seed, và finalB tệ hơn (4.5307 so với 4.5168): tốt nhất ở bước 2500 rồi tăng lại, tức overfit quay lại khi nhiều expert hoạt động hơn.
 - **k theo layer vẫn không thắng k đồng đều, kể cả có dropout.** Ở chi phí 2.0, (1,1,2,4) kém k=2 đồng đều 0.011 nat và (4,2,1,1) kém 0.021 nat, cùng dấu ở cả hai seed. (1,1,2,2) (chi phí 1.5) đạt 4.5189, thấp hơn đường thẳng nối fixed-k1+drop (4.5365) và fixed-k2+drop (4.5122) khoảng 0.005 nat, không đáng kể. Riêng (4,2,1,1), từng tốt hơn k=2 đồng đều ở bước cuối không regularize (mục 5.3), giờ là lịch tệ nhất.
 - Hầu hết lần chạy dropout đạt tốt nhất ở bước 2750 đến 3000 (cuối quá trình), nên 3000 bước vẫn chưa đủ cho nhóm này và các khoảng cách có thể đổi khi chạy dài hơn.
 
-Rút ra thực tế: khi dữ liệu ít, elastic và dropout bổ sung cho nhau. Dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat), còn elastic cộng thêm khoảng 0.02 nat ở cùng dropout; dropout 0.2 cho k cố định gần bắt kịp (kém 0.005). Elastic không thay được dropout, nhưng dùng cả hai là cấu hình tốt nhất đã đo, và vẫn có lợi ích gốc là một model chạy được ở nhiều k (mục 1). Đã có script nhưng chưa có kết quả (`run_reg3.sh`): elastic với dropout 0.2 và 0.3, nhóm dropout chạy 6000 bước. Chưa làm: elastic với k=4, thêm seed.
+**Vòng 3A: chỉnh dropout cho cả hai bên (2 seed).** `+drop3` là dropout 0.3. Elastic được train với dropout 0.2 và 0.3. Chạy bằng `run_reg3.sh A`. Bảng dưới gộp cả các vòng trước, `bestB` trung bình hai seed:
+
+| Dropout | fixed-k1 | fixed-k2 | elastic@k1 | elastic@k2 |
+|---------|----------|----------|------------|------------|
+| 0       | 4.6390   | 4.6045   | 4.5980     | 4.5707     |
+| 0.1     | 4.5365   | 4.5122   | 4.5199     | 4.4870     |
+| 0.2     | 4.5610   | 4.4923   | 4.5070     | **4.4844** |
+| 0.3     | chưa chạy | 4.5194  | 4.5561     | 4.5350     |
+
+Chênh lệch `bestB` theo từng seed (số âm = vế trái tốt hơn):
+
+| So sánh                            | seed 0  | seed 1  | trung bình |
+|------------------------------------|---------|---------|------------|
+| elastic+drop2@k2 − fixed-k2+drop2  | +0.0016 | −0.0174 | −0.0079    |
+| elastic+drop2@k1 − fixed-k1+drop2  | −0.0553 | −0.0527 | −0.0540    |
+| elastic+drop2@k1 − fixed-k1+drop   | −0.0277 | −0.0312 | −0.0295    |
+| elastic+drop3@k2 − fixed-k2+drop3  | +0.0120 | +0.0191 | +0.0156    |
+| elastic+drop3@k2 − elastic+drop2@k2 | +0.0464 | +0.0548 | +0.0506   |
+| fixed-k2+drop3 − fixed-k2+drop2    | +0.0360 | +0.0183 | +0.0272    |
+| fixed-k1+drop2 − fixed-k1+drop     | +0.0276 | +0.0215 | +0.0246    |
+| elastic+drop2@k2 − elastic+drop@k2 | +0.0082 | −0.0134 | −0.0026    |
+
+- **Mức dropout tốt nhất của hai bên khác nhau.** fixed-k2 tốt nhất ở 0.2 (0.1 và 0.3 đều kém hơn). elastic@k2 gần như phẳng giữa 0.1 và 0.2 (chênh 0.003, khác dấu giữa hai seed) và kém rõ ở 0.3. fixed-k1 tốt nhất ở 0.1 trong các mức đã thử (0.2 kém hơn 0.025 nat), còn elastic@k1 lại tốt hơn ở 0.2.
+- **Ở k=2, khi mỗi bên được chỉnh dropout, elastic và cố định ngang nhau.** 4.4844 (elastic, dropout 0.2) so với 4.4923 (cố định, dropout 0.2): hơn 0.008 nat nhưng khác dấu giữa hai seed (+0.002 và −0.017), nên chưa phân biệt được. Lợi thế 0.025 nat ở dropout 0.1 (vòng 2) phần lớn là do k cố định chưa được regularize đủ ở mức đó.
+- **Ở k=1, elastic vẫn hơn rõ.** Hơn k cố định 0.054 nat ở cùng dropout 0.2, và 0.030 nat khi so mức tốt nhất đã thử của mỗi bên (elastic 0.2, cố định 0.1), cùng dấu ở cả hai seed. Lý do khả dĩ (chưa kiểm chứng): model cố định k=1 ít sức chứa nên không chịu được dropout mạnh, còn k=1 của model elastic dùng chung trọng số với lúc train ở k=2.
+- **Dropout 0.3 quá mạnh cho cả hai**, nặng hơn với elastic (kém cố định 0.016 nat ở k=2).
+- Một model elastic với dropout 0.2 cho 4.4844 ở k=2 và 4.5070 ở k=1: ngang model k=2 cố định tốt nhất và hơn model k=1 cố định tốt nhất, tức một model phục vụ cả hai ngân sách mà không mất chất lượng. Mọi lần chạy ở vòng này đều tốt nhất ở bước 3000, trừ một lần ở 2750.
+
+Rút ra thực tế: khi dữ liệu ít, dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat). Huấn luyện co giãn cộng thêm một lợi ích nhỏ và phụ thuộc ngân sách: trong mức nhiễu ở k=2 khi dropout đã được chỉnh cho cả hai (0.008 nat, khác dấu giữa các seed) và khoảng 0.03 nat ở k=1. Cấu hình tốt nhất đã đo là một model elastic với dropout 0.2: ngang k=2 cố định tốt nhất và hơn k=1 cố định tốt nhất, nên giá trị chính của nó là một model dùng được cho nhiều ngân sách (mục 1), không phải một regularizer tốt hơn dropout. Đã có script nhưng chưa có kết quả (`run_reg3.sh B`): nhóm dropout chạy 6000 bước. Chưa làm: elastic với k=4, các mức dropout xen giữa (0.05 cho k=1, 0.15), thêm seed.
 
 ### 5. Phân bổ k thông minh có thắng một k cố định không?
 
@@ -323,7 +351,7 @@ Luật ngược lại (nâng các token phổ biến nhất) luôn tệ hơn ng�
 
 Lịch trông tốt nhất trên model elastic lại tệ hơn k=2 đồng đều, còn đối chứng đảo ngược (4,2,1,1) lại tốt hơn. Cách một model elastic dùng expert ở từng layer không phải căn cứ để chọn lịch cần train. Trong thí nghiệm đầu tiên ở trên, k cố định theo layer cũng kém k đồng đều, nên không khuyến nghị lịch k theo layer. Lưu ý: bảng này đo ở bước cuối trong chế độ ít dữ liệu không regularize, nơi k cao bị overfit. Khi chạy lại có dropout và dừng sớm (mục 4.2, vòng 2), (1,1,2,4) kém k=2 đồng đều 0.011 nat và (4,2,1,1) kém 0.021 nat, nên lợi thế từng thấy của (4,2,1,1) ở bảng trên chỉ là hiệu ứng overfit.
 
-**Kết luận của mục này.** Một k cố định vẫn là baseline cần vượt. Các hiệu ứng tìm được nhỏ (khoảng 0.01 nat hoặc ít hơn) và chỉ nằm trong khoảng chi phí giữa k=1 và k=2. Kết quả vững là huấn luyện co giãn cho một model chạy được ở nhiều ngân sách mà không mất chất lượng (mục 1); lợi thế của nó khi dữ liệu ít nhỏ hơn dropout nhiều, nhưng vẫn cộng dồn được với dropout (mục 4.2).
+**Kết luận của mục này.** Một k cố định vẫn là baseline cần vượt. Các hiệu ứng tìm được nhỏ (khoảng 0.01 nat hoặc ít hơn) và chỉ nằm trong khoảng chi phí giữa k=1 và k=2. Kết quả vững là huấn luyện co giãn cho một model chạy được ở nhiều ngân sách mà không mất chất lượng (mục 1); lợi thế của nó khi dữ liệu ít nhỏ hơn dropout nhiều, nhưng cộng dồn được với dropout ở cùng mức dropout; khi dropout được chỉnh cho từng bên, lợi ích còn trong mức nhiễu ở k=2 và khoảng 0.03 nat ở k=1 (mục 4.2).
 
 ### 6. Tốc độ đo thực tế (CUDA, batch 32x128; tỷ lệ so với khi dùng tất cả expert)
 
