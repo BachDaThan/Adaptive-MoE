@@ -137,7 +137,7 @@ Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 
 | `schedule_train.py`                                                              | Train từng lịch k từ đầu (bước kiểm chứng cho `layerk.py`).                                  |
 | `regcheck.py`                                                                    | Đối chứng dừng sớm và regularize: fixed-k (+dropout, +weight decay) so với elastic (mục 4.2).  |
 | `summarize_reg.py`                                                               | Gộp log của `regcheck.py` (trung bình theo seed, so sánh theo cặp).                          |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh` | Chạy trọn các script trên.                                                |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh`, `run_reg4.sh` | Chạy trọn các script trên.                                                |
 
 ```
 python elastic_ctx.py --selftest
@@ -149,6 +149,7 @@ bash run_reg.sh 0         # mục 4.2, vòng 1 (~40 phút/seed)
 bash run_reg2.sh 0        # mục 4.2, vòng 2 (~40 phút/seed)
 bash run_reg3.sh A 0      # vòng 3A: dropout 0.2 và 0.3 cho elastic và fixed
 bash run_reg3.sh B 0      # vòng 3B: nhóm dropout chạy 6000 bước
+bash run_reg4.sh B 2 3    # vòng 4B: seed 2 và 3 ở 6000 bước (xem đầu file để biết các phần A, C, D)
 ```
 
 ### 1. Elastic k: train một lần với k ngẫu nhiên, chọn k lúc suy luận
@@ -334,7 +335,7 @@ Chênh lệch `bestB` theo từng seed (số âm = vế trái tốt hơn):
 - Chế độ k=1 của model elastic tốt nhất (4.4956) chỉ kém model k=2 cố định train riêng (4.4870) 0.009 nat, trong khi dùng một nửa số expert định tuyến.
 - Giới hạn: 2 seed, một lần chạy elastic dropout 0.2 vẫn tốt nhất ở bước 5000 (có thể chưa hội tụ hẳn), chưa chạy k=1 cố định ở 6000 bước.
 
-Rút ra thực tế: khi dữ liệu ít, dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat). Huấn luyện co giãn cộng thêm lợi ích nhỏ hơn nhưng vẫn còn khi dropout đã được chỉnh: khoảng 0.017 nat ở k=2 khi train 6000 bước (cùng dấu ở cả hai seed, trong mức nhiễu ở 3000 bước) và khoảng 0.03 nat ở k=1 (3000 bước), đồng thời overfit chậm hơn sau bước tốt nhất. Cấu hình tốt nhất đã đo là một model elastic với dropout 0.2 (4.4699 ở k=2, 4.4956 ở k=1). Đây vẫn là hiệu ứng khiêm tốn, từ 2 seed trên model nhỏ, và giá trị thực tế chính vẫn là một model dùng được cho nhiều ngân sách (mục 1). Chưa làm: elastic với k=4, k=1 cố định ở 6000 bước, các mức dropout xen giữa (0.05 cho k=1, 0.15), thêm seed.
+Rút ra thực tế: khi dữ liệu ít, dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat). Huấn luyện co giãn cộng thêm lợi ích nhỏ hơn nhưng vẫn còn khi dropout đã được chỉnh: khoảng 0.017 nat ở k=2 khi train 6000 bước (cùng dấu ở cả hai seed, trong mức nhiễu ở 3000 bước) và khoảng 0.03 nat ở k=1 (3000 bước), đồng thời overfit chậm hơn sau bước tốt nhất. Cấu hình tốt nhất đã đo là một model elastic với dropout 0.2 (4.4699 ở k=2, 4.4956 ở k=1). Đây vẫn là hiệu ứng khiêm tốn, từ 2 seed trên model nhỏ, và giá trị thực tế chính vẫn là một model dùng được cho nhiều ngân sách (mục 1). Đã có script nhưng chưa có kết quả (`run_reg4.sh`): seed 2 và 3, k=1 cố định ở 6000 bước, dropout 0.15. Chưa làm: elastic với k=4, dropout 0.05 cho k=1.
 
 ### 5. Phân bổ k thông minh có thắng một k cố định không?
 

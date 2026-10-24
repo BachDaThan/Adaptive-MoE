@@ -137,7 +137,7 @@ Run-to-run noise at the same seed (non-deterministic GPU) is about 0.002-0.003 n
 | `schedule_train.py`                                                              | Trains each k schedule from scratch (the verification step for `layerk.py`).                           |
 | `regcheck.py`                                                                    | Early-stopping and regularization control: fixed-k (+dropout, +weight decay) vs elastic (section 4.2). |
 | `summarize_reg.py`                                                               | Merges `regcheck.py` logs (mean over seeds, pairwise comparisons).                                     |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh` | Run the scripts above end to end.                                        |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh`, `run_reg4.sh` | Run the scripts above end to end.                                        |
 
 ```
 python elastic_ctx.py --selftest
@@ -149,6 +149,7 @@ bash run_reg.sh 0         # section 4.2, round 1 (~40 min per seed)
 bash run_reg2.sh 0        # section 4.2, round 2 (~40 min per seed)
 bash run_reg3.sh A 0      # round 3A: dropout 0.2 and 0.3 for elastic and fixed
 bash run_reg3.sh B 0      # round 3B: dropout group trained for 6000 steps
+bash run_reg4.sh B 2 3    # round 4B: seeds 2 and 3 at 6000 steps (see the script header for parts A, C, D)
 ```
 
 ### 1. Elastic k: train once with random k, choose k at inference
@@ -334,7 +335,7 @@ Per-seed `bestB` differences (negative = left side is better):
 - The k=1 mode of the best elastic model (4.4956) is only 0.009 nats behind a separately trained fixed k=2 model (4.4870) while using half as many routed experts.
 - Limits: 2 seeds, one elastic dropout-0.2 run still peaks at step 5000 (it may not be fully converged), and fixed k=1 has not been run at 6000 steps.
 
-Practical takeaway: when data is scarce, dropout is the much bigger lever (about 0.08 to 0.09 nats). Elastic training adds a smaller gain on top that survives dropout tuning: about 0.017 nats at k=2 with 6000 steps (same sign in both seeds; within noise at 3000 steps) and about 0.03 nats at k=1 (3000 steps), and it overfits more slowly after the best step. The best configuration measured is one elastic model with dropout 0.2 (4.4699 at k=2, 4.4956 at k=1). This is still a modest effect from 2 seeds on a small model, and the main practical value remains one model that serves many budgets (section 1). Not done yet: elastic with k=4, fixed k=1 at 6000 steps, intermediate dropout values (0.05 for k=1, 0.15), more seeds.
+Practical takeaway: when data is scarce, dropout is the much bigger lever (about 0.08 to 0.09 nats). Elastic training adds a smaller gain on top that survives dropout tuning: about 0.017 nats at k=2 with 6000 steps (same sign in both seeds; within noise at 3000 steps) and about 0.03 nats at k=1 (3000 steps), and it overfits more slowly after the best step. The best configuration measured is one elastic model with dropout 0.2 (4.4699 at k=2, 4.4956 at k=1). This is still a modest effect from 2 seeds on a small model, and the main practical value remains one model that serves many budgets (section 1). Scripted but no results yet (`run_reg4.sh`): seeds 2 and 3, fixed k=1 at 6000 steps, dropout 0.15. Not done yet: elastic with k=4, dropout 0.05 for k=1.
 
 ### 5. Does smart k allocation beat a single fixed k?
 

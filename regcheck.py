@@ -2,7 +2,7 @@
 regcheck.py - elastic có thật sự hơn fixed khi dữ liệu ít, hay chỉ vì fixed bị overfit?
 Mỗi cấu hình train 3000 bước, đo val mỗi --eval_every bước trên 2 nửa val độc lập:
   chọn bước tốt nhất trên nửa A (= dừng sớm), báo loss nửa B tại bước đó (bestB) và ở bước cuối (finalB).
-Cấu hình: fixed-k1/k2/k4 (+drop = dropout 0.1, +drop2 = 0.2, +drop3 = 0.3, +wd = weight decay 0.1), elastic (k ngẫu nhiên theo
+Cấu hình: fixed-k1/k2/k4 (+drop = dropout 0.1, +drop2 = 0.2, +drop15 = 0.15, +drop3 = 0.3, +wd = weight decay 0.1), elastic (k ngẫu nhiên theo
 token trong {1,2}; báo ở k=1 và k=2), elastic+drop, và lịch k theo layer sched-* (cần --layers 4).
 Dropout đặt trên embedding và đầu ra MoE mỗi layer.
 Cần adaptive_moe.py 0.3.1, elastic_ctx.py, headroom.py, layerk.py cạnh file này.
@@ -27,7 +27,9 @@ CONFIGS = [("fixed-k1", 1, 0.0, 0.01), ("fixed-k1+drop", 1, 0.1, 0.01), ("fixed-
            ("sched-1122+drop", (1, 1, 2, 2), 0.1, 0.01),
            # vòng 3: dropout mạnh hơn cho cả elastic và fixed (+drop3 = 0.3)
            ("elastic+drop2", None, 0.2, 0.01), ("elastic+drop3", None, 0.3, 0.01), ("fixed-k2+drop3", 2, 0.3, 0.01),
-           ("fixed-k1+drop2", 1, 0.2, 0.01)]
+           ("fixed-k1+drop2", 1, 0.2, 0.01),
+           # vòng 4: dropout 0.15 (+drop15)
+           ("fixed-k1+drop15", 1, 0.15, 0.01), ("fixed-k2+drop15", 2, 0.15, 0.01), ("elastic+drop15", None, 0.15, 0.01)]
 
 
 def add_dropout(model, p):
