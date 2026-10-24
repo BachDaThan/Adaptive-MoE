@@ -9,6 +9,8 @@ A small (experimental) PyTorch module for **adaptive** Mixture-of-Experts: the n
 Anyone training an MoE model can swap their MoE layer for `AdaptiveMoE`.
 
 > **Status: experimental.** The mechanism works (the router learns token difficulty and uses more experts on harder tokens), but it does not beat simple baselines: adaptive routing was slightly worse than fixed top-k at equal budget in most settings, and in a low-budget setting it only matched a random per-token choice of k at the same average budget. See [Experimental results](#experimental-results).
+>
+> What did work is **elastic training**: train with a random k (and/or a random context window) and the same model can then run at any budget, with no loss when data is plentiful and a clear gain in a low-data setting. See [Elastic training](#elastic-training-one-model-many-budgets).
 
 ## Install
 
@@ -32,6 +34,7 @@ or copy `adaptive_moe.py` into your project (PyTorch is the only dependency).
 | `cascade_forward` | Inference: run a small tier first (e.g. 2 experts); if confidence is low, escalate to 4, then 8. Confidence: `maxprob` or `entropy`. |
 | `adaptive_generate` | Text generation with per-step tier selection. |
 | `max_resident` + `release()` | Keep only N experts on the GPU (LRU); `release()` frees more after a reply. |
+| `set_k_cap(model, k)` | Caps the experts per token (inference or training). `k` is an int for every token, or an int tensor `[B*S]` for a per-token cap (version 0.3.1). |
 
 ## Usage
 
@@ -55,68 +58,10 @@ ids, ks = adaptive_generate(model, input_ids, max_new_tokens=64,
 ## Notes
 
 - `release()` and `max_resident` are for inference (eval) only; do not enable them during training.
-- `adaptive_generate` has no KV cache (each step re-runs the whole sequence). Real models should add their own KV cache; the tier-selection part stays the same.
+- `adaptive_generate` has no KV cache (each step re-runs the whole sequence). `elastic_kv.py` shows a KV-cached version (`adaptive_generate_kv`) on a small reference model; real models can follow the same pattern.
 - Cascade re-runs the forward pass when a step is hard, so those steps cost extra compute.
 - `top_p`, `target_k` and the loss coefficients need tuning for your model and data.
 - This is the router/layer only, not a complete model.
-
-## Elastic budget experiments (k, KV cache, context window)
-
-All runs below are single-seed. Run-to-run noise on the same seed (GPU nondeterminism) was about 0.002-0.003 nats, so only compare cells within one table or run. Commands are in the scripts' `--help`.
-
-### 1. Elastic k: train once with random k, choose k at inference
-
-8 experts/layer, 19.3M params, 7.5M-token corpus, 3000 steps. Validation loss with k forced at inference:
-
-| k | 1 | 2 | 3 | 4 |
-|---|---|---|---|---|
-| Elastic (trained with k~U{1..4}) | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
-| Fixed k=3 / fixed k=4 (trained at that k) | | | 4.0720 | 4.0727 |
-
-One elastic model is within about 0.0015 nats of the fixed-k models. Evaluating with random k (instead of forcing one k) gave 4.0817, so forcing a single k at inference is better.
-
-32 experts/layer, 19.4M params, smaller 1.98M-token corpus (so heavily overfit), 3000 steps, train k~U{1..16}:
-
-| k | 1 | 2 | 4 | 8 | 16 |
-|---|---|---|---|---|---|
-| Elastic, forced k | 4.4088 | 4.3110 | 4.2762 | 4.2628 | 4.2593 |
-| Fixed k=4 / k=8 | | | 4.2873 | 4.2908 | |
-
-Here the elastic model is better than fixed-k at the same k (by 0.011 at k=4 and 0.028 at k=8). With this little data random k probably acts as a regularizer, and the 8-expert run on more data shows no such gain, so this should not be read as "elastic beats fixed" in general. Quality is flat above k=8 and k=1 loses 0.15 nats versus k=8.
-
-### 2. KV cache for generation (`elastic_kv.py`)
-
-Cached incremental decoding matches full recomputation: max logit difference below 1e-6 at k = 1, 2, 4, 8, and greedy generation gives identical ids. With the confidence cascade, old cached tokens keep the k they were computed with, so cascade output is not identical to recomputing the whole sequence at one k (by design).
-
-### 3. Elastic context window (`elastic_ctx.py`)
-
-A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W` (sink = 4). At inference the KV cache keeps only `sink + W` tokens, and this gives outputs identical to re-running the whole sequence with the same mask (checked by `--selftest`). Setup: byte-level LM, 3.9M params, 8 experts, sequence length 256, 8 MB Vietnamese Wikipedia (`wikimedia/wikipedia`, `20231101.vi`), 3000 steps, k=2.
-
-Window only, W forced at inference:
-
-| Training | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
-|---|---|---|---|---|---|---|
-| Full context | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
-| Random W per sample | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
-
-Random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context.
-
-Joint elastic k and W (one model, k in {1,2,4,8}, W in {8..256}, `top_p=0.999` so the k cap binds).  
-Each cell is **val loss / decode tok/s** with KV cache. KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256.
-
-| k | W=8 | 16 | 32 | 64 | 128 | 256 |
-|---|---|---|---|---|---|---|
-| **1** | 1.2215 / 79 | 1.2129 / 82 | 1.2083 / 81 | 1.2069 / 83 | 1.2059 / 81 | 1.2060 / 84 |
-| **2** | 1.2099 / 79 | 1.2021 / 79 | 1.1973 / 80 | 1.1955 / 79 | 1.1947 / 78 | 1.1947 / 81 |
-| **4** | 1.2091 / 71 | 1.2013 / 74 | 1.1965 / 73 | 1.1947 / 73 | 1.1939 / 73 | 1.1938 / 75 |
-| **8** | 1.2092 / 67 | 1.2013 / 68 | 1.1964 / 66 | 1.1946 / 67 | 1.1938 / 66 | 1.1937 / 69 |
-
-- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0008 nats; to 36 tokens about 0.0026; to 20 tokens about 0.0074.
-- k=1 costs about 0.011 nats versus k=2. k=4 and k=8 gain only about 0.001 over k=2 while decoding about 7% and 15% slower here, so k=2 is the sweet spot for this small model.
-- At equal cache size, spending budget on k beats spending it on W: (k=2, W=16) is better than (k=1, W=64) with a smaller cache.
-- tok/s is dominated by Python overhead at this model size and is only indicative; the batched CUDA benchmark below is the speed reference.
-
-**Limitations:** one seed per configuration, sequence length 256, small models, byte-level tokens.
 
 ## Language-model experiment (Vietnamese text)
 
@@ -130,100 +75,6 @@ python compare.py                                        # table of all r_*.json
 The script trains a small LM (syllable-level tokenization of Vietnamese Wikipedia) and prints validation loss, average experts per token, the correlation between per-token expert count and per-token loss, and the expert count per token category (punctuation, numbers, function words, proper nouns, rare words, content words). Report labels are printed in Vietnamese. Use `--text_file` to train on your own text.
 
 Options: `--ste` (let task-loss gradients reach the expert-selection boundary) and `--diff_head` (the router predicts token difficulty, trained on the real token loss, then sets `top_p` per token within `[p_min, p_max]`). `--layer_k 1,2,2,3` sets a fixed k per layer. `--mode random` runs a random per-token k control, and `--no_renorm` keeps raw gate probabilities (Switch style) so top-1 routers still get a task gradient.
-
-## Elastic budget experiments (k, KV cache, context window)
-
-All runs below are single-seed. Run-to-run noise on the same seed (GPU nondeterminism) was about 0.002-0.003 nats, so only compare cells within one table or run. Commands are in the scripts' `--help`.
-
-### 1. Elastic k: train once with random k, choose k at inference
-
-8 experts/layer, 19.3M params, 7.5M-token corpus, 3000 steps. Validation loss with k forced at inference:
-
-| k | 1 | 2 | 3 | 4 |
-|---|---|---|---|---|
-| Elastic (trained with k~U{1..4}) | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
-| Fixed k=3 / fixed k=4 (trained at that k) | | | 4.0720 | 4.0727 |
-
-One elastic model is within about 0.0015 nats of the fixed-k models. Evaluating with random k (instead of forcing one k) gave 4.0817, so forcing a single k at inference is better.
-
-32 experts/layer, 19.4M params, smaller 1.98M-token corpus (so heavily overfit), 3000 steps, train k~U{1..16}:
-
-| k | 1 | 2 | 4 | 8 | 16 |
-|---|---|---|---|---|---|
-| Elastic, forced k | 4.4088 | 4.3110 | 4.2762 | 4.2628 | 4.2593 |
-| Fixed k=4 / k=8 | | | 4.2873 | 4.2908 | |
-
-Here the elastic model is better than fixed-k at the same k (by 0.011 at k=4 and 0.028 at k=8). With this little data random k probably acts as a regularizer, and the 8-expert run on more data shows no such gain, so this should not be read as "elastic beats fixed" in general. Quality is flat above k=8 and k=1 loses 0.15 nats versus k=8.
-
-### 2. KV cache for generation (`elastic_kv.py`)
-
-Cached incremental decoding matches full recomputation: max logit difference below 1e-6 at k = 1, 2, 4, 8, and greedy generation gives identical ids. With the confidence cascade, old cached tokens keep the k they were computed with, so cascade output is not identical to recomputing the whole sequence at one k (by design).
-
-### 3. Elastic context window (`elastic_ctx.py`)
-
-A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W` (sink = 4). At inference the KV cache keeps only `sink + W` tokens, and this gives outputs identical to re-running the whole sequence with the same mask (checked by `--selftest`). Setup: byte-level LM, 3.9M params, 8 experts, sequence length 256, 8 MB Vietnamese Wikipedia (`wikimedia/wikipedia`, `20231101.vi`), 3000 steps, k=2.
-
-Window only, W forced at inference:
-
-| Training | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
-|---|---|---|---|---|---|---|
-| Full context | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
-| Random W per sample | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
-
-Random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context.
-
-Joint elastic k and W (one model, k in {1,2,4,8}, W in {8..256}, `top_p=0.999` so the k cap binds).  
-Each cell is **val loss / decode tok/s** with KV cache. KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256.
-
-| k | W=8 | 16 | 32 | 64 | 128 | 256 |
-|---|---|---|---|---|---|---|
-| **1** | 1.2215 / 79 | 1.2129 / 82 | 1.2083 / 81 | 1.2069 / 83 | 1.2059 / 81 | 1.2060 / 84 |
-| **2** | 1.2099 / 79 | 1.2021 / 79 | 1.1973 / 80 | 1.1955 / 79 | 1.1947 / 78 | 1.1947 / 81 |
-| **4** | 1.2091 / 71 | 1.2013 / 74 | 1.1965 / 73 | 1.1947 / 73 | 1.1939 / 73 | 1.1938 / 75 |
-| **8** | 1.2092 / 67 | 1.2013 / 68 | 1.1964 / 66 | 1.1946 / 67 | 1.1938 / 66 | 1.1937 / 69 |
-
-- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0008 nats; to 36 tokens about 0.0026; to 20 tokens about 0.0074.
-- k=1 costs about 0.011 nats versus k=2. k=4 and k=8 gain only about 0.001 over k=2 while decoding about 7% and 15% slower here, so k=2 is the sweet spot for this small model.
-- At equal cache size, spending budget on k beats spending it on W: (k=2, W=16) is better than (k=1, W=64) with a smaller cache.
-- tok/s is dominated by Python overhead at this model size and is only indicative; the batched CUDA benchmark below is the speed reference.
-
-**Limitations:** one seed per configuration, sequence length 256, small models, byte-level tokens.
-
-### Per-token and per-layer k allocation (BPE 16000, 32 experts, 4 layers, d=128, seq 128)
-
-Setup: 8 MB Vietnamese Wikipedia, BPE vocab 16000 trained on the train split, train/val split by random line, 3000 steps, `top_p=0.999` so the k cap binds. Scripts: `headroom.py`, `tokenk.py`, `layerk.py` (`tokenk.py` and `layerk.py` need `adaptive_moe.py` >= 0.3.1, where `set_k_cap` also accepts a per-token tensor). Cost is the average number of routed experts per token per layer (shared expert and attention not counted).
-
-#### Per-token rule: give k=2 to rare tokens (a frequency lookup, decided before any computation)
-
-Model trained with random per-token k in {1,2}; val loss with k forced per token, 3 seeds. `rare - random` at the same fraction f of tokens upgraded to k=2 (negative = rare is better, nats):
-
-| seed | f=0.25 | f=0.5 | f=0.75 |
-|---|---|---|---|
-| 0 | -0.0061 | -0.0069 | -0.0044 |
-| 1 | -0.0075 | -0.0051 | -0.0056 |
-| 2 | -0.0043 | -0.0062 | -0.0065 |
-| 0, trained with the rare rule | -0.0122 | -0.0101 | -0.0079 |
-
-The opposite rule (upgrade the most common tokens) is worse than random every time (about +0.005 to +0.006), so the effect is not noise. Total k=1 to k=2 gain in these models is only 0.034-0.042 nats, so the absolute benefit is small. It fills the cost range between k=1 and k=2 that fixed top-k cannot reach.
-
-#### Per-layer k: the larger effect
-
-One model trained with k drawn independently per layer from {1,2,4} at every step. All 81 schedules (k1,k2,k3,k4) were evaluated; the best schedule per cost was chosen on validation half A and the loss is reported on half B.
-
-Val loss on half B (seed 0 / seed 1):
-
-| Setting | cost | seed 0 | seed 1 |
-|---|---|---|---|
-| uniform k=1 | 1.0 | 4.7354 | 4.7081 |
-| uniform k=2 | 2.0 | 4.6880 | 4.6571 |
-| uniform k=4 | 4.0 | 4.6791 | 4.6519 |
-| schedule (1,1,2,2) | 1.5 | 4.6856 | 4.6563 |
-| schedule (1,1,2,4) | 2.0 | 4.6771 | 4.6470 |
-| schedule (1,1,4,4) | 2.5 | 4.6691 | 4.6426 |
-
-At cost 2.0 the best schedule beats uniform k=2 by 0.011 / 0.010 nats, and (1,1,4,4) at cost 2.5 beats uniform k=4 at cost 4.0 by 0.010 / 0.009 nats. Average loss by k at each layer (half A, seed 0): layers 0 and 1 are flat or slightly worse with larger k (4.6186 / 4.6198 / 4.6274 and 4.6197 / 4.6207 / 4.6254 for k = 1 / 2 / 4), layers 2 and 3 improve strongly (4.6415 / 4.6160 / 4.6083 and 4.6436 / 4.6154 / 4.6067). Seed 1 shows the same pattern.
-
-Limits: eval-only on one elastic model per seed, 4 layers, small model, 2 seeds. Not yet confirmed by training each schedule from scratch (`schedule_train.py`), and unknown whether the pattern holds in deeper models.
 
 ## Experimental results
 
@@ -263,64 +114,159 @@ Takeaways:
 
 Limitations: most configurations have a single seed, the model is small, training is short, and wall-clock speed was not measured (the per-expert loop is not optimized). Results at larger scale may differ.
 
-## Elastic k, uniform k in 1..4 (one seed)
+## Elastic training: one model, many budgets
 
-Train once with `--mode random --uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4` (8 experts/layer, 19.3M params, 3000 steps, same data as above), then force k at inference.
+Summary of what the experiments below show (all small models, short training; most configurations have one to three seeds):
 
-| Model | k=1 | k=2 | k=3 | k=4 |
+- **Elastic k:** train with a random cap on the number of experts and pick k at inference. With plenty of data one elastic model is within about 0.0015 nats of dedicated fixed-k models; with little data it was clearly better than fixed-k training (section 4).
+- **KV cache and context window:** generation with a KV cache matches full recomputation; a sink + sliding-window context bounds the cache at `sink + W` tokens at almost no loss (sections 2 and 3).
+- **Smarter allocation of k does not beat a single fixed k at equal average cost.** Small effects exist only in the cost range between k=1 and k=2 (section 5). A per-layer schedule that looked good on an elastic model **did not hold up** when trained from scratch (section 5.3).
+
+Run-to-run noise on the same seed (GPU nondeterminism) was about 0.002-0.003 nats, so only compare cells within one table or run.
+
+### Scripts
+
+| Script | What it does |
+|---|---|
+| `elastic_kv.py` | KV-cached generation with the confidence cascade (`adaptive_generate_kv`), plus a self-test. |
+| `elastic_ctx.py` | Sink + sliding-window context with a bounded KV cache; `--selftest`, `--train`, `--grid`. |
+| `headroom.py` | Token-level estimate of what a per-token k allocator could gain. |
+| `tokenk.py` | Per-token k inside the layers (needs `adaptive_moe.py` >= 0.3.1). |
+| `layerk.py` | Scans per-layer k schedules on one elastic model. |
+| `schedule_train.py` | Trains each k schedule from scratch (the check for `layerk.py`). |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh` | Run the above end to end. |
+
+```bash
+python elastic_ctx.py --selftest
+python elastic_ctx.py --grid --top_p 0.999 --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8
+python headroom.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --bpe --experts 32 --k_hi 2 --L 128
+bash run_tokenk.sh
+bash run_schedule.sh 0
+```
+
+### 1. Elastic k: train once with random k, choose k at inference
+
+8 experts/layer, 19.3M params, 7.5M-token corpus, 3000 steps (`--mode random --uniform_k --k_lo 1 --k_hi 4 --eval_ks 1,2,3,4`). Validation loss with k forced at inference:
+
+| k | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|
-| Elastic (trained with k~U{1..4}), forced k at eval | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
-| Fixed top-k, trained and run at that k | 4.110\* | 4.0780 | 4.0720 | 4.0727 |
+| Elastic (trained with k~U{1..4}) | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
+| Fixed top-k, trained and run at that k | 4.110\* | 4.078 | 4.0720 | 4.0727 |
 
-\* *fixed top-1 with raw gate probabilities (`--no_renorm`). Fixed k=2 is the 3-seed mean; k=3 and k=4 are one seed each.*
+\* fixed top-1 with raw gate probabilities (`--no_renorm`). Fixed k=2 is the 3-seed mean; k=3 and k=4 are one seed each.
 
-**Reading:** A single elastic model is within about 0.0015 nats of a dedicated fixed-k model at k=2..4, and at k=1 it is not worse than a dedicated top-1 model (4.101 vs 4.110). Seed-to-seed noise is about 0.002 to 0.004 nats, so only the k=1 row is clearly different from the fixed baselines' trend, and it needs more seeds. Quality is flat from k=2 to k=4 at this scale, so the budget knob matters mostly between k=1 and k=2.
+One elastic model is within about 0.0015 nats of the dedicated fixed-k models at k=2..4, and at k=1 it is not worse than a dedicated top-1 model. Seed-to-seed noise is about 0.002 to 0.004 nats. Training with random k averaged 2.5 experts per token, but evaluating with random k gave 4.082, so forcing a single k at inference is better than leaving k random.
 
-Training with random k averaged 2.5 experts per token, but evaluated with random k it scored 4.082 (ppl 59.2); forcing a single k at inference is better than leaving k random.
+32 experts/layer, 19.4M params, smaller 1.98M-token corpus (so heavily overfit), 3000 steps, train k~U{1..16}:
 
-## Elastic context window (sink + sliding window) and joint elastic k x W
+| k | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| Elastic, forced k | 4.4088 | 4.3110 | 4.2762 | 4.2628 | 4.2593 |
+| Fixed k=4 / k=8 | | | 4.2873 | 4.2908 | |
 
-**Setup:** byte-level LM, 3.9M params (d=128, 4 layers, 8 experts), sequence length 256, 8 MB of Vietnamese Wikipedia (`wikimedia/wikipedia 20231101.vi`), 3000 steps, sink = 4, top_p = 0.9. A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W`. At inference the KV cache keeps only `sink + W` tokens; this is checked to give identical outputs to re-running the whole sequence with the same mask (`--selftest`).
+Here the elastic model beats fixed-k at the same k (by 0.011 at k=4 and 0.028 at k=8). Quality is flat above k=8 and k=1 loses 0.15 nats versus k=8. See section 4 for a cleaner low-data comparison.
 
-### Window only (k = 2): val loss when W is forced at inference
+### 2. KV cache for generation (`elastic_kv.py`)
+
+Cached incremental decoding matches full recomputation: max logit difference below 1e-6 at k = 1, 2, 4, 8, and greedy generation gives identical ids. With the confidence cascade, old cached tokens keep the k they were computed with, so cascade output is not identical to recomputing the whole sequence at one k (by design).
+
+### 3. Elastic context window (`elastic_ctx.py`)
+
+A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W` (sink = 4). At inference the KV cache keeps only `sink + W` tokens, and this gives outputs identical to re-running the whole sequence with the same mask (checked by `--selftest`, which also checks that generating 200 tokens at W=16 keeps only 20 cached tokens). Training draws W at random per sample. Setup: byte-level LM, 3.9M params (d=128, 4 layers, 8 experts), sequence length 256, 8 MB Vietnamese Wikipedia (`wikimedia/wikipedia`, `20231101.vi`), 3000 steps, k=2.
+
+Window only, W forced at inference:
 
 | Training | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
 |---|---|---|---|---|---|---|
 | Full context | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
 | Random W per sample | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
 
-Two runs of this experiment (same seed, GPU nondeterminism) agree: random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context (difference within +-0.0015).
+Two runs of this experiment (same seed) agree: random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context (difference within 0.0015).
 
-### Joint elastic k and W (one model trained with k in {1,2,4,8} and W in {8..256})
-
-val loss (rows: k, columns: W; KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256)
+Joint elastic k and W (one model trained with k in {1,2,4,8} and W in {8..256}, `top_p=0.999` so the k cap binds). Each cell is **val loss / decode tok/s** with KV cache. KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256.
 
 | k | W=8 | 16 | 32 | 64 | 128 | 256 |
 |---|---|---|---|---|---|---|
-| 1 | 1.2165 | 1.2095 | 1.2043 | 1.2023 | 1.2017 | 1.2018 |
-| 2 | 1.2060 | 1.1992 | 1.1939 | 1.1922 | 1.1914 | 1.1915 |
-| 4 | 1.2054 | 1.1988 | 1.1935 | 1.1917 | 1.1909 | 1.1910 |
-| 8 | 1.2056 | 1.1989 | 1.1936 | 1.1918 | 1.1910 | 1.1911 |
+| **1** | 1.2215 / 79 | 1.2129 / 82 | 1.2083 / 81 | 1.2069 / 83 | 1.2059 / 81 | 1.2060 / 84 |
+| **2** | 1.2099 / 79 | 1.2021 / 79 | 1.1973 / 80 | 1.1955 / 79 | 1.1947 / 78 | 1.1947 / 81 |
+| **4** | 1.2091 / 71 | 1.2013 / 74 | 1.1965 / 73 | 1.1947 / 73 | 1.1939 / 73 | 1.1938 / 75 |
+| **8** | 1.2092 / 67 | 1.2013 / 68 | 1.1964 / 66 | 1.1946 / 67 | 1.1938 / 66 | 1.1937 / 69 |
 
-A second run of the same grid was shifted up by about 0.0025 in every cell, so compare cells within one run.
+- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0008 nats; to 36 tokens about 0.0026; to 20 tokens about 0.0074.
+- k=1 costs about 0.011 nats versus k=2. k=4 and k=8 gain only about 0.001 over k=2 while decoding about 7% and 15% slower here, so k=2 is the sweet spot for this small model. (With `top_p=0.9` the grid had the same shape; there the cap may not bind for k>=4.)
+- At equal cache size, spending budget on k beats spending it on W: (k=2, W=16) is better than (k=1, W=64) with a smaller cache.
+- tok/s is dominated by Python overhead at this model size and is only indicative; the batched CUDA benchmark in section 6 is the speed reference.
 
-**Observations:**
-- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0007 nats; to 36 tokens (W=32) about 0.0024; to 20 tokens (W=16) about 0.008.
-- k=1 costs about 0.010 nats versus k=2. k=2, 4 and 8 are within 0.0005 of each other. With `top_p = 0.9` the router may already keep fewer experts than the cap, so the cap may not bind for k>=4; see "Open question".
-- Spending budget on k is worth more than on W: (k=2, W=16) beats (k=1, W=64) with a smaller cache.
-- Decode tok/s was flat (about 75-83) because this small model is dominated by Python overhead, so no speed claim is made here.
+**Limitations:** one seed per configuration, sequence length 256, small models, byte-level tokens. At this length the model barely uses long context, so the saving is nearly free; nothing is shown yet for long sequences.
 
-**Open question:** rerun with `--top_p 0.999` to check whether the k cap actually binds at k=4 and k=8.  
-**Limitations:** single seed per configuration, sequence length only 256.
+### 4. Elastic training vs fixed training in a low-data regime
 
-### Measured speed (CUDA, batch 32x128; ratio vs using all experts)
+Setup: BPE vocab 16000 trained on the train split, 1.48M train tokens (8 MB of Vietnamese Wikipedia, split by random line), 32 experts, 4 layers, d=128, sequence 128, batch 32, 3000 steps (about 8 passes over the data), `top_p=0.999` so the cap binds. All numbers are val loss on the same 40 batches (81,920 tokens). Elastic models were trained with a random per-token k in {1,2} (`tokenk.py`); fixed models were trained and run at one k (`schedule_train.py`, one seed).
+
+| Model | k=1 | k=2 | k=4 |
+|---|---|---|---|
+| Fixed, trained at that k (seed 0) | 4.6575 | 4.7058 | 4.8201 |
+| Elastic, forced k at eval (seed 0 / 1 / 2) | 4.6613 / 4.6491 / 4.6463 | 4.6236 / 4.6120 / 4.6122 | not trained |
+
+- With fixed training, more active experts is worse here: k=4 is 0.16 nats worse than k=1. In the elastic runs the last-step training loss was about 3.0 to 3.3 against a validation loss above 4.6, so this regime is data-limited and likely overfit; the training loss of the fixed models was not logged.
+- The elastic model at k=2 is 0.08 nats better than fixed k=2 and 0.03 to 0.05 nats better than the best fixed model (k=1).
+- Likely explanation (not tested): random k acts like dropout over experts, which helps when data is small. Not yet done: a fixed-k baseline with dropout or early stopping, and fixed-k seeds beyond one. With 7.5M tokens (section 1) the elastic and fixed models were equal within 0.0015 nats.
+
+Practical reading: with limited data, training with random k is a cheap way to get a model that is at least as good as fixed-k training and can be run at any k afterwards.
+
+### 5. Does allocating k smartly beat a fixed k?
+
+Same BPE setup as section 4. Cost is the average number of routed experts per token per layer (shared expert and attention not counted). Because these experiments use elastic-trained models, they measure how an elastic model uses its experts; section 4 shows that in this low-data regime a fixed-trained k=2 model is not better than k=1.
+
+**5.1 Token-level estimate (`headroom.py`).** Train one elastic model, measure every token's loss at k=1 and at a higher k, then pick which tokens get the higher k under a budget (random, entropy of the k=1 output, small MLPs on early or late hidden states, or a token-frequency rule). This is an estimate at the token level and ignores effects through attention.
+
+- k=1 versus k=4 (gain 0.103 nats): at the same average cost a single fixed k beats any allocation between k=1 and k=4. At cost 2, fixed k=2 recovers 83% of the gain versus 33% (random), 38% (entropy) and 44% to 56% (learned predictors). At cost 3, fixed k=3 recovers 97% versus 66% to 84%.
+- k=1 versus k=2 (gain 0.063 nats): share of the k=2 gain recovered when a fraction f of tokens gets k=2:
+
+| f | random | entropy | rare | common | learn_emb | learn_l1 | learn_fin |
+|---|---|---|---|---|---|---|---|
+| 0.1 | 9% | 10% | 19% | 4% | 17% | 16% | 25% |
+| 0.25 | 26% | 26% | 36% | 15% | 35% | 38% | 45% |
+| 0.5 | 50% | 54% | 64% | 36% | 64% | 65% | 72% |
+| 0.75 | 76% | 83% | 85% | 64% | 88% | 86% | 88% |
+
+`rare` (upgrade the rarest token types, a lookup in train token counts) matches a learned predictor on the input embedding (`learn_emb`) at no cost. The entropy rule needs the whole k=1 pass first, so it costs 1 + 2f rather than 1 + f.
+
+**5.2 Per-token rule inside the layers (`tokenk.py`).** A per-token k is passed to every MoE layer (`set_k_cap(model, tensor)`). The model is trained with random per-token k in {1,2}; `rare - random` at the same fraction f of tokens upgraded to k=2 (negative = rare is better, nats). Total k=1 to k=2 gain in these models is 0.034 to 0.042 nats.
+
+| seed | f=0.25 | f=0.5 | f=0.75 |
+|---|---|---|---|
+| 0 | -0.0061 | -0.0069 | -0.0044 |
+| 1 | -0.0075 | -0.0051 | -0.0056 |
+| 2 | -0.0043 | -0.0062 | -0.0065 |
+| 0, trained with the rare rule | -0.0122 | -0.0101 | -0.0079 |
+
+The opposite rule (upgrade the most common tokens) is worse than random every time (about +0.005 to +0.006), so the effect is not noise. It is small (about 0.006 nats) and only fills the cost range between k=1 and k=2, which fixed top-k cannot reach because k is an integer.
+
+**5.3 Per-layer k: not confirmed by training from scratch.** One elastic model trained with k drawn independently per layer from {1,2,4}, scanning all 81 schedules (`layerk.py`, chosen on validation half A, reported on half B), suggested that early layers do not need a large k. For example schedule (1,1,2,4) beat uniform k=2 by 0.010 to 0.011 nats at the same cost on both seeds. Training each schedule from scratch (`schedule_train.py`, seed 0) does **not** reproduce this:
+
+| k per layer | cost | val loss | train s | vs uniform k=2 |
+|---|---|---|---|---|
+| (1,1,1,1) | 1.0 | 4.6575 | 283 | -0.0483 |
+| (2,2,2,2) | 2.0 | 4.7058 | 289 | 0 |
+| (4,4,4,4) | 4.0 | 4.8201 | 327 | +0.1143 |
+| (1,1,2,2) | 1.5 | 4.6634 | 286 | -0.0425 |
+| (1,1,2,4) | 2.0 | 4.7214 | 294 | +0.0155 |
+| (1,1,4,4) | 2.5 | 4.7509 | 296 | +0.0451 |
+| (4,2,1,1) | 2.0 | 4.6873 | 306 | -0.0186 |
+
+The schedule that looked best on the elastic model is worse than uniform k=2, and the reversed control (4,2,1,1) is better. What an elastic model does with each layer's experts is not a guide to which schedule to train. A fixed per-layer k was also worse than uniform k in the first experiment above, so per-layer schedules are not recommended.
+
+**Conclusion of this section.** A single fixed k remains the baseline to beat. The effects found are small (about 0.01 nats or less) and limited to costs between k=1 and k=2. The robust result is elastic training itself (sections 1 and 4).
+
+### 6. Measured speed (CUDA, batch 32x128; ratio vs using all experts)
 
 | Experts | k | inference | train |
 |---|---|---|---|
 | 8 | 1 / 2 / 4 | 0.42x / 0.48x / 0.66x | 0.43x / 0.50x / 0.66x |
 | 32 | 1 / 8 / 16 | 0.43x / 0.48x / 0.62x | 0.18x / 0.36x / 0.56x |
 
-Using fewer experts is faster in practice, but not proportionally at inference (32 experts, k=1 is 0.43x, not 1/32). Fixed per-step overhead (attention, embedding, dispatch) dominates at small k.
+Using fewer experts is faster in practice, but not proportionally at inference (32 experts, k=1 is 0.43x, not 1/32). Fixed per-step overhead (attention, embedding, dispatch) dominates at small k. In the 4-layer BPE runs above, wall-clock training time hardly depended on k (283 s at k=1, 289 s at k=2, 327 s at k=4), so compute savings should not be assumed at that size.
 
 ## Benchmark
 
