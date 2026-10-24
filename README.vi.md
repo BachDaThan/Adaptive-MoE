@@ -128,6 +128,100 @@ Script train LM nhỏ (tokenize theo âm tiết) rồi in val loss, số expert 
 
 Tùy chọn: `--ste` (gradient chảy vào ranh giới chọn expert) và `--diff_head` (router có đầu dự đoán độ khó của token, huấn luyện bằng loss thật, rồi đặt `top_p` theo từng token trong `[p_min, p_max]`). `--mode random` chạy đối chứng k ngẫu nhiên theo token, `--no_renorm` giữ nguyên xác suất gate (kiểu Switch) để top-1 vẫn có gradient cho router.
 
+## Các thực nghiệm về ngân sách co giãn (k, bộ nhớ đệm KV, cửa sổ ngữ cảnh)
+
+Tất cả các lượt chạy dưới đây đều sử dụng cấu hình 1 seed duy nhất. Nhiễu kết quả giữa các lần chạy trên cùng một seed (do tính bất định cấu trúc của GPU) rơi vào khoảng 0.002-0.003 nat, vì vậy chỉ nên so sánh đối chiếu dữ liệu giữa các ô trong cùng một bảng hoặc cùng một lượt chạy. Các câu lệnh chi tiết có trong phần `--help` của mã nguồn script.
+
+### 1. Elastic k: Huấn luyện một lần với k ngẫu nhiên, tùy chọn k khi suy luận
+
+Cấu hình 8 expert/layer, 19.3M tham số, tập dữ liệu 7.5M token, chạy 3000 steps. Kết quả giá trị val loss khi ép mức k cố định lúc suy luận:
+
+| k | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| Elastic (được train với k~U{1..4}) | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
+| Fixed k=3 / fixed k=4 (được train cố định) | | | 4.0720 | 4.0727 |
+
+Mô hình elastic duy nhất này chỉ lệch khoảng 0.0015 nat so với các mô hình fixed-k độc lập. Nếu đánh giá bằng k ngẫu nhiên (thay vì ép một mức k cố định), giá trị đạt 4.0817; do đó việc ép một mức k cụ thể lúc suy luận mang lại hiệu quả tối ưu hơn.
+
+Cấu hình 32 expert/layer, 19.4M tham số, tập dữ liệu nhỏ 1.98M token (bị hiện tượng quá khớp - overfit rất nặng), 3000 steps, huấn luyện với k~U{1..16}:
+
+| k | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| Elastic, ép k cố định | 4.4088 | 4.3110 | 4.2762 | 4.2628 | 4.2593 |
+| Fixed k=4 / k=8 | | | 4.2873 | 4.2908 | |
+
+Trong trường hợp này, mô hình elastic cho kết quả tốt hơn mô hình fixed-k ở cùng cấu hình mức tính toán (giảm được 0.011 nat ở k=4 và 0.028 nat ở k=8). Với lượng dữ liệu ít như vậy, cơ chế k ngẫu nhiên nhiều khả năng đóng vai trò như một bộ điều hòa tính toán (regularizer). Khi test trên tập dữ liệu lớn hơn ở cấu hình 8 expert thì không thấy hiệu ứng này nữa, vì thế kết quả này không nên được hiểu là "elastic sẽ luôn đánh bại fixed" trên mọi bài toán. Chất lượng mô hình có xu hướng đi ngang từ mức k>=8, và cấu hình k=1 bị giảm mất 0.15 nat so với k=8.
+
+### 2. Bộ nhớ đệm KV cache cho quá trình tạo văn bản (`elastic_kv.py`)
+
+Cơ chế incremental decoding (giải mã tăng trưởng từng bước) có sử dụng cache cho kết quả khớp hoàn toàn so với việc tính toán lại toàn bộ chuỗi từ đầu: độ lệch logit lớn nhất nhỏ hơn 1e-6 tại các mức k = 1, 2, 4, 8, đồng thời quá trình tạo chuỗi theo thuật toán tham lam (greedy generation) cho ra các id token trùng khớp tuyệt đối. Đối với cơ chế cascade dựa trên độ tự tin, các token cũ đã lưu trong cache sẽ giữ nguyên mức k mà chúng được tính toán trước đó, do đó đầu ra của cascade theo thiết kế sẽ không trùng khớp hoàn toàn với việc chạy lại từ đầu toàn bộ chuỗi ở duy nhất một mức k.
+
+### 3. Cửa sổ ngữ cảnh co giãn (`elastic_ctx.py`)
+
+Một token ở vị trí $i$ sẽ chỉ chú ý (attend) đến các vị trí $j$ thỏa mãn `j < sink` hoặc `i - j < W` (với cấu hình cố định `sink = 4`). Khi suy luận, KV cache chỉ lưu lại tối đa `sink + W` token, mang lại kết quả đầu ra trùng khớp tuyệt đối so với việc chạy lại toàn bộ chuỗi với cùng một mặt nạ (được xác thực thông qua lệnh tự kiểm tra `--selftest`). Cấu hình: byte-level LM, 3.9M tham số, 8 experts, độ dài chuỗi 256, 8 MB dữ liệu lấy từ tiếng Việt Wikipedia (`wikimedia/wikipedia`, `20231101.vi`), chạy 3000 steps, cấu hình cố định k=2.
+
+Chỉ co giãn cửa sổ ngữ cảnh, ép W lúc suy luận:
+
+| Cách huấn luyện | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
+|---|---|---|---|---|---|---|
+| Ngữ cảnh đầy đủ (Full context) | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
+| W ngẫu nhiên theo từng mẫu | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
+
+Chiến lược huấn luyện với W ngẫu nhiên hỗ trợ cải thiện chất lượng mạnh nhất ở các mức W nhỏ (giảm khoảng 0.02 nat ở W=8, và 0.01 nat ở W=16) và không làm mất đi độ chính xác khi chạy ở cấu hình toàn ngữ cảnh đầy đủ.
+
+Đồng thời co giãn cả k và W (một mô hình duy nhất, k thuộc {1,2,4,8}, W thuộc {8..256}, sử dụng thiết lập `top_p=0.999` để giới hạn trần k có hiệu lực bắt buộc).  
+Mỗi ô đại diện cho: **val loss / tốc độ giải mã (tok/s)** khi dùng KV cache. Số lượng KV token được giữ lại tương ứng: 12 / 20 / 36 / 68 / 132 / 256.
+
+| k | W=8 | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|
+| **1** | 1.2215 / 79 | 1.2129 / 82 | 1.2083 / 81 | 1.2069 / 83 | 1.2059 / 81 | 1.2060 / 84 |
+| **2** | 1.2099 / 79 | 1.2021 / 79 | 1.1973 / 80 | 1.1955 / 79 | 1.1947 / 78 | 1.1947 / 81 |
+| **4** | 1.2091 / 71 | 1.2013 / 74 | 1.1965 / 73 | 1.1947 / 73 | 1.1939 / 73 | 1.1938 / 75 |
+| **8** | 1.2092 / 67 | 1.2013 / 68 | 1.1964 / 66 | 1.1946 / 67 | 1.1938 / 66 | 1.1937 / 69 |
+
+- Giảm bộ đệm từ 256 xuống còn 68 token (W=64) làm tốn thêm khoảng 0.0008 nat; xuống 36 token tốn khoảng 0.0026 nat; và xuống 20 token tốn khoảng 0.0074 nat.
+- Mức k=1 làm tốn thêm khoảng 0.011 nat so với k=2. Các mức k=4 và k=8 chỉ giúp cải thiện cực kỳ nhỏ khoảng 0.001 nat so với k=2 nhưng tốc độ giải mã lại chậm đi lần lượt khoảng 7% và 15%, do đó cấu hình k=2 chính là điểm cân bằng lý tưởng (sweet spot) cho mô hình kích thước nhỏ này.
+- Khi so sánh ở cùng một mức dung lượng cache lưu giữ, việc đầu tư tài nguyên computational budget cho expert ($k$) đem lại hiệu quả vượt trội hơn so với cửa sổ ngữ cảnh ($W$): Cấu hình (k=2, W=16) cho kết quả tối ưu hơn hẳn so với (k=1, W=64) dù kích thước bộ nhớ đệm cache nhỏ hơn.
+- Chỉ số tốc độ giải mã tok/s bị nghẽn phần lớn bởi các chi phí overhead xử lý của ngôn ngữ Python ở kích thước mô hình này nên các con số chỉ mang tính tham khảo sơ bộ; bảng benchmark CUDA dạng xử lý theo lô (batched) ở phía trên mới là tham chiếu chuẩn về tốc độ thực tế.
+
+**Hạn chế:** Thử nghiệm mới thực hiện trên cấu hình 1 seed duy nhất cho mỗi phân loại, độ dài chuỗi cố định ở mức 256, kích thước mô hình nhỏ và sử dụng mã hóa dạng byte-level token.
+
+### Phân bổ k theo từng token và từng layer (BPE 16000, 32 experts, 4 layers, d=128, seq 128)
+
+Cấu hình: 8 MB Wikipedia tiếng Việt, từ vựng BPE 16000 train trên tập train, chia train/val ngẫu nhiên theo dòng, 3000 steps, `top_p=0.999` để giới hạn trần k có hiệu lực. Scripts: `headroom.py`, `tokenk.py`, `layerk.py` (`tokenk.py` và `layerk.py` yêu cầu `adaptive_moe.py` >= 0.3.1, nơi `set_k_cap` chấp nhận cả tensor theo từng token). Chi phí (cost) là số lượng expert định tuyến trung bình cho mỗi token trên mỗi layer (chưa tính shared expert và attention).
+
+#### Quy tắc theo token: ưu tiên k=2 cho các token hiếm (tra bảng tần suất trước tính toán)
+
+Mô hình huấn luyện với k ngẫu nhiên trong {1,2} theo từng token; val loss khi ép k theo token, thử nghiệm trên 3 seeds. Giá trị `rare - random` tương ứng với cùng tỷ lệ f token được nâng cấp lên k=2 (số âm đồng nghĩa với việc ưu tiên token hiếm cho kết quả tốt hơn, đơn vị: nats):
+
+| seed | f=0.25 | f=0.5 | f=0.75 |
+|---|---|---|---|
+| 0 | -0.0061 | -0.0069 | -0.0044 |
+| 1 | -0.0075 | -0.0051 | -0.0056 |
+| 2 | -0.0043 | -0.0062 | -0.0065 |
+| 0, train trực tiếp với quy tắc token hiếm | -0.0122 | -0.0101 | -0.0079 |
+
+Quy tắc ngược lại (nâng cấp k=2 cho các token phổ biến nhất) luôn cho kết quả tệ hơn ngẫu nhiên (khoảng +0.005 đến +0.006 nat), chứng minh hiệu ứng này không phải do nhiễu. Tổng mức cải thiện từ k=1 lên k=2 ở các mô hình này rơi vào khoảng 0.034-0.042 nats, vì vậy lợi ích tuyệt đối khá nhỏ. Cách này giúp lấp đầy khoảng chi phí giữa k=1 và k=2 mà cơ chế fixed top-k không thể chạm tới.
+
+#### Quy tắc k theo layer: hiệu ứng tác động lớn hơn
+
+Một mô hình được huấn luyện với k được chọn độc lập theo từng layer từ {1,2,4} ở mỗi bước. Cả 81 lịch trình phân bổ (k1,k2,k3,k4) đều đã được đánh giá; lịch trình tối ưu nhất theo từng mức chi phí được chọn dựa trên nửa tập validation A và báo cáo val loss trên nửa tập B.
+
+Val loss trên nửa tập B (seed 0 / seed 1):
+
+| Cấu hình | cost | seed 0 | seed 1 |
+|---|---|---|---|
+| k=1 đồng đều | 1.0 | 4.7354 | 4.7081 |
+| k=2 đồng đều | 2.0 | 4.6880 | 4.6571 |
+| k=4 đồng đều | 4.0 | 4.6791 | 4.6519 |
+| lịch trình (1,1,2,2) | 1.5 | 4.6856 | 4.6563 |
+| lịch trình (1,1,2,4) | 2.0 | 4.6771 | 4.6470 |
+| lịch trình (1,1,4,4) | 2.5 | 4.6691 | 4.6426 |
+
+Ở mức chi phí cost = 2.0, lịch trình phân bổ tốt nhất vượt trội hơn k=2 đồng đều khoảng 0.011 / 0.010 nats, và lịch trình (1,1,4,4) ở chi phí 2.5 đánh bại k=4 đồng đều ở chi phí 4.0 khoảng 0.010 / 0.009 nats. Loss trung bình theo k ở mỗi layer (tập A, seed 0): Layer 0 và 1 gần như đi ngang hoặc tệ hơn nhẹ khi tăng k (4.6186 / 4.6198 / 4.6274 và 4.6197 / 4.6207 / 4.6254 tương ứng với k = 1 / 2 / 4), trong khi Layer 2 và 3 cải thiện rất mạnh (4.6415 / 4.6160 / 4.6083 và 4.6436 / 4.6154 / 4.6067). Seed 1 cho ra xu hướng hoàn toàn tương tự.
+
+Hạn chế: Mới chỉ đánh giá (eval-only) trên một mô hình elastic duy nhất cho mỗi seed, mô hình nhỏ 4 layers, chạy trên 2 seeds. Cần được kiểm chứng thêm bằng cách train từng lịch trình từ đầu (`schedule_train.py`), và chưa rõ mô hình sâu hơn có giữ nguyên quy luật này hay không.
+
 ## Kết quả thí nghiệm (trạng thái: thử nghiệm)
 
 Thiết lập: LM 19M tham số, 4 layer, 8 expert/layer, tokenize theo âm tiết, Wikipedia tiếng Việt (30M ký tự, ~7.5M token), 3000 bước. Fixed k=2 và adaptive `compute_coef=0` chạy 3 seed (trung bình, khoảng min–max), các cấu hình còn lại một seed. Val loss thấp hơn là tốt hơn.
