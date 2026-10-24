@@ -135,7 +135,9 @@ Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 
 | `tokenk.py`                                                                      | k theo từng token chạy thật trong các layer (cần `adaptive_moe.py` >= 0.3.1).                |
 | `layerk.py`                                                                      | Quét các lịch k theo layer trên một model elastic.                                           |
 | `schedule_train.py`                                                              | Train từng lịch k từ đầu (bước kiểm chứng cho `layerk.py`).                                  |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh` | Chạy trọn các script trên.                                                                   |
+| `regcheck.py`                                                                    | Đối chứng dừng sớm và regularize: fixed-k (+dropout, +weight decay) so với elastic (mục 4.2).  |
+| `summarize_reg.py`                                                               | Gộp log của `regcheck.py` (trung bình theo seed, so sánh theo cặp).                          |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh` | Chạy trọn các script trên.                                                |
 
 ```
 python elastic_ctx.py --selftest
@@ -143,6 +145,8 @@ python elastic_ctx.py --grid --top_p 0.999 --hf wikimedia/wikipedia --config 202
 python headroom.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --bpe --experts 32 --k_hi 2 --L 128
 bash run_tokenk.sh
 bash run_schedule.sh 0
+bash run_reg.sh 0         # mục 4.2, vòng 1 (~40 phút/seed)
+bash run_reg2.sh 0        # mục 4.2, vòng 2 (~40 phút/seed)
 ```
 
 ### 1. Elastic k: train một lần với k ngẫu nhiên, chọn k lúc suy luận
@@ -214,7 +218,7 @@ Thiết lập: BPE vocab 16000 huấn luyện trên tập train, 1.48M token tra
 - Ở bước cuối, train cố định với nhiều expert hoạt động hơn lại tệ hơn: k=4 tệ hơn k=1 tới 0.16 nat. Loss train ở bước cuối của các lần chạy elastic khoảng 3.0 đến 3.3 trong khi val loss trên 4.6, nên chế độ này thiếu dữ liệu và overfit. Mục 4.2 cho thấy phần lớn khoảng cách này là do overfit ở bước cuối.
 - Ở bước cuối, model elastic ở k=2 tốt hơn k=2 cố định 0.08 nat và tốt hơn model cố định tốt nhất (k=1) từ 0.03 đến 0.05 nat.
 
-**4.2 Đối chứng có dừng sớm và regularize (2 seed).** Mục 4.1 so elastic với model cố định không có dừng sớm hay regularize, nên chưa tách được "k ngẫu nhiên có ích" khỏi "chỉ là bớt overfit". Ở đây thêm baseline k cố định có dropout (`+drop`) và weight decay (`+wd`), cùng dữ liệu và thiết lập, seed 0 và 1, 3000 bước. `bestB` là val loss ở bước dừng sớm tốt nhất, `finalB` là val loss ở bước 3000, cả hai đo trên nửa B của tập val. Số là trung bình hai seed. Các số này không so trực tiếp được với 4.1 vì khác tập đánh giá. Model elastic ở đây không có dropout hay weight decay.
+**4.2 Đối chứng có dừng sớm và regularize (2 seed).** Mục 4.1 so elastic với model cố định không có dừng sớm hay regularize, nên chưa tách được "k ngẫu nhiên có ích" khỏi "chỉ là bớt overfit". Ở đây thêm baseline k cố định có dropout (`+drop`) và weight decay (`+wd`), cùng dữ liệu và thiết lập, seed 0 và 1, 3000 bước. Dropout 0.1 đặt trên embedding và đầu ra MoE của mỗi layer; `+wd` dùng weight decay 0.1 (các cấu hình khác 0.01, AdamW, lr 1e-3). Mỗi 250 bước đo val loss (20 batch) trên hai nửa độc lập của tập val: bước tốt nhất (dừng sớm) được chọn trên nửa A, `bestB` là loss nửa B tại bước đó, `finalB` là loss nửa B ở bước 3000. Model elastic ở đây, mỗi bước train, đưa một tỉ lệ f token ngẫu nhiên (f lấy từ {0, 0.25, 0.5, 0.75, 1}) lên k=2, phần còn lại k=1. Số là trung bình hai seed. Chạy bằng `run_reg.sh` (`regcheck.py`). Các số này không so trực tiếp được với 4.1 vì khác tập đánh giá. Model elastic ở đây không có dropout và không tăng weight decay.
 
 | Cấu hình      | bestB (dừng sớm) | finalB (bước 3000) | Bước tốt nhất (seed 0, 1) |
 |---------------|------------------|--------------------|---------------------------|
@@ -241,7 +245,7 @@ Chênh lệch `bestB` theo từng seed (số âm = vế trái tốt hơn):
 - **Dừng sớm và dropout đổi thứ tự của k.** Ở bước cuối, k=1 cố định hơn k=2 cố định (4.7113 so với 4.7722), nhưng ở bước dừng sớm k=2 hơn k=1 khoảng 0.034 nat (4.6045 so với 4.6390), và với dropout k=2 hơn k=1 khoảng 0.024 nat (4.5122 so với 4.5365). Vậy kết luận "nhiều expert hơn thì tệ hơn" ở 4.1 chủ yếu là overfit ở bước cuối. Chưa chạy lại k=4 với dừng sớm.
 - Các lần chạy có dropout đạt tốt nhất ở bước 3000 trong 3 trên 4 lần (một lần ở 2500) trong khi các cấu hình khác tốt nhất quanh bước 2000, nên 3000 bước có thể chưa đủ cho nhóm dropout. Chưa chạy dài hơn để kiểm tra.
 
-Rút ra thực tế: khi dữ liệu ít, train k ngẫu nhiên tốt hơn train k cố định không regularize, nhưng không thay được dropout hay weight decay, và k cố định có dropout thắng elastic ở cả k=1 và k=2. Lý do còn lại để dùng huấn luyện co giãn là một model chạy được ở nhiều k (mục 1), không phải là một regularizer tốt hơn dropout. Chưa làm: elastic kết hợp dropout (xem có cộng dồn không), k=4 với dừng sớm, chạy dài hơn cho nhóm dropout, thêm seed.
+Rút ra thực tế: khi dữ liệu ít, train k ngẫu nhiên tốt hơn train k cố định không regularize, nhưng không thay được dropout hay weight decay, và k cố định có dropout thắng elastic ở cả k=1 và k=2. Lý do còn lại để dùng huấn luyện co giãn là một model chạy được ở nhiều k (mục 1), không phải là một regularizer tốt hơn dropout. Đã có script nhưng chưa có kết quả (`run_reg2.sh`): elastic kết hợp dropout (xem có cộng dồn không), dropout 0.2, k=4 có dropout, lịch k theo layer có dropout. Chưa làm: chạy dài hơn cho nhóm dropout, thêm seed.
 
 ### 5. Phân bổ k thông minh có thắng một k cố định không?
 

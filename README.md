@@ -135,7 +135,9 @@ Run-to-run noise at the same seed (non-deterministic GPU) is about 0.002-0.003 n
 | `tokenk.py`                                                                      | Real per-token k running through the layers (needs `adaptive_moe.py` >= 0.3.1).                        |
 | `layerk.py`                                                                      | Sweeps per-layer k schedules on one elastic model.                                                     |
 | `schedule_train.py`                                                              | Trains each k schedule from scratch (the verification step for `layerk.py`).                           |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh` | Run the scripts above end to end.                                                                      |
+| `regcheck.py`                                                                    | Early-stopping and regularization control: fixed-k (+dropout, +weight decay) vs elastic (section 4.2). |
+| `summarize_reg.py`                                                               | Merges `regcheck.py` logs (mean over seeds, pairwise comparisons).                                     |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh` | Run the scripts above end to end.                                        |
 
 ```
 python elastic_ctx.py --selftest
@@ -143,6 +145,8 @@ python elastic_ctx.py --grid --top_p 0.999 --hf wikimedia/wikipedia --config 202
 python headroom.py --hf wikimedia/wikipedia --config 20231101.vi --field text --mb 8 --bpe --experts 32 --k_hi 2 --L 128
 bash run_tokenk.sh
 bash run_schedule.sh 0
+bash run_reg.sh 0         # section 4.2, round 1 (~40 min per seed)
+bash run_reg2.sh 0        # section 4.2, round 2 (~40 min per seed)
 ```
 
 ### 1. Elastic k: train once with random k, choose k at inference
@@ -214,7 +218,7 @@ Setup: BPE with vocab 16000 trained on the training split, 1.48M training tokens
 - At the final step, fixed training with more active experts is worse: k=4 is 0.16 nats worse than k=1. Final training loss of the elastic runs is about 3.0 to 3.3 while validation loss is above 4.6, so this regime is data-starved and overfits. Section 4.2 shows that most of this gap is final-step overfitting.
 - At the final step, the elastic model at k=2 beats fixed k=2 by 0.08 nats and beats the best fixed model (k=1) by 0.03 to 0.05 nats.
 
-**4.2 Control with early stopping and regularization (2 seeds).** Section 4.1 compares elastic against fixed models with no early stopping or regularization, so it cannot separate "random k helps" from "it just overfits less". Here we add fixed-k baselines with dropout (`+drop`) and weight decay (`+wd`), on the same data and setup, seeds 0 and 1, 3000 steps. `bestB` is the validation loss at the best early-stopping step and `finalB` is the validation loss at step 3000, both measured on half B of the validation set. Numbers are the mean of the two seeds. They are not directly comparable to 4.1 because the evaluation set differs. The elastic model here has no dropout or weight decay.
+**4.2 Control with early stopping and regularization (2 seeds).** Section 4.1 compares elastic against fixed models with no early stopping or regularization, so it cannot separate "random k helps" from "it just overfits less". Here we add fixed-k baselines with dropout (`+drop`) and weight decay (`+wd`), on the same data and setup, seeds 0 and 1, 3000 steps. Dropout is 0.1, applied to the embeddings and to the MoE output of every layer; `+wd` uses weight decay 0.1 (all other configurations 0.01, AdamW, lr 1e-3). Every 250 steps the validation loss (20 batches) is measured on two independent halves of the validation set: the best step (early stopping) is chosen on half A, `bestB` is the half-B loss at that step, and `finalB` is the half-B loss at step 3000. During training, the elastic model sends a random fraction f of tokens to k=2 each step (f drawn from {0, 0.25, 0.5, 0.75, 1}) and the rest use k=1. Numbers are the mean of the two seeds. Run with `run_reg.sh` (`regcheck.py`). These numbers are not directly comparable to 4.1 because the evaluation set differs. The elastic model here has no dropout and no extra weight decay.
 
 | Configuration | bestB (early stop) | finalB (step 3000) | Best step (seed 0, 1) |
 |---------------|--------------------|--------------------|-----------------------|
@@ -241,7 +245,7 @@ Per-seed `bestB` differences (negative = left side is better):
 - **Early stopping and dropout change the ordering of k.** At the final step, fixed k=1 beats fixed k=2 (4.7113 vs 4.7722), but at the early-stopping step k=2 beats k=1 by about 0.034 nats (4.6045 vs 4.6390), and with dropout k=2 beats k=1 by about 0.024 nats (4.5122 vs 4.5365). So the "more experts is worse" conclusion in 4.1 is mostly final-step overfitting. k=4 has not been re-run with early stopping.
 - The dropout runs reach their best at step 3000 in 3 of 4 runs (one at 2500), while the other configurations peak around step 2000, so 3000 steps may not be enough for the dropout group. Longer runs have not been tried to check this.
 
-Practical takeaway: when data is scarce, random-k training beats unregularized fixed-k training, but it does not replace dropout or weight decay, and fixed k with dropout beats elastic at both k=1 and k=2. The remaining reason to use elastic training is that one model runs at many k (section 1), not that it is a better regularizer than dropout. Not done yet: elastic combined with dropout (to see whether the effects add up), k=4 with early stopping, longer runs for the dropout group, more seeds.
+Practical takeaway: when data is scarce, random-k training beats unregularized fixed-k training, but it does not replace dropout or weight decay, and fixed k with dropout beats elastic at both k=1 and k=2. The remaining reason to use elastic training is that one model runs at many k (section 1), not that it is a better regularizer than dropout. Scripted but no results yet (`run_reg2.sh`): elastic combined with dropout (to see whether the effects add up), dropout 0.2, k=4 with dropout, per-layer k schedules with dropout. Not done yet: longer runs for the dropout group, more seeds.
 
 ### 5. Does smart k allocation beat a single fixed k?
 
