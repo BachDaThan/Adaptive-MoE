@@ -131,6 +131,100 @@ The script trains a small LM (syllable-level tokenization of Vietnamese Wikipedi
 
 Options: `--ste` (let task-loss gradients reach the expert-selection boundary) and `--diff_head` (the router predicts token difficulty, trained on the real token loss, then sets `top_p` per token within `[p_min, p_max]`). `--layer_k 1,2,2,3` sets a fixed k per layer. `--mode random` runs a random per-token k control, and `--no_renorm` keeps raw gate probabilities (Switch style) so top-1 routers still get a task gradient.
 
+## Elastic budget experiments (k, KV cache, context window)
+
+All runs below are single-seed. Run-to-run noise on the same seed (GPU nondeterminism) was about 0.002-0.003 nats, so only compare cells within one table or run. Commands are in the scripts' `--help`.
+
+### 1. Elastic k: train once with random k, choose k at inference
+
+8 experts/layer, 19.3M params, 7.5M-token corpus, 3000 steps. Validation loss with k forced at inference:
+
+| k | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| Elastic (trained with k~U{1..4}) | 4.1014 | 4.0765 | 4.0734 | 4.0739 |
+| Fixed k=3 / fixed k=4 (trained at that k) | | | 4.0720 | 4.0727 |
+
+One elastic model is within about 0.0015 nats of the fixed-k models. Evaluating with random k (instead of forcing one k) gave 4.0817, so forcing a single k at inference is better.
+
+32 experts/layer, 19.4M params, smaller 1.98M-token corpus (so heavily overfit), 3000 steps, train k~U{1..16}:
+
+| k | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| Elastic, forced k | 4.4088 | 4.3110 | 4.2762 | 4.2628 | 4.2593 |
+| Fixed k=4 / k=8 | | | 4.2873 | 4.2908 | |
+
+Here the elastic model is better than fixed-k at the same k (by 0.011 at k=4 and 0.028 at k=8). With this little data random k probably acts as a regularizer, and the 8-expert run on more data shows no such gain, so this should not be read as "elastic beats fixed" in general. Quality is flat above k=8 and k=1 loses 0.15 nats versus k=8.
+
+### 2. KV cache for generation (`elastic_kv.py`)
+
+Cached incremental decoding matches full recomputation: max logit difference below 1e-6 at k = 1, 2, 4, 8, and greedy generation gives identical ids. With the confidence cascade, old cached tokens keep the k they were computed with, so cascade output is not identical to recomputing the whole sequence at one k (by design).
+
+### 3. Elastic context window (`elastic_ctx.py`)
+
+A token at position $i$ attends to positions $j$ with `j < sink` or `i - j < W` (sink = 4). At inference the KV cache keeps only `sink + W` tokens, and this gives outputs identical to re-running the whole sequence with the same mask (checked by `--selftest`). Setup: byte-level LM, 3.9M params, 8 experts, sequence length 256, 8 MB Vietnamese Wikipedia (`wikimedia/wikipedia`, `20231101.vi`), 3000 steps, k=2.
+
+Window only, W forced at inference:
+
+| Training | W=8 | 16 | 32 | 64 | 128 | 256 (full) |
+|---|---|---|---|---|---|---|
+| Full context | 1.2245 | 1.2059 | 1.1962 | 1.1913 | 1.1894 | 1.1890 |
+| Random W per sample | 1.2040 | 1.1955 | 1.1904 | 1.1883 | 1.1875 | 1.1876 |
+
+Random-W training helps most at small W (about 0.02 at W=8, 0.01 at W=16) and costs nothing at full context.
+
+Joint elastic k and W (one model, k in {1,2,4,8}, W in {8..256}, `top_p=0.999` so the k cap binds).  
+Each cell is **val loss / decode tok/s** with KV cache. KV tokens kept: 12 / 20 / 36 / 68 / 132 / 256.
+
+| k | W=8 | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|---|
+| **1** | 1.2215 / 79 | 1.2129 / 82 | 1.2083 / 81 | 1.2069 / 83 | 1.2059 / 81 | 1.2060 / 84 |
+| **2** | 1.2099 / 79 | 1.2021 / 79 | 1.1973 / 80 | 1.1955 / 79 | 1.1947 / 78 | 1.1947 / 81 |
+| **4** | 1.2091 / 71 | 1.2013 / 74 | 1.1965 / 73 | 1.1947 / 73 | 1.1939 / 73 | 1.1938 / 75 |
+| **8** | 1.2092 / 67 | 1.2013 / 68 | 1.1964 / 66 | 1.1946 / 67 | 1.1938 / 66 | 1.1937 / 69 |
+
+- Shrinking the cache from 256 to 68 tokens (W=64) costs about 0.0008 nats; to 36 tokens about 0.0026; to 20 tokens about 0.0074.
+- k=1 costs about 0.011 nats versus k=2. k=4 and k=8 gain only about 0.001 over k=2 while decoding about 7% and 15% slower here, so k=2 is the sweet spot for this small model.
+- At equal cache size, spending budget on k beats spending it on W: (k=2, W=16) is better than (k=1, W=64) with a smaller cache.
+- tok/s is dominated by Python overhead at this model size and is only indicative; the batched CUDA benchmark below is the speed reference.
+
+**Limitations:** one seed per configuration, sequence length 256, small models, byte-level tokens.
+
+### Per-token and per-layer k allocation (BPE 16000, 32 experts, 4 layers, d=128, seq 128)
+
+Setup: 8 MB Vietnamese Wikipedia, BPE vocab 16000 trained on the train split, train/val split by random line, 3000 steps, `top_p=0.999` so the k cap binds. Scripts: `headroom.py`, `tokenk.py`, `layerk.py` (`tokenk.py` and `layerk.py` need `adaptive_moe.py` >= 0.3.1, where `set_k_cap` also accepts a per-token tensor). Cost is the average number of routed experts per token per layer (shared expert and attention not counted).
+
+#### Per-token rule: give k=2 to rare tokens (a frequency lookup, decided before any computation)
+
+Model trained with random per-token k in {1,2}; val loss with k forced per token, 3 seeds. `rare - random` at the same fraction f of tokens upgraded to k=2 (negative = rare is better, nats):
+
+| seed | f=0.25 | f=0.5 | f=0.75 |
+|---|---|---|---|
+| 0 | -0.0061 | -0.0069 | -0.0044 |
+| 1 | -0.0075 | -0.0051 | -0.0056 |
+| 2 | -0.0043 | -0.0062 | -0.0065 |
+| 0, trained with the rare rule | -0.0122 | -0.0101 | -0.0079 |
+
+The opposite rule (upgrade the most common tokens) is worse than random every time (about +0.005 to +0.006), so the effect is not noise. Total k=1 to k=2 gain in these models is only 0.034-0.042 nats, so the absolute benefit is small. It fills the cost range between k=1 and k=2 that fixed top-k cannot reach.
+
+#### Per-layer k: the larger effect
+
+One model trained with k drawn independently per layer from {1,2,4} at every step. All 81 schedules (k1,k2,k3,k4) were evaluated; the best schedule per cost was chosen on validation half A and the loss is reported on half B.
+
+Val loss on half B (seed 0 / seed 1):
+
+| Setting | cost | seed 0 | seed 1 |
+|---|---|---|---|
+| uniform k=1 | 1.0 | 4.7354 | 4.7081 |
+| uniform k=2 | 2.0 | 4.6880 | 4.6571 |
+| uniform k=4 | 4.0 | 4.6791 | 4.6519 |
+| schedule (1,1,2,2) | 1.5 | 4.6856 | 4.6563 |
+| schedule (1,1,2,4) | 2.0 | 4.6771 | 4.6470 |
+| schedule (1,1,4,4) | 2.5 | 4.6691 | 4.6426 |
+
+At cost 2.0 the best schedule beats uniform k=2 by 0.011 / 0.010 nats, and (1,1,4,4) at cost 2.5 beats uniform k=4 at cost 4.0 by 0.010 / 0.009 nats. Average loss by k at each layer (half A, seed 0): layers 0 and 1 are flat or slightly worse with larger k (4.6186 / 4.6198 / 4.6274 and 4.6197 / 4.6207 / 4.6254 for k = 1 / 2 / 4), layers 2 and 3 improve strongly (4.6415 / 4.6160 / 4.6083 and 4.6436 / 4.6154 / 4.6067). Seed 1 shows the same pattern.
+
+Limits: eval-only on one elastic model per seed, 4 layers, small model, 2 seeds. Not yet confirmed by training each schedule from scratch (`schedule_train.py`), and unknown whether the pattern holds in deeper models.
+
 ## Experimental results
 
 Setup: 19M-parameter LM, 4 layers, 8 experts per layer, syllable-level tokenization, Vietnamese Wikipedia (30M characters, about 7.5M tokens), 3000 steps. Fixed k=2 and adaptive with `compute_coef=0` were run with 3 seeds (mean and min–max range); all other configurations used one seed. Lower validation loss is better.
