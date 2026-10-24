@@ -10,7 +10,7 @@ Anyone training an MoE model can swap their MoE layer for `AdaptiveMoE`.
 
 > **Status: experimental.** The mechanism works (the router learns token difficulty and uses more experts on harder tokens), but it does not beat simple baselines: adaptive routing was slightly worse than fixed top-k at equal budget in most settings, and in a low-budget setting it only matched a random per-token choice of k at the same average budget. See [Experimental results](#experimental-results-status-experimental).
 >
-> What does work is **elastic training**: training with a random k (and/or a random context window) gives one model that runs at any budget, with no loss when data is plentiful. When data is scarce it beats a plain fixed-k model; it loses to a fixed-k model with dropout if the elastic model has none, but elastic combined with dropout beats fixed-k with the same dropout by about 0.02 nats; once dropout is tuned for each, the gap is about 0.01 nats at k=2 (within noise) and 0.03 nats at k=1. See [Elastic training](#elastic-training-one-model-many-budgets).
+> What does work is **elastic training**: training with a random k (and/or a random context window) gives one model that runs at any budget, with no loss when data is plentiful. When data is scarce it beats a plain fixed-k model; it loses to a fixed-k model with dropout if the elastic model has none, but elastic combined with dropout beats fixed-k with the same dropout by about 0.02 nats; once dropout is tuned for each, elastic is still ahead by about 0.02 nats at k=2 (with longer training; within noise at 3000 steps) and 0.03 nats at k=1. See [Elastic training](#elastic-training-one-model-many-budgets).
 
 ## Install
 
@@ -119,7 +119,7 @@ Limitations: most configurations have a single seed, the model is small, trainin
 
 Summary of the experiments below (small model, short training; most configurations ran 1 to 3 seeds):
 
-- **Elastic k:** train with a random cap on the number of experts, then choose k at inference. With plentiful data, one elastic model is within about 0.0015 nats of separate fixed-k models. With scarce data it beats plain fixed-k training (about 0.03 to 0.04 nats at the early-stopping step, 0.08 nats at the final step) but loses to fixed-k with dropout by about 0.06 nats if the elastic model has no dropout; elastic combined with dropout beats fixed-k with the same dropout by about 0.02 nats; once dropout is tuned for each, the gap is about 0.01 nats at k=2 (within noise) and 0.03 nats at k=1 (section 4).
+- **Elastic k:** train with a random cap on the number of experts, then choose k at inference. With plentiful data, one elastic model is within about 0.0015 nats of separate fixed-k models. With scarce data it beats plain fixed-k training (about 0.03 to 0.04 nats at the early-stopping step, 0.08 nats at the final step) but loses to fixed-k with dropout by about 0.06 nats if the elastic model has no dropout; elastic combined with dropout beats fixed-k with the same dropout by about 0.02 nats; once dropout is tuned for each, elastic is still ahead by about 0.02 nats at k=2 (with longer training; within noise at 3000 steps) and 0.03 nats at k=1 (section 4).
 - **KV cache and context window:** generation with a KV cache matches re-running the whole sequence exactly; a sink + sliding window caps the cache at `sink + W` tokens with almost no quality loss (sections 2 and 3).
 - **Smarter k allocation does not beat a single fixed k at the same average cost.** There is only a small effect in the cost range between k=1 and k=2 (section 5). A per-layer k schedule that looked good on an elastic model **does not hold up** when trained from scratch, and it does not beat uniform k with dropout either (sections 5.3 and 4.2).
 
@@ -276,7 +276,7 @@ Per-seed `bestB` differences (negative = left side is better):
 - **Stronger dropout narrows the gap.** fixed-k2+drop2 (dropout 0.2) beats fixed-k2+drop by 0.020 nats and trails elastic+drop@k2 (dropout 0.1) by only 0.005 nats, with the same sign in both seeds but within noise. Round 3A below runs elastic with dropout 0.2 and 0.3 to answer this.
 - **k=4 is not clearly better than k=2.** fixed-k4+drop beats fixed-k2+drop by 0.008 nats at bestB but with opposite signs across the two seeds, and its finalB is worse (4.5307 vs 4.5168): it peaks at step 2500 and then rises again, i.e. overfitting returns when more experts are active.
 - **Per-layer k still does not beat uniform k, even with dropout.** At cost 2.0, (1,1,2,4) is 0.011 nats worse than uniform k=2 and (4,2,1,1) is 0.021 nats worse, with the same sign in both seeds. (1,1,2,2) (cost 1.5) reaches 4.5189, about 0.005 nats below the straight line between fixed-k1+drop (4.5365) and fixed-k2+drop (4.5122), which is negligible. (4,2,1,1) in particular, which beat uniform k=2 at the final step without regularization (section 5.3), is now the worst schedule.
-- Most dropout runs reach their best at step 2750 to 3000 (the end of training), so 3000 steps is still not enough for this group and the gaps may change with longer runs.
+- Most dropout runs reach their best at step 2750 to 3000 (the end of training), so 3000 steps is still not enough for this group and the gaps may change with longer runs (tested in round 3B).
 
 **Round 3A: dropout tuned for both (2 seeds).** `+drop3` is dropout 0.3. Elastic models are trained with dropout 0.2 and 0.3. Run with `run_reg3.sh A`. The table below merges earlier rounds; `bestB` is the mean of two seeds:
 
@@ -301,12 +301,40 @@ Per-seed `bestB` differences (negative = left side is better):
 | elastic+drop2@k2 − elastic+drop@k2  | +0.0082 | −0.0134 | −0.0026 |
 
 - **The best dropout differs between the two.** fixed-k2 is best at 0.2 (both 0.1 and 0.3 are worse). elastic@k2 is nearly flat between 0.1 and 0.2 (a difference of 0.003 with opposite signs across seeds) and clearly worse at 0.3. fixed-k1 is best at 0.1 among the values tried (0.2 is 0.025 nats worse), while elastic@k1 improves at 0.2.
-- **At k=2, once each side has tuned dropout, elastic and fixed are level.** 4.4844 (elastic, dropout 0.2) vs 4.4923 (fixed, dropout 0.2): ahead by 0.008 nats, but with opposite signs across the two seeds (+0.002 and −0.017), so they cannot be told apart. The 0.025-nat advantage at dropout 0.1 (round 2) mostly came from fixed k being under-regularized at that level.
+- **At k=2 and 3000 steps, once each side has tuned dropout, elastic and fixed are level (round 3B changes this).** 4.4844 (elastic, dropout 0.2) vs 4.4923 (fixed, dropout 0.2): ahead by 0.008 nats, but with opposite signs across the two seeds (+0.002 and −0.017), so they cannot be told apart. The 0.025-nat advantage at dropout 0.1 (round 2) mostly came from fixed k being under-regularized at that level.
 - **At k=1, elastic still wins clearly.** It beats fixed k by 0.054 nats at the same dropout of 0.2, and by 0.030 nats when comparing each side's best value tried (elastic 0.2, fixed 0.1), with the same sign in both seeds. A possible reason (untested): a fixed k=1 model has little capacity and does not tolerate strong dropout, while the k=1 pass of the elastic model shares weights trained at k=2.
 - **Dropout 0.3 is too strong for both**, and hurts elastic more (0.016 nats behind fixed at k=2).
 - One elastic model with dropout 0.2 gives 4.4844 at k=2 and 4.5070 at k=1: level with the best fixed-k2 model and better than the best fixed-k1 model, so one model serves both budgets with no quality loss. Every run in this round is best at step 3000, except one at 2750.
 
-Practical takeaway: when data is scarce, dropout is the much bigger lever (about 0.08 to 0.09 nats). Elastic training adds a small, budget-dependent gain on top: within noise at k=2 once dropout is tuned for both (0.008 nats, opposite signs across seeds) and about 0.03 nats at k=1. The best configuration measured is one elastic model with dropout 0.2: it matches the best fixed-k2 model and beats the best fixed-k1 model, so its main value is one model that serves many budgets (section 1), not a better regularizer than dropout. Scripted but no results yet (`run_reg3.sh B`): the dropout group trained for 6000 steps. Not done yet: elastic with k=4, intermediate dropout values (0.05 for k=1, 0.15), more seeds.
+**Round 3B: the dropout group trained for 6000 steps (2 seeds).** Same setup with `--steps 6000` (row names suffixed `-6k`), run with `run_reg3.sh B`. Evaluation is still every 250 steps, the best step is chosen on half A, and `finalB` is the loss at step 6000.
+
+| Configuration       | bestB (early stop) | finalB (step 6000) | Best step (seed 0, 1) |
+|---------------------|--------------------|--------------------|-----------------------|
+| elastic+drop2-6k@k2 | **4.4699**         | 4.5031             | 5000, 3750            |
+| elastic+drop-6k@k2  | 4.4854             | 4.6540             | 3000, 2750            |
+| fixed-k2+drop2-6k   | 4.4870             | 4.5520             | 4500, 3750            |
+| elastic+drop2-6k@k1 | 4.4956             | 4.5308             | 5000, 3750            |
+| fixed-k2+drop-6k    | 4.5068             | 4.7560             | 2750, 2500            |
+| elastic+drop-6k@k1  | 4.5122             | 4.6914             | 3000, 2750            |
+
+Per-seed `bestB` differences (negative = left side is better):
+
+| Comparison                                                  | seed 0  | seed 1  | mean    |
+|-------------------------------------------------------------|---------|---------|---------|
+| elastic+drop-6k@k2 − fixed-k2+drop-6k                       | −0.0225 | −0.0202 | −0.0213 |
+| elastic+drop2-6k@k2 − fixed-k2+drop2-6k                     | −0.0201 | −0.0143 | −0.0172 |
+| elastic+drop-6k@k2 − fixed-k2+drop2-6k                      | −0.0054 | +0.0021 | −0.0016 |
+| elastic+drop2-6k@k2 − elastic+drop2@k2 (6000 vs 3000 steps) | −0.0281 | −0.0009 | −0.0145 |
+| fixed-k2+drop2-6k − fixed-k2+drop2 (6000 vs 3000 steps)     | −0.0064 | −0.0040 | −0.0052 |
+
+- **Dropout 0.1 has converged by about 3000 steps.** The best step stays at 2500 to 3000 and bestB barely moves compared with the 3000-step runs (fixed 4.5122 → 4.5068, elastic 4.4870 → 4.4854). After that both overfit heavily (finalB 4.65 to 4.76).
+- **Dropout 0.2 benefits from longer training** (best steps 3750 to 5000), elastic more than fixed (4.4844 → 4.4699 vs 4.4923 → 4.4870). The elastic improvement comes mostly from seed 0 (0.028 vs 0.001 in seed 1), so it is not firmly established.
+- **At 6000 steps elastic beats fixed k at the same dropout in both seeds:** by about 0.021 nats at dropout 0.1 and 0.017 nats at dropout 0.2. At 3000 steps the gap at dropout 0.2 was only 0.008 nats with opposite signs across seeds, so the round 3A conclusion that the two are level at k=2 holds only at 3000 steps.
+- **Elastic degrades more slowly after its best step.** `finalB − bestB` at dropout 0.2 is 0.033 (elastic) vs 0.065 (fixed), and at dropout 0.1 it is 0.168 vs 0.249, smaller in both seeds. When early stopping is not available, elastic is the safer choice.
+- The k=1 mode of the best elastic model (4.4956) is only 0.009 nats behind a separately trained fixed k=2 model (4.4870) while using half as many routed experts.
+- Limits: 2 seeds, one elastic dropout-0.2 run still peaks at step 5000 (it may not be fully converged), and fixed k=1 has not been run at 6000 steps.
+
+Practical takeaway: when data is scarce, dropout is the much bigger lever (about 0.08 to 0.09 nats). Elastic training adds a smaller gain on top that survives dropout tuning: about 0.017 nats at k=2 with 6000 steps (same sign in both seeds; within noise at 3000 steps) and about 0.03 nats at k=1 (3000 steps), and it overfits more slowly after the best step. The best configuration measured is one elastic model with dropout 0.2 (4.4699 at k=2, 4.4956 at k=1). This is still a modest effect from 2 seeds on a small model, and the main practical value remains one model that serves many budgets (section 1). Not done yet: elastic with k=4, fixed k=1 at 6000 steps, intermediate dropout values (0.05 for k=1, 0.15), more seeds.
 
 ### 5. Does smart k allocation beat a single fixed k?
 
@@ -351,7 +379,7 @@ The opposite rule (escalating the most common tokens) is always worse than rando
 
 The schedule that looked best on the elastic model is worse than uniform k=2, while the reversed control (4,2,1,1) is better. How an elastic model uses experts per layer is not a basis for choosing which schedule to train. In the first experiment above, fixed per-layer k was also worse than uniform k, so per-layer k schedules are not recommended. Note: this table is measured at the final step in the data-scarce regime without regularization, where high k overfits. Re-run with dropout and early stopping (section 4.2, round 2), (1,1,2,4) is 0.011 nats worse than uniform k=2 and (4,2,1,1) is 0.021 nats worse, so the earlier advantage of (4,2,1,1) in the table above was an overfitting effect.
 
-**Conclusion of this section.** A single fixed k is still the baseline to beat. The effects found are small (about 0.01 nats or less) and only lie in the cost range between k=1 and k=2. The robust result is that elastic training gives one model that runs at many budgets without losing quality (section 1); its advantage when data is scarce is much smaller than that of dropout, but it stacks with dropout at equal dropout; once dropout is tuned for each, its gain is within noise at k=2 and about 0.03 nats at k=1 (section 4.2).
+**Conclusion of this section.** A single fixed k is still the baseline to beat. The effects found are small (about 0.01 nats or less) and only lie in the cost range between k=1 and k=2. The robust result is that elastic training gives one model that runs at many budgets without losing quality (section 1); its advantage when data is scarce is much smaller than that of dropout, but it stacks with dropout, and keeps a gain of about 0.02 nats at k=2 (6000 steps) and 0.03 nats at k=1 (3000 steps) once dropout is tuned for each (section 4.2).
 
 ### 6. Measured speed (CUDA, batch 32x128; ratio relative to using all experts)
 
