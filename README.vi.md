@@ -137,7 +137,7 @@ Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 
 | `schedule_train.py`                                                              | Train từng lịch k từ đầu (bước kiểm chứng cho `layerk.py`).                                  |
 | `regcheck.py`                                                                    | Đối chứng dừng sớm và regularize: fixed-k (+dropout, +weight decay) so với elastic (mục 4.2).  |
 | `summarize_reg.py`                                                               | Gộp log của `regcheck.py` (trung bình theo seed, so sánh theo cặp).                          |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh` | Chạy trọn các script trên.                                                |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh` | Chạy trọn các script trên.                                                |
 
 ```
 python elastic_ctx.py --selftest
@@ -147,6 +147,8 @@ bash run_tokenk.sh
 bash run_schedule.sh 0
 bash run_reg.sh 0         # mục 4.2, vòng 1 (~40 phút/seed)
 bash run_reg2.sh 0        # mục 4.2, vòng 2 (~40 phút/seed)
+bash run_reg3.sh A 0      # vòng 3A: dropout 0.2 và 0.3 cho elastic và fixed
+bash run_reg3.sh B 0      # vòng 3B: nhóm dropout chạy 6000 bước
 ```
 
 ### 1. Elastic k: train một lần với k ngẫu nhiên, chọn k lúc suy luận
@@ -276,7 +278,7 @@ Chênh lệch `bestB` theo từng seed (số âm = vế trái tốt hơn):
 - **k theo layer vẫn không thắng k đồng đều, kể cả có dropout.** Ở chi phí 2.0, (1,1,2,4) kém k=2 đồng đều 0.011 nat và (4,2,1,1) kém 0.021 nat, cùng dấu ở cả hai seed. (1,1,2,2) (chi phí 1.5) đạt 4.5189, thấp hơn đường thẳng nối fixed-k1+drop (4.5365) và fixed-k2+drop (4.5122) khoảng 0.005 nat, không đáng kể. Riêng (4,2,1,1), từng tốt hơn k=2 đồng đều ở bước cuối không regularize (mục 5.3), giờ là lịch tệ nhất.
 - Hầu hết lần chạy dropout đạt tốt nhất ở bước 2750 đến 3000 (cuối quá trình), nên 3000 bước vẫn chưa đủ cho nhóm này và các khoảng cách có thể đổi khi chạy dài hơn.
 
-Rút ra thực tế: khi dữ liệu ít, elastic và dropout bổ sung cho nhau. Dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat), còn elastic cộng thêm khoảng 0.02 nat ở cùng dropout; dropout 0.2 cho k cố định gần bắt kịp (kém 0.005). Elastic không thay được dropout, nhưng dùng cả hai là cấu hình tốt nhất đã đo, và vẫn có lợi ích gốc là một model chạy được ở nhiều k (mục 1). Chưa làm: elastic với dropout 0.2 trở lên để so công bằng, elastic với k=4, chạy dài hơn cho nhóm dropout, thêm seed.
+Rút ra thực tế: khi dữ liệu ít, elastic và dropout bổ sung cho nhau. Dropout là đòn bẩy lớn hơn nhiều (giúp khoảng 0.08 đến 0.09 nat), còn elastic cộng thêm khoảng 0.02 nat ở cùng dropout; dropout 0.2 cho k cố định gần bắt kịp (kém 0.005). Elastic không thay được dropout, nhưng dùng cả hai là cấu hình tốt nhất đã đo, và vẫn có lợi ích gốc là một model chạy được ở nhiều k (mục 1). Đã có script nhưng chưa có kết quả (`run_reg3.sh`): elastic với dropout 0.2 và 0.3, nhóm dropout chạy 6000 bước. Chưa làm: elastic với k=4, thêm seed.
 
 ### 5. Phân bổ k thông minh có thắng một k cố định không?
 

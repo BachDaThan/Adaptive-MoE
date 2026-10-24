@@ -2,7 +2,7 @@
 regcheck.py - elastic có thật sự hơn fixed khi dữ liệu ít, hay chỉ vì fixed bị overfit?
 Mỗi cấu hình train 3000 bước, đo val mỗi --eval_every bước trên 2 nửa val độc lập:
   chọn bước tốt nhất trên nửa A (= dừng sớm), báo loss nửa B tại bước đó (bestB) và ở bước cuối (finalB).
-Cấu hình: fixed-k1/k2/k4 (+drop = dropout 0.1, +drop2 = 0.2, +wd = weight decay 0.1), elastic (k ngẫu nhiên theo
+Cấu hình: fixed-k1/k2/k4 (+drop = dropout 0.1, +drop2 = 0.2, +drop3 = 0.3, +wd = weight decay 0.1), elastic (k ngẫu nhiên theo
 token trong {1,2}; báo ở k=1 và k=2), elastic+drop, và lịch k theo layer sched-* (cần --layers 4).
 Dropout đặt trên embedding và đầu ra MoE mỗi layer.
 Cần adaptive_moe.py 0.3.1, elastic_ctx.py, headroom.py, layerk.py cạnh file này.
@@ -24,7 +24,10 @@ CONFIGS = [("fixed-k1", 1, 0.0, 0.01), ("fixed-k1+drop", 1, 0.1, 0.01), ("fixed-
            # vòng 2: elastic có dropout, dropout mạnh hơn, k=4, và lịch k theo layer có dropout
            ("elastic+drop", None, 0.1, 0.01), ("fixed-k2+drop2", 2, 0.2, 0.01), ("fixed-k4+drop", 4, 0.1, 0.01),
            ("sched-1124+drop", (1, 1, 2, 4), 0.1, 0.01), ("sched-4211+drop", (4, 2, 1, 1), 0.1, 0.01),
-           ("sched-1122+drop", (1, 1, 2, 2), 0.1, 0.01)]
+           ("sched-1122+drop", (1, 1, 2, 2), 0.1, 0.01),
+           # vòng 3: dropout mạnh hơn cho cả elastic và fixed (+drop3 = 0.3)
+           ("elastic+drop2", None, 0.2, 0.01), ("elastic+drop3", None, 0.3, 0.01), ("fixed-k2+drop3", 2, 0.3, 0.01),
+           ("fixed-k1+drop2", 1, 0.2, 0.01)]
 
 
 def add_dropout(model, p):
@@ -38,6 +41,7 @@ def add_dropout(model, p):
 
 
 def run_one(name, k, drop, wd, train, vA, vB, vocab, args, device):
+    name = name + args.tag  # --tag -6k để tách hàng khi chạy 6000 bước
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     g = torch.Generator().manual_seed(1 + args.seed)
@@ -123,5 +127,6 @@ if __name__ == "__main__":
     ap.add_argument("--eval_every", type=int, default=250)
     ap.add_argument("--top_p", type=float, default=0.999)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--tag", default="", help="hậu tố gắn vào tên hàng kết quả, vd -6k khi --steps 6000")
     ap.add_argument("--only", default=None, help="tên cấu hình, cách nhau bằng dấu phẩy")
     main(ap.parse_args())

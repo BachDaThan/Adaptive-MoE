@@ -137,7 +137,7 @@ Run-to-run noise at the same seed (non-deterministic GPU) is about 0.002-0.003 n
 | `schedule_train.py`                                                              | Trains each k schedule from scratch (the verification step for `layerk.py`).                           |
 | `regcheck.py`                                                                    | Early-stopping and regularization control: fixed-k (+dropout, +weight decay) vs elastic (section 4.2). |
 | `summarize_reg.py`                                                               | Merges `regcheck.py` logs (mean over seeds, pairwise comparisons).                                     |
-| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh` | Run the scripts above end to end.                                        |
+| `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh` | Run the scripts above end to end.                                        |
 
 ```
 python elastic_ctx.py --selftest
@@ -147,6 +147,8 @@ bash run_tokenk.sh
 bash run_schedule.sh 0
 bash run_reg.sh 0         # section 4.2, round 1 (~40 min per seed)
 bash run_reg2.sh 0        # section 4.2, round 2 (~40 min per seed)
+bash run_reg3.sh A 0      # round 3A: dropout 0.2 and 0.3 for elastic and fixed
+bash run_reg3.sh B 0      # round 3B: dropout group trained for 6000 steps
 ```
 
 ### 1. Elastic k: train once with random k, choose k at inference
@@ -276,7 +278,7 @@ Per-seed `bestB` differences (negative = left side is better):
 - **Per-layer k still does not beat uniform k, even with dropout.** At cost 2.0, (1,1,2,4) is 0.011 nats worse than uniform k=2 and (4,2,1,1) is 0.021 nats worse, with the same sign in both seeds. (1,1,2,2) (cost 1.5) reaches 4.5189, about 0.005 nats below the straight line between fixed-k1+drop (4.5365) and fixed-k2+drop (4.5122), which is negligible. (4,2,1,1) in particular, which beat uniform k=2 at the final step without regularization (section 5.3), is now the worst schedule.
 - Most dropout runs reach their best at step 2750 to 3000 (the end of training), so 3000 steps is still not enough for this group and the gaps may change with longer runs.
 
-Practical takeaway: when data is scarce, elastic training and dropout complement each other. Dropout is the much bigger lever (about 0.08 to 0.09 nats), and elastic adds about 0.02 nats on top at the same dropout; dropout 0.2 lets fixed k almost catch up (0.005 behind). Elastic does not replace dropout, but using both is the best configuration measured, and it keeps its original benefit of one model that runs at many k (section 1). Not done yet: elastic with dropout 0.2 or higher for a fair comparison, elastic with k=4, longer runs for the dropout group, more seeds.
+Practical takeaway: when data is scarce, elastic training and dropout complement each other. Dropout is the much bigger lever (about 0.08 to 0.09 nats), and elastic adds about 0.02 nats on top at the same dropout; dropout 0.2 lets fixed k almost catch up (0.005 behind). Elastic does not replace dropout, but using both is the best configuration measured, and it keeps its original benefit of one model that runs at many k (section 1). Scripted but no results yet (`run_reg3.sh`): elastic with dropout 0.2 and 0.3, the dropout group trained for 6000 steps. Not done yet: elastic with k=4, more seeds.
 
 ### 5. Does smart k allocation beat a single fixed k?
 
