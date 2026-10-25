@@ -122,6 +122,7 @@ Tóm tắt các thí nghiệm bên dưới (model nhỏ, train ngắn; đa số 
 - **Elastic k:** train với trần số expert ngẫu nhiên rồi chọn k lúc suy luận. Khi dữ liệu dồi dào, một model elastic lệch khoảng 0.0015 nat so với các model fixed-k riêng. Khi dữ liệu ít, nó hơn train fixed-k thông thường (khoảng 0.03 đến 0.04 nat ở bước dừng sớm, 0.08 nat ở bước cuối) nhưng thua fixed-k có dropout khoảng 0.06 nat nếu bản elastic không có dropout; elastic kết hợp dropout lại hơn fixed-k cùng dropout khoảng 0.02 nat; khi mỗi bên được chỉnh dropout riêng, elastic vẫn hơn khoảng 0.013 nat ở k=2 khi train lâu hơn (6000 bước, cả 4 seed; ngang nhau ở 3000 bước) và khoảng 0.024 nat ở k=1 (mục 4).
 - **KV cache và cửa sổ ngữ cảnh:** sinh văn bản với KV cache khớp hoàn toàn với chạy lại cả chuỗi; cửa sổ sink + trượt chặn cache ở `sink + W` token mà gần như không mất chất lượng (mục 2 và 3).
 - **Phân bổ k thông minh hơn không thắng một k cố định ở cùng chi phí trung bình.** Chỉ có hiệu ứng nhỏ trong khoảng chi phí giữa k=1 và k=2 (mục 5). Lịch k theo layer từng có vẻ tốt trên model elastic **không đứng vững** khi train từ đầu, và cũng không thắng k đồng đều khi có dropout (mục 5.3 và 4.2).
+- **Nhiều ngôn ngữ trong một model (mục 7, 1 seed):** BPE byte-level 16k dùng chung chỉ làm tiếng Việt tốn thêm 3% token, và mức dùng expert của router khác nhau rõ rệt giữa tiếng Việt và tiếng Anh mà không ai giám sát.
 
 Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 0.002-0.003 nat, nên chỉ so sánh các ô trong cùng một bảng hoặc một lần chạy.
 
@@ -137,6 +138,7 @@ Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 
 | `schedule_train.py`                                                              | Train từng lịch k từ đầu (bước kiểm chứng cho `layerk.py`).                                  |
 | `regcheck.py`                                                                    | Đối chứng dừng sớm và regularize: fixed-k (+dropout, +weight decay) so với elastic (mục 4.2).  |
 | `summarize_reg.py`                                                               | Gộp log của `regcheck.py` (trung bình theo seed, so sánh theo cặp).                          |
+| `langcheck.py`                                                                   | Một BPE byte-level chung cho nhiều ngôn ngữ; đếm token, loss và mức dùng expert theo từng ngôn ngữ (mục 7). |
 | `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh`, `run_reg4.sh` | Chạy trọn các script trên.                                                |
 
 ```
@@ -150,6 +152,7 @@ bash run_reg2.sh 0        # mục 4.2, vòng 2 (~40 phút/seed)
 bash run_reg3.sh A 0      # vòng 3A: dropout 0.2 và 0.3 cho elastic và fixed
 bash run_reg3.sh B 0      # vòng 3B: nhóm dropout chạy 6000 bước
 bash run_reg4.sh B 2 3    # vòng 4B: seed 2 và 3 ở 6000 bước (xem đầu file để biết các phần A, C, D)
+python langcheck.py --langs vi,en   # mục 7: tokenizer chung, thống kê router theo ngôn ngữ
 ```
 
 ### 1. Elastic k: train một lần với k ngẫu nhiên, chọn k lúc suy luận
@@ -444,6 +447,40 @@ Lịch trông tốt nhất trên model elastic lại tệ hơn k=2 đồng đề
 | 32        | 1 / 8 / 16 | 0.43x / 0.48x / 0.62x | 0.18x / 0.36x / 0.56x |
 
 Dùng ít expert hơn thì nhanh hơn trong thực tế, nhưng không tỷ lệ thuận lúc suy luận (32 expert, k=1 đạt 0.43x chứ không phải 1/32). Chi phí cố định mỗi bước (attention, embedding, dispatch) chiếm tỷ trọng lớn khi k nhỏ. Trong các lần chạy BPE 4 layer ở trên, thời gian train thực tế gần như không phụ thuộc k (283 giây ở k=1, 289 giây ở k=2, 327 giây ở k=4), nên không nên mặc định là tiết kiệm được compute ở cỡ model đó.
+
+### 7. Một tokenizer chung cho nhiều ngôn ngữ (`langcheck.py`)
+
+Câu hỏi: một tokenizer nhỏ dùng chung cộng với router MoE có phục vụ được nhiều ngôn ngữ không? Thiết lập: Wikipedia tiếng Việt và tiếng Anh (`wikimedia/wikipedia`, 20231101), chỉ lấy bài dài ít nhất 1000 ký tự (bài ngắn phần lớn là bài rập khuôn, làm loss tiếng Việt vô nghĩa ở lần chạy đầu), khoảng 8 MB mỗi ngôn ngữ, chia theo bài (10% làm val). Một ByteLevel BPE (thư viện `tokenizers`, nên không có token ngoài từ điển) vocab 16000 train trên cả hai ngôn ngữ. Model như mục 4 (4 layer, d=128, 32 expert, chuỗi 128, dropout 0.2, 3000 bước), train trên cùng số token cho mỗi ngôn ngữ (1.63M mỗi bên). Hai biến thể, 1 seed: k cố định bằng 2, và k thích ứng (`top_p=0.7`, k tối đa 8, không phạt compute). Bước dừng sớm chọn trên nửa A của val từng ngôn ngữ, báo trên nửa B. Chạy bằng `python langcheck.py --langs vi,en`.
+
+Tokenize trên văn bản val: số token trên 100 ký tự (số token trên mỗi từ trong ngoặc).
+
+| Ngôn ngữ   | BPE chỉ Việt (16k) | BPE chung (16k) | Tokenizer Qwen2.5 (151k) |
+|------------|--------------------|-----------------|--------------------------|
+| Tiếng Việt | 28.7 (1.41)        | 29.5 (1.45)     | 32.6 (1.60)              |
+| Tiếng Anh  | 34.6 (2.18)        | 26.2 (1.65)     | 24.5 (1.54)              |
+
+Dùng chung làm tiếng Việt tốn thêm 3% token, còn tiếng Anh cần ít hơn 24% so với BPE chỉ Việt và chỉ kém tokenizer 151k của Qwen 7%; tiếng Việt cần ít hơn Qwen khoảng 10%. BPE byte-level chỉ train trên tiếng Việt tốn khoảng 2.2 token mỗi từ tiếng Anh: tệ hơn nhưng xa mức hàng chục token mỗi từ của tokenizer rơi về từng ký tự.
+
+Kết quả model (1 seed). Loss mỗi token và bit mỗi ký tự chỉ nên so trong cùng một ngôn ngữ, không so giữa các ngôn ngữ.
+
+| Ngôn ngữ   | k=2 cố định: loss/token | bit/ký tự | Thích ứng: loss/token | bit/ký tự | avg_k thích ứng theo layer (trung bình) |
+|------------|-------------------------|-----------|-----------------------|-----------|-----------------------------------------|
+| Tiếng Việt | 4.3992                  | 1.8711    | 4.3587                | 1.8539    | 6.64 4.78 4.62 3.44 (4.87)              |
+| Tiếng Anh  | 5.2137                  | 1.9756    | 5.1907                | 1.9669    | 6.15 4.42 3.62 2.81 (4.25)              |
+
+Mức dùng expert của router với k=2 cố định: độ phân kỳ Jensen-Shannon giữa phân phối tiếng Việt và tiếng Anh theo từng layer (tối đa là ln 2 = 0.693), kèm mức nhiễu (cùng một ngôn ngữ, hai nửa val).
+
+| Layer | Việt so với Anh | nhiễu (Việt A−B) | nhiễu (Anh A−B) |
+|-------|-----------------|------------------|-----------------|
+| 0     | 0.0083          | 0.0014           | 0.0003          |
+| 1     | 0.0855          | 0.0011           | 0.0006          |
+| 2     | 0.2709          | 0.0066           | 0.0016          |
+| 3     | 0.3639          | 0.0065           | 0.0008          |
+
+- **Router tự chuyên môn hoá theo ngôn ngữ mà không ai dạy.** Ở layer 1 đến 3, độ phân kỳ lớn gấp ít nhất 40 lần mức nhiễu, và ở layer cuối đạt khoảng một nửa giá trị tối đa; ở layer 0 là khoảng 6 lần mức nhiễu. Ở layer cuối một expert nhận 34% token tiếng Việt (expert 14) và một expert khác nhận 42% token tiếng Anh (expert 7). Lưu ý chưa kiểm chứng: một phần có thể chỉ vì hai ngôn ngữ dùng các token khác nhau (router nhìn embedding của token), chứ chưa hẳn là chuyên môn hoá ở mức ngôn ngữ.
+- **K thích ứng dành nhiều expert hơn cho tiếng Việt.** 4.87 so với 4.25 trung bình (nhiều hơn 13%), ở mọi layer và chênh nhiều nhất ở layer 2 (4.62 so với 3.62), dù loss mỗi token của tiếng Việt thấp hơn. Mới có một seed và chưa rõ lý do. Giá trị trung bình cao vì `top_p=0.7` với router còn phẳng chọn nhiều expert, nên không so được với ngân sách k=2 của các thí nghiệm elastic.
+- K thích ứng đạt loss thấp hơn k=2 cố định (0.04 nat ở tiếng Việt, 0.02 ở tiếng Anh) nhưng dùng nhiều expert hơn 2.1 đến 2.4 lần, nên không nói lên điều gì về hiệu quả.
+- Chưa làm: tiếng Trung (lần chạy đầu có tiếng Trung dùng mẫu tiếng Việt toàn bài ngắn rập khuôn, cần chạy lại với bộ lọc độ dài), thêm seed, và đối chứng cho việc router chỉ phân biệt theo token.
 
 ## Đo tốc độ
 
