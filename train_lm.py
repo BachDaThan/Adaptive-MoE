@@ -64,13 +64,17 @@ def hf_push(args, files):
     if not args.hf_repo:
         return
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, CommitOperationAdd
         api = HfApi()
-        api.create_repo(repo_id=args.hf_repo, repo_type=args.hf_type, private=True, exist_ok=True)
-        for fn in files:
-            p = os.path.join(args.out, fn)
-            if os.path.exists(p):
-                api.upload_file(path_or_fileobj=p, path_in_repo=fn, repo_id=args.hf_repo, repo_type=args.hf_type)
+        api.create_repo(repo_id=args.hf_repo, repo_type=args.hf_type, private=not args.hf_public, exist_ok=True)
+        ops = [CommitOperationAdd(path_in_repo=fn, path_or_fileobj=os.path.join(args.out, fn))
+               for fn in files if os.path.exists(os.path.join(args.out, fn))]
+        if ops:   # một commit duy nhất cho mọi file, ít lượt ghi hơn việc upload từng file
+            api.create_commit(repo_id=args.hf_repo, repo_type=args.hf_type, operations=ops, commit_message="checkpoint")
+            CTX["pushes"] = CTX.get("pushes", 0) + 1
+            if args.hf_squash and CTX["pushes"] % args.hf_squash == 0:   # xoá lịch sử cũ để không phình dung lượng (không hoàn tác được)
+                api.super_squash_history(repo_id=args.hf_repo, repo_type=args.hf_type)
+                print("[train] đã gộp lịch sử repo Hugging Face", flush=True)
         print(f"[train] đã đẩy {', '.join(files)} lên Hugging Face", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[train] LỖI đẩy lên Hugging Face: {str(e)[:100]}", flush=True)
@@ -375,7 +379,9 @@ if __name__ == "__main__":
     ap.add_argument("--aux", type=float, default=0.0, help="hệ số nhân cho loss phụ của router (cân bằng tải, z-loss); 0 = tắt")
     ap.add_argument("--hf_repo", default=None, help="vd BachDaThan/TrainAI: đồng bộ checkpoint với Hugging Face")
     ap.add_argument("--hf_type", default="dataset")
-    ap.add_argument("--hf_every", type=int, default=2000)
+    ap.add_argument("--hf_every", type=int, default=4000)
+    ap.add_argument("--hf_public", action="store_true", help="nếu phải tạo repo mới thì tạo công khai (mặc định riêng tư)")
+    ap.add_argument("--hf_squash", type=int, default=0, help="sau mỗi N lần đẩy thì gộp lịch sử repo (0 = tắt)")
     ap.add_argument("--generate", default=None, help="chế độ sinh văn bản từ best.pt với prompt này")
     ap.add_argument("--k", type=int, default=2)
     ap.add_argument("--max_new", type=int, default=100)
