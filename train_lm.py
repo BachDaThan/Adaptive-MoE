@@ -105,6 +105,34 @@ def read_hf(spec, mb, seed, min_chars):
     return docs
 
 
+def parse_upsample(spec):
+    """'yui=20,abc=5' -> {'yui': 20, 'abc': 5}: nhân bản bài train của ngôn ngữ nhỏ (chỉ train, không đụng val)."""
+    out = {}
+    for kv in (spec or "").split(","):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            out[k.strip()] = max(1, int(v))
+    return out
+
+
+def encode_chunked(tok, docs, chunk=5000):
+    """Gọi encode_docs theo từng cụm bài rồi nối lại: kết quả y hệt nhưng không giữ cả corpus dưới dạng list Python (nguyên nhân OOM, mã thoát -9)."""
+    parts = []
+    for i in range(0, len(docs), chunk):
+        parts.append(encode_docs(tok, docs[i:i + chunk]).int())
+    return torch.cat(parts) if parts else torch.zeros(0, dtype=torch.int32)
+
+
+def sample_docs(docs, max_chars):
+    out, n = [], 0
+    for d in docs:
+        out.append(d)
+        n += len(d)
+        if n >= max_chars:
+            break
+    return out
+
+
 def build_data(args):
     path = os.path.join(args.out, "data.pt")
     if os.path.exists(path):
@@ -114,6 +142,7 @@ def build_data(args):
     langs = args.langs.split(",")
     files = dict(kv.split("=", 1) for kv in args.text_files.split(",")) if args.text_files else {}
     tr_docs, va_docs = {}, {}
+    ups = parse_upsample(args.upsample)
     for lang in langs:
         if lang == "web" and args.hf_dataset:
             docs = read_hf(args.hf_dataset, args.hf_mb, args.seed, args.min_chars)
@@ -123,18 +152,38 @@ def build_data(args):
             docs = read_wiki(lang, args.mb, args.seed, args.min_chars)
         tr_docs[lang], va_docs[lang] = split_docs(docs, args.val_frac, args.seed)
         print(f"[train] {lang}: {len(tr_docs[lang])} bài train, {len(va_docs[lang])} bài val", flush=True)
-    tok = train_bpe([d for l in langs for d in tr_docs[l]], args.vocab)
-    tok.save(os.path.join(args.out, "tokenizer.json"))
-    ids = {l: encode_docs(tok, tr_docs[l]) for l in langs}
+        if lang in ups and ups[lang] > 1:
+            tr_docs[lang] = tr_docs[lang] * ups[lang]
+            print(f"[train] {lang}: nhân {ups[lang]} lần -> {len(tr_docs[lang])} bài train (val giữ nguyên)", flush=True)
+    del docs
+    tok_path = os.path.join(args.out, "tokenizer.json")
+    if os.path.exists(tok_path) and not args.new_tokenizer:
+        # QUAN TRỌNG: dùng lại tokenizer cũ để last.pt vẫn khớp. ByteLevel BPE không bao giờ OOV nên dùng cho dữ liệu mới vẫn được.
+        from tokenizers import Tokenizer
+        tok = Tokenizer.from_file(tok_path)
+        print(f"[train] dùng lại tokenizer có sẵn ({tok.get_vocab_size()} token), không train BPE mới", flush=True)
+    else:
+        if os.path.exists(os.path.join(args.out, "last.pt")):
+            raise SystemExit("[train] DỪNG: sắp train tokenizer mới nhưng --out đã có last.pt (train với tokenizer khác, id token sẽ lệch, "
+                             "resume là hỏng model). Dùng --out mới, hoặc xoá last.pt/best.pt nếu muốn train lại từ đầu.")
+        sample = [d for l in langs for d in sample_docs(tr_docs[l], int(args.bpe_mb * 1e6 / len(langs)))]
+        print(f"[train] train BPE trên {len(sample)} bài mẫu (--bpe_mb {args.bpe_mb})", flush=True)
+        tok = train_bpe(sample, args.vocab)
+        del sample
+        tok.save(tok_path)
+    ids = {l: encode_chunked(tok, tr_docs[l]) for l in langs}
+    del tr_docs
     if args.balance:
         n = min(len(v) for v in ids.values())
         ids = {l: v[:n] for l, v in ids.items()}
     train = torch.cat(list(ids.values()))
-    vals = {l: encode_docs(tok, va_docs[l]) for l in langs}
+    del ids
+    vals = {l: encode_chunked(tok, va_docs[l]) for l in langs}
     V = tok.get_vocab_size()
-    atomic_save({"train": train.int(), "val": {l: v.int() for l, v in vals.items()}, "vocab": V, "langs": langs}, path)
+    atomic_save({"train": train, "val": vals, "vocab": V, "langs": langs}, path)
+    CTX["data_built"] = True
     print(f"[train] {len(train)} token train, vocab {V}", flush=True)
-    return train, vals, V, langs
+    return train.long(), {l: v.long() for l, v in vals.items()}, V, langs
 
 
 # ---------------------------------------------------------------- model
@@ -251,7 +300,7 @@ def main(args):
             scaler.load_state_dict(ck["scaler"])
         step, best, bad = ck["step"], tuple(ck["best"]), ck["bad"]
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
-    hf_push(args, ["config.json", "tokenizer.json"] + (["data.pt"] if step == 0 else []))
+    hf_push(args, ["config.json", "tokenizer.json"] + (["data.pt"] if step == 0 or CTX.get("data_built") else []))
     if step >= args.steps:
         print(f"[train] last.pt đang ở bước {step} >= --steps {args.steps}, tức là đã train xong ({'val tốt nhất %.4f ở bước %d' % best}). "
               f"Muốn train tiếp thì tăng --steps (vd {2 * args.steps}); lịch learning rate sẽ co giãn theo --steps mới.", flush=True)
@@ -307,7 +356,9 @@ def main(args):
         if step % args.eval_every == 0 or step == args.steps:
             res = evaluate(model, vals, ks, args, device, state["amp"])
             show = "  ".join(f"k={k}: " + " ".join(f"{l} {v:.4f}" for l, v in res[k].items()) for k in ks)
-            sel = sum(res[args.select_k].values()) / len(res[args.select_k])
+            ups_ = parse_upsample(args.upsample)
+            sel_l = [l for l in res[args.select_k] if l not in ups_] or list(res[args.select_k])   # chọn best.pt theo vi/web, không theo tập nhỏ (nhiễu)
+            sel = sum(res[args.select_k][l] for l in sel_l) / len(sel_l)
             print(f"[train] ĐÁNH GIÁ bước {step}: {show}", flush=True)
             if args.fast_moe:
                 from fast_moe import load_report
@@ -346,6 +397,9 @@ if __name__ == "__main__":
     ap.add_argument("--hf_dataset", default=None, help="nguồn web thêm, dùng cùng --langs vi,web; vd HuggingFaceFW/fineweb-2:vie_Latn:text")
     ap.add_argument("--hf_mb", type=float, default=300)
     ap.add_argument("--val_frac", type=float, default=0.02)
+    ap.add_argument("--upsample", default="", help="nhân bản bài train của ngôn ngữ nhỏ, vd yui=20 (dùng với --text_files yui=duong_dan)")
+    ap.add_argument("--bpe_mb", type=float, default=150, help="chỉ lấy tối đa ngần này MB văn bản để train BPE (chống hết RAM)")
+    ap.add_argument("--new_tokenizer", action="store_true", help="ép train tokenizer mới (chỉ dùng khi --out mới, không có last.pt)")
     ap.add_argument("--vocab", type=int, default=16000)
     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
     ap.add_argument("--size", choices=list(PRESETS), default="small")
