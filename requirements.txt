@@ -1,0 +1,5 @@
+torch
+tokenizers
+gradio
+huggingface_hub
+datasets
