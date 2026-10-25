@@ -27,14 +27,14 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------- dữ liệu
-def read_wiki(lang, mb, seed):
+def read_wiki(lang, mb, seed, min_chars=1000):
     from datasets import load_dataset
     ds = load_dataset("wikimedia/wikipedia", f"20231101.{lang}", split="train", streaming=True)
     ds = ds.shuffle(seed=seed, buffer_size=5000)
     docs, size = [], 0
     for ex in ds:
         t = ex["text"].strip()
-        if len(t) < 200:
+        if len(t) < min_chars:
             continue
         docs.append(t)
         size += len(t.encode("utf-8"))
@@ -294,7 +294,7 @@ def main(args):
     files = dict(kv.split("=", 1) for kv in args.text_files.split(",")) if args.text_files else {}
     tr_docs, va_docs = {}, {}
     for lang in langs:
-        docs = read_file(files[lang], args.mb) if lang in files else read_wiki(lang, args.mb, args.seed)
+        docs = read_file(files[lang], args.mb) if lang in files else read_wiki(lang, args.mb, args.seed, args.min_chars)
         tr_docs[lang], va_docs[lang] = split_docs(docs, args.val_frac, args.seed)
         print(f"[langcheck] {lang}: {len(tr_docs[lang])} bài train, {len(va_docs[lang])} bài val", flush=True)
     joint = train_bpe([d for l in langs for d in tr_docs[l]], args.vocab)
@@ -326,6 +326,7 @@ if __name__ == "__main__":
     ap.add_argument("--langs", default="vi,en")
     ap.add_argument("--text_files", default=None, help="vi=duong_dan.txt,en=duong_dan.txt thay cho Wikipedia")
     ap.add_argument("--mb", type=float, default=8)
+    ap.add_argument("--min_chars", type=int, default=1000, help="bỏ bài ngắn hơn số ký tự này (bài stub rập khuôn làm loss quá thấp)")
     ap.add_argument("--val_frac", type=float, default=0.1)
     ap.add_argument("--vocab", type=int, default=16000)
     ap.add_argument("--ref_tokenizer", default="Qwen/Qwen2.5-0.5B")
