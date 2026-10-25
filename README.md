@@ -12,6 +12,17 @@ Anyone training an MoE model can swap their MoE layer for `AdaptiveMoE`.
 >
 > What does work is **elastic training**: training with a random k (and/or a random context window) gives one model that runs at any budget, with no loss when data is plentiful. When data is scarce it beats a plain fixed-k model; it loses to a fixed-k model with dropout if the elastic model has none, but elastic combined with dropout beats fixed-k with the same dropout by about 0.02 nats; once dropout is tuned for each, elastic is still ahead by about 0.013 nats at k=2 with longer training (6000 steps, all 4 seeds; a tie at 3000 steps) and by about 0.024 nats at k=1. See [Elastic training](#elastic-training-one-model-many-budgets).
 
+## Recommended recipe (what the experiments support)
+
+For training a small MoE language model on limited data and a free Colab T4. The evidence comes from models of about 20M parameters; larger sizes are not validated.
+
+1. **Train with elastic k, choose k at inference.** Each step, draw a fraction f from {0, 0.25, 0.5, 0.75, 1} of tokens to use k=2 and let the rest use k=1 (`set_k_cap(model, tensor)`). One model then serves both budgets. With plentiful data it matches separately trained fixed-k models; with scarce data it was better by about 0.013 nats at k=2 and 0.024 nats at k=1 (section 4.2).
+2. **Use dropout 0.15 to 0.2** on the embeddings and the MoE outputs when data is scarce. It is the biggest lever measured (about 0.08 nats); 0.3 is too much.
+3. **Keep the best checkpoint by validation loss.** Models overfit soon after 3000 steps at small data sizes.
+4. **A shared byte-level BPE** for several languages costs little (Vietnamese needs only 3% more tokens when English shares a 16k vocabulary, section 7).
+5. **Skip** adaptive top-p routing, per-layer k schedules and smart per-token k allocation: none of them beat a plain fixed k at equal budget (sections 5 and the experimental results).
+6. `train_lm.py` implements this recipe with fp16, gradient accumulation, checkpoints on Google Drive and automatic resume.
+
 ## Install
 
 ```
@@ -139,6 +150,7 @@ Run-to-run noise at the same seed (non-deterministic GPU) is about 0.002-0.003 n
 | `regcheck.py`                                                                    | Early-stopping and regularization control: fixed-k (+dropout, +weight decay) vs elastic (section 4.2). |
 | `summarize_reg.py`                                                               | Merges `regcheck.py` logs (mean over seeds, pairwise comparisons).                                     |
 | `langcheck.py`                                                                   | One shared byte-level BPE for several languages; per-language token counts, loss and router usage (section 7). |
+| `train_lm.py`                                                                    | Train a real MoE LM with the recipe above (elastic k, dropout, fp16, Drive checkpoints, resume, `--generate`). |
 | `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh`, `run_reg4.sh` | Run the scripts above end to end.                                        |
 
 ```
@@ -478,9 +490,30 @@ Router expert usage with fixed k=2: Jensen-Shannon divergence between the Vietna
 | 3     | 0.3639                | 0.0065                 | 0.0008              |
 
 - **The router specializes by language without supervision.** In layers 1 to 3 the divergence is at least 40 times the noise level and in the last layer it reaches about half of the maximum; in layer 0 it is about 6 times the noise. In the last layer one expert takes 34% of the Vietnamese tokens (expert 14) and a different one takes 42% of the English tokens (expert 7). A caveat that has not been tested: part of this may only reflect that the two languages use different tokens (the router sees token embeddings), not a deeper language-level specialization.
-- **Adaptive k spends more experts on Vietnamese.** 4.87 against 4.25 on average (13% more), in every layer and by the most in layer 2 (4.62 vs 3.62), even though the Vietnamese loss per token is lower. This is one seed and the reason is unknown. The averages are high because `top_p=0.7` with a flat router picks many experts, so they are not comparable with the k=2 budget of the elastic experiments.
+- **Adaptive k differs little between languages, and not stably.** With two languages Vietnamese got 4.87 experts against 4.25 for English (13% more); with Chinese added the gap shrank to 4.45 against 4.33 (3%), so there is no reliable language effect on k. The averages are high because `top_p=0.7` with a flat router picks many experts, so they are not comparable with the k=2 budget of the elastic experiments.
 - Adaptive k reaches a lower loss than fixed k=2 (by 0.04 nats in Vietnamese, 0.02 in English) but uses 2.1 to 2.4 times as many experts, so this says nothing about efficiency.
-- Not done yet: Chinese (a first run that included it used the stub-heavy Vietnamese sample and has to be repeated with the length filter), more seeds, and a control for token identity.
+Three languages (Vietnamese, English, Chinese; same setup, 1.71M tokens per language, 1 seed):
+
+| Language | Vietnamese-only BPE | Shared BPE (3 languages) | Qwen2.5 tokenizer |
+|----------|---------------------|--------------------------|-------------------|
+| Vietnamese | 28.7 (1.41)       | 30.5 (1.50)              | 32.6 (1.60)       |
+| English    | 34.6 (2.18)       | 28.3 (1.78)              | 24.5 (1.54)       |
+| Chinese    | 164.3             | 76.2                     | 72.7              |
+
+(Tokens per 100 characters; Chinese has no per-word figure.) Compared with the two-language tokenizer, adding Chinese costs Vietnamese 3% and English 8% more tokens, and Chinese ends within 5% of Qwen's tokenizer. The model pays too: bits per character rise from 1.8711 to 1.9667 in Vietnamese and from 1.9756 to 2.0657 in English (about 5% more), the cost of sharing capacity with a third language. Chinese reaches 6.43 bits per character, which is not comparable to the other two.
+
+Jensen-Shannon divergence of expert usage with fixed k=2 (noise in the last three columns):
+
+| Layer | vi–en  | vi–zh  | en–zh  | vi A−B | en A−B | zh A−B |
+|-------|--------|--------|--------|--------|--------|--------|
+| 0     | 0.0070 | 0.0111 | 0.0143 | 0.0014 | 0.0003 | 0.0003 |
+| 1     | 0.0998 | 0.1852 | 0.2256 | 0.0021 | 0.0005 | 0.0014 |
+| 2     | 0.2119 | 0.4710 | 0.4762 | 0.0057 | 0.0006 | 0.0018 |
+| 3     | 0.2566 | 0.4860 | 0.4322 | 0.0042 | 0.0012 | 0.0016 |
+
+The router separates all three languages (at least 35 times the noise in layers 2 and 3). Pairs that involve Chinese (0.43 to 0.49) are about twice as far apart as Vietnamese and English (0.21 to 0.26), so languages with a different script separate more, which fits the token-identity caveat above. In the last layer the top expert takes 35% of Vietnamese tokens (expert 7), 42% of English (expert 23) and 39% of Chinese (expert 27). With adaptive k the average number of experts is 4.45 for Vietnamese, 4.33 for English and 4.75 for Chinese, and the loss is 0.026 to 0.031 nats lower than fixed k=2 while using 2.2 to 2.4 times as many experts.
+
+- Not done yet: more seeds, and a control for token identity.
 
 ## Benchmark
 

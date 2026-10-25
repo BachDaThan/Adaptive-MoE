@@ -12,6 +12,17 @@ Ai train model MoE cũng có thể thay layer MoE của mình bằng `AdaptiveMo
 >
 > Điều có tác dụng thật là **huấn luyện co giãn**: train với k ngẫu nhiên (và/hoặc cửa sổ ngữ cảnh ngẫu nhiên) thì cùng một model chạy được ở mọi mức ngân sách, không mất gì khi dữ liệu dồi dào. Khi dữ liệu ít, nó tốt hơn train k cố định thông thường và thua k cố định có dropout nếu bản elastic không có dropout, nhưng elastic kết hợp dropout hơn k cố định cùng dropout khoảng 0.02 nat; khi mỗi bên được chỉnh dropout riêng, elastic vẫn hơn khoảng 0.013 nat ở k=2 khi train lâu hơn (6000 bước, cả 4 seed; ngang nhau ở 3000 bước) và khoảng 0.024 nat ở k=1. Xem [Huấn luyện co giãn](#huấn-luyện-co-giãn-một-model-nhiều-mức-ngân-sách).
 
+## Công thức khuyến nghị (những gì thí nghiệm ủng hộ)
+
+Dùng khi train LM MoE nhỏ với dữ liệu hạn chế trên Colab T4 miễn phí. Bằng chứng đến từ model khoảng 20M tham số; kích thước lớn hơn chưa được kiểm chứng.
+
+1. **Train với k elastic, chọn k lúc suy luận.** Mỗi bước, lấy một tỉ lệ f token trong {0, 0.25, 0.5, 0.75, 1} dùng k=2, phần còn lại dùng k=1 (`set_k_cap(model, tensor)`). Một model phục vụ được cả hai ngân sách. Khi dữ liệu dồi dào nó ngang các model k cố định train riêng; khi dữ liệu ít nó tốt hơn khoảng 0.013 nat ở k=2 và 0.024 nat ở k=1 (mục 4.2).
+2. **Dùng dropout 0.15 đến 0.2** trên embedding và đầu ra MoE khi dữ liệu ít. Đây là đòn bẩy lớn nhất đã đo (khoảng 0.08 nat); 0.3 là quá mạnh.
+3. **Giữ checkpoint tốt nhất theo val loss.** Với dữ liệu nhỏ, model overfit ngay sau khoảng 3000 bước.
+4. **Một BPE byte-level dùng chung** cho nhiều ngôn ngữ tốn rất ít (tiếng Việt chỉ cần thêm 3% token khi tiếng Anh dùng chung vocab 16k, mục 7).
+5. **Bỏ qua** router top-p thích ứng, lịch k theo layer và phân bổ k thông minh theo token: không cái nào thắng k cố định đơn giản ở cùng ngân sách (mục 5 và phần kết quả thí nghiệm).
+6. `train_lm.py` hiện thực công thức này với fp16, gradient accumulation, checkpoint trên Google Drive và tự tiếp tục khi bị ngắt.
+
 ## Cài
 
 ```
@@ -139,6 +150,7 @@ Nhiễu giữa các lần chạy cùng seed (GPU không tất định) khoảng 
 | `regcheck.py`                                                                    | Đối chứng dừng sớm và regularize: fixed-k (+dropout, +weight decay) so với elastic (mục 4.2).  |
 | `summarize_reg.py`                                                               | Gộp log của `regcheck.py` (trung bình theo seed, so sánh theo cặp).                          |
 | `langcheck.py`                                                                   | Một BPE byte-level chung cho nhiều ngôn ngữ; đếm token, loss và mức dùng expert theo từng ngôn ngữ (mục 7). |
+| `train_lm.py`                                                                    | Train LM MoE thật theo công thức trên (k elastic, dropout, fp16, checkpoint lên Drive, tự tiếp tục, `--generate`). |
 | `run_both.sh`, `run_ctx.sh`, `run_tokenk.sh`, `run_layerk.sh`, `run_schedule.sh`, `run_reg.sh`, `run_reg2.sh`, `run_reg3.sh`, `run_reg4.sh` | Chạy trọn các script trên.                                                |
 
 ```
@@ -478,9 +490,30 @@ Mức dùng expert của router với k=2 cố định: độ phân kỳ Jensen-
 | 3     | 0.3639          | 0.0065           | 0.0008          |
 
 - **Router tự chuyên môn hoá theo ngôn ngữ mà không ai dạy.** Ở layer 1 đến 3, độ phân kỳ lớn gấp ít nhất 40 lần mức nhiễu, và ở layer cuối đạt khoảng một nửa giá trị tối đa; ở layer 0 là khoảng 6 lần mức nhiễu. Ở layer cuối một expert nhận 34% token tiếng Việt (expert 14) và một expert khác nhận 42% token tiếng Anh (expert 7). Lưu ý chưa kiểm chứng: một phần có thể chỉ vì hai ngôn ngữ dùng các token khác nhau (router nhìn embedding của token), chứ chưa hẳn là chuyên môn hoá ở mức ngôn ngữ.
-- **K thích ứng dành nhiều expert hơn cho tiếng Việt.** 4.87 so với 4.25 trung bình (nhiều hơn 13%), ở mọi layer và chênh nhiều nhất ở layer 2 (4.62 so với 3.62), dù loss mỗi token của tiếng Việt thấp hơn. Mới có một seed và chưa rõ lý do. Giá trị trung bình cao vì `top_p=0.7` với router còn phẳng chọn nhiều expert, nên không so được với ngân sách k=2 của các thí nghiệm elastic.
+- **K thích ứng gần như không khác nhau giữa các ngôn ngữ, và không ổn định.** Với hai ngôn ngữ tiếng Việt nhận 4.87 expert so với 4.25 của tiếng Anh (nhiều hơn 13%); thêm tiếng Trung thì chênh lệch co lại còn 4.45 so với 4.33 (3%), nên không có hiệu ứng ngôn ngữ đáng tin lên k. Giá trị trung bình cao vì `top_p=0.7` với router còn phẳng chọn nhiều expert, nên không so được với ngân sách k=2 của các thí nghiệm elastic.
 - K thích ứng đạt loss thấp hơn k=2 cố định (0.04 nat ở tiếng Việt, 0.02 ở tiếng Anh) nhưng dùng nhiều expert hơn 2.1 đến 2.4 lần, nên không nói lên điều gì về hiệu quả.
-- Chưa làm: tiếng Trung (lần chạy đầu có tiếng Trung dùng mẫu tiếng Việt toàn bài ngắn rập khuôn, cần chạy lại với bộ lọc độ dài), thêm seed, và đối chứng cho việc router chỉ phân biệt theo token.
+Ba ngôn ngữ (Việt, Anh, Trung; cùng thiết lập, 1.71M token mỗi ngôn ngữ, 1 seed):
+
+| Ngôn ngữ   | BPE chỉ Việt | BPE chung (3 ngôn ngữ) | Tokenizer Qwen2.5 |
+|------------|--------------|------------------------|-------------------|
+| Tiếng Việt | 28.7 (1.41)  | 30.5 (1.50)            | 32.6 (1.60)       |
+| Tiếng Anh  | 34.6 (2.18)  | 28.3 (1.78)            | 24.5 (1.54)       |
+| Tiếng Trung | 164.3       | 76.2                   | 72.7              |
+
+(Số token trên 100 ký tự; tiếng Trung không có số token mỗi từ.) So với tokenizer hai ngôn ngữ, thêm tiếng Trung làm tiếng Việt tốn thêm 3% và tiếng Anh thêm 8% token, còn tiếng Trung chỉ kém tokenizer của Qwen 5%. Model cũng trả giá: bit mỗi ký tự tăng từ 1.8711 lên 1.9667 ở tiếng Việt và từ 1.9756 lên 2.0657 ở tiếng Anh (khoảng 5%), đó là cái giá của việc chia sẻ sức chứa với ngôn ngữ thứ ba. Tiếng Trung đạt 6.43 bit mỗi ký tự, không so được với hai ngôn ngữ kia.
+
+Độ phân kỳ Jensen-Shannon của mức dùng expert với k=2 cố định (ba cột cuối là mức nhiễu):
+
+| Layer | việt–anh | việt–trung | anh–trung | nhiễu việt | nhiễu anh | nhiễu trung |
+|-------|----------|------------|-----------|------------|-----------|-------------|
+| 0     | 0.0070   | 0.0111     | 0.0143    | 0.0014     | 0.0003    | 0.0003      |
+| 1     | 0.0998   | 0.1852     | 0.2256    | 0.0021     | 0.0005    | 0.0014      |
+| 2     | 0.2119   | 0.4710     | 0.4762    | 0.0057     | 0.0006    | 0.0018      |
+| 3     | 0.2566   | 0.4860     | 0.4322    | 0.0042     | 0.0012    | 0.0016      |
+
+Router tách được cả ba ngôn ngữ (gấp ít nhất 35 lần mức nhiễu ở layer 2 và 3). Các cặp có tiếng Trung (0.43 đến 0.49) cách xa nhau gấp đôi cặp Việt–Anh (0.21 đến 0.26), nên các ngôn ngữ khác chữ viết tách nhau mạnh hơn, khớp với lưu ý về việc router chỉ nhìn theo token ở trên. Ở layer cuối, expert nhiều nhất nhận 35% token tiếng Việt (expert 7), 42% tiếng Anh (expert 23) và 39% tiếng Trung (expert 27). Với k thích ứng, số expert trung bình là 4.45 cho tiếng Việt, 4.33 cho tiếng Anh và 4.75 cho tiếng Trung, và loss thấp hơn k=2 cố định 0.026 đến 0.031 nat trong khi dùng nhiều expert hơn 2.2 đến 2.4 lần.
+
+- Chưa làm: thêm seed, và đối chứng cho việc router chỉ phân biệt theo token.
 
 ## Đo tốc độ
 
