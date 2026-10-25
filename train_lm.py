@@ -21,6 +21,9 @@ Colab:
 data, last.pt, best.pt về nếu thư mục --out chưa có, và tự đẩy last.pt, best.pt lên mỗi --hf_every bước, khi dừng, khi Ctrl+C.
 Cần đăng nhập trước: from huggingface_hub import notebook_login; notebook_login()
 
+Thêm dữ liệu web tiếng Việt (nhiều hơn Wikipedia nhiều lần): --langs vi,web --hf_dataset HuggingFaceFW/fineweb-2:vie_Latn:text --hf_mb 300
+(đổi dữ liệu thì phải train tokenizer mới, nên dùng thư mục --out mới, không resume được từ checkpoint cũ).
+
 Tuỳ chọn tăng tốc / cân bằng tải: --fast_moe (bmm thay vòng lặp expert, xem fast_moe.py) và --aux 1 (cộng loss cân bằng tải của router;
 mặc định 0 = như các thí nghiệm trong README, vốn chưa dùng loss này).
 
@@ -80,6 +83,24 @@ def atomic_save(obj, path):
 
 
 # ---------------------------------------------------------------- dữ liệu
+def read_hf(spec, mb, seed, min_chars):
+    """spec = 'ten/dataset:config:truong_van_ban', vd HuggingFaceFW/fineweb-2:vie_Latn:text (đọc streaming, không tải cả bộ)."""
+    from datasets import load_dataset
+    name, config, field = (spec.split(":") + ["text"])[:3]
+    ds = load_dataset(name, config or None, split="train", streaming=True).shuffle(seed=seed, buffer_size=10000)
+    docs, size = [], 0
+    for ex in ds:
+        t = (ex.get(field) or "").strip()
+        if len(t) < min_chars:
+            continue
+        docs.append(t)
+        size += len(t.encode("utf-8"))
+        if size >= mb * 1_000_000:
+            break
+    print(f"[train] {spec}: {len(docs)} bài, {size / 1e6:.0f} MB", flush=True)
+    return docs
+
+
 def build_data(args):
     path = os.path.join(args.out, "data.pt")
     if os.path.exists(path):
@@ -90,7 +111,12 @@ def build_data(args):
     files = dict(kv.split("=", 1) for kv in args.text_files.split(",")) if args.text_files else {}
     tr_docs, va_docs = {}, {}
     for lang in langs:
-        docs = read_file(files[lang], args.mb) if lang in files else read_wiki(lang, args.mb, args.seed, args.min_chars)
+        if lang == "web" and args.hf_dataset:
+            docs = read_hf(args.hf_dataset, args.hf_mb, args.seed, args.min_chars)
+        elif lang in files:
+            docs = read_file(files[lang], args.mb)
+        else:
+            docs = read_wiki(lang, args.mb, args.seed, args.min_chars)
         tr_docs[lang], va_docs[lang] = split_docs(docs, args.val_frac, args.seed)
         print(f"[train] {lang}: {len(tr_docs[lang])} bài train, {len(va_docs[lang])} bài val", flush=True)
     tok = train_bpe([d for l in langs for d in tr_docs[l]], args.vocab)
@@ -221,8 +247,7 @@ def main(args):
             scaler.load_state_dict(ck["scaler"])
         step, best, bad = ck["step"], tuple(ck["best"]), ck["bad"]
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
-    if step == 0:
-        hf_push(args, ["config.json", "tokenizer.json", "data.pt"])
+    hf_push(args, ["config.json", "tokenizer.json"] + (["data.pt"] if step == 0 else []))
     if step >= args.steps:
         print(f"[train] last.pt đang ở bước {step} >= --steps {args.steps}, tức là đã train xong ({'val tốt nhất %.4f ở bước %d' % best}). "
               f"Muốn train tiếp thì tăng --steps (vd {2 * args.steps}); lịch learning rate sẽ co giãn theo --steps mới.", flush=True)
@@ -314,6 +339,8 @@ if __name__ == "__main__":
     ap.add_argument("--text_files", default=None)
     ap.add_argument("--mb", type=float, default=100, help="MB văn bản mỗi ngôn ngữ")
     ap.add_argument("--min_chars", type=int, default=1000)
+    ap.add_argument("--hf_dataset", default=None, help="nguồn web thêm, dùng cùng --langs vi,web; vd HuggingFaceFW/fineweb-2:vie_Latn:text")
+    ap.add_argument("--hf_mb", type=float, default=300)
     ap.add_argument("--val_frac", type=float, default=0.02)
     ap.add_argument("--vocab", type=int, default=16000)
     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
