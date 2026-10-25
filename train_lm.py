@@ -17,12 +17,19 @@ Colab:
     # bị ngắt thì chạy lại đúng lệnh trên, nó đọc last.pt và đi tiếp
     !python train_lm.py --out /content/drive/MyDrive/adaptive_moe/run1 --generate "Việt Nam là" --k 2
 
+Đồng bộ lên Hugging Face (tuỳ chọn): thêm  --hf_repo ten/repo  (mặc định kiểu dataset, riêng tư). Tự tải config, tokenizer,
+data, last.pt, best.pt về nếu thư mục --out chưa có, và tự đẩy last.pt, best.pt lên mỗi --hf_every bước, khi dừng, khi Ctrl+C.
+Cần đăng nhập trước: from huggingface_hub import notebook_login; notebook_login()
+
+Tuỳ chọn tăng tốc / cân bằng tải: --fast_moe (bmm thay vòng lặp expert, xem fast_moe.py) và --aux 1 (cộng loss cân bằng tải của router;
+mặc định 0 = như các thí nghiệm trong README, vốn chưa dùng loss này).
+
 Chạy nhanh để kiểm tra lỗi:  python train_lm.py --out run_test --mb 2 --steps 200 --eval_every 100 --save_every 100
 """
 import argparse, json, math, os, random, time
 import torch
 import torch.nn.functional as F
-from adaptive_moe import set_k_cap
+from adaptive_moe import set_k_cap, gather_aux_loss
 from elastic_ctx import CtxLM, batch
 from langcheck import read_wiki, read_file, split_docs, train_bpe, encode_docs, add_dropout
 
@@ -31,6 +38,39 @@ PRESETS = {  # d_ff = 2 * d như trong các thí nghiệm
     "medium": dict(d=384, layers=8, experts=32, lr=6e-4),
     "large": dict(d=512, layers=8, experts=32, lr=4e-4),
 }
+
+
+CTX = {}
+
+
+def hf_pull(args, files):
+    if not args.hf_repo:
+        return
+    from huggingface_hub import hf_hub_download
+    for fn in files:
+        if os.path.exists(os.path.join(args.out, fn)):
+            continue
+        try:
+            hf_hub_download(repo_id=args.hf_repo, filename=fn, repo_type=args.hf_type, local_dir=args.out)
+            print(f"[train] đã tải {fn} từ Hugging Face", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[train] không tải được {fn} từ Hugging Face ({str(e)[:70]})", flush=True)
+
+
+def hf_push(args, files):
+    if not args.hf_repo:
+        return
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        api.create_repo(repo_id=args.hf_repo, repo_type=args.hf_type, private=True, exist_ok=True)
+        for fn in files:
+            p = os.path.join(args.out, fn)
+            if os.path.exists(p):
+                api.upload_file(path_or_fileobj=p, path_in_repo=fn, repo_id=args.hf_repo, repo_type=args.hf_type)
+        print(f"[train] đã đẩy {', '.join(files)} lên Hugging Face", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[train] LỖI đẩy lên Hugging Face: {str(e)[:100]}", flush=True)
 
 
 def atomic_save(obj, path):
@@ -140,7 +180,9 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.out, exist_ok=True)
     if args.generate is not None:
+        hf_pull(args, ["config.json", "tokenizer.json", "best.pt"])
         return generate(args, device)
+    hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
     P = PRESETS[args.size]
     d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
     lr = args.lr or P["lr"]
@@ -151,6 +193,9 @@ def main(args):
     model = build_model(cfg, device)
     if args.drop > 0:
         add_dropout(model, args.drop)
+    if args.fast_moe:
+        from fast_moe import enable_fast_moe
+        print(f"[train] fast_moe: đã bật cho {enable_fast_moe(model, args.fast_waste)} layer MoE", flush=True)
     npar = sum(p.numel() for p in model.parameters())
     opt = None
     bytes_per = 16
@@ -176,6 +221,12 @@ def main(args):
             scaler.load_state_dict(ck["scaler"])
         step, best, bad = ck["step"], tuple(ck["best"]), ck["bad"]
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
+    if step == 0:
+        hf_push(args, ["config.json", "tokenizer.json", "data.pt"])
+    if step >= args.steps:
+        print(f"[train] last.pt đang ở bước {step} >= --steps {args.steps}, tức là đã train xong ({'val tốt nhất %.4f ở bước %d' % best}). "
+              f"Muốn train tiếp thì tăng --steps (vd {2 * args.steps}); lịch learning rate sẽ co giãn theo --steps mới.", flush=True)
+        return
     ks = [int(x) for x in args.eval_ks.split(",")]
     g = torch.Generator().manual_seed(args.seed + step)
     t0, t_log, tok_log = time.time(), time.time(), 0
@@ -184,6 +235,10 @@ def main(args):
         atomic_save({"model": model.state_dict(), "opt": opt.state_dict(), "scaler": scaler.state_dict() if amp else None,
                      "step": step, "best": best, "bad": bad}, last)
 
+    def finish():
+        save_last()
+        hf_push(args, ["last.pt", "best.pt"])
+    CTX["on_exit"] = finish
     state = {"amp": amp}
     while step < args.steps:
         model.train()
@@ -201,7 +256,8 @@ def main(args):
                 with torch.autocast("cuda", dtype=torch.float16, enabled=state["amp"]):
                     lg, _ = model(x, None)
                 loss = F.cross_entropy(lg.float().view(-1, lg.shape[-1]), y.view(-1))
-                scaler.scale(loss / args.accum).backward()
+                total_loss = loss + args.aux * gather_aux_loss(model) if args.aux > 0 else loss
+                scaler.scale(total_loss / args.accum).backward()
             except RuntimeError as e:
                 if state["amp"] and "dtype" in str(e).lower():
                     print(f"[train] fp16 không tương thích với MoE ở đây ({str(e)[:80]}); chạy lại không --amp", flush=True)
@@ -224,6 +280,11 @@ def main(args):
             show = "  ".join(f"k={k}: " + " ".join(f"{l} {v:.4f}" for l, v in res[k].items()) for k in ks)
             sel = sum(res[args.select_k].values()) / len(res[args.select_k])
             print(f"[train] ĐÁNH GIÁ bước {step}: {show}", flush=True)
+            if args.fast_moe:
+                from fast_moe import load_report
+                lr_ = load_report(model)
+                if lr_:
+                    print("[train] tải expert (đông nhất / trung bình) theo layer: " + " ".join(f"{r:.1f}({p})" for r, p in lr_), flush=True)
             if sel < best[0]:
                 best, bad = (sel, step), 0
                 atomic_save({"model": model.state_dict(), "step": step, "val": res}, os.path.join(args.out, "best.pt"))
@@ -232,14 +293,17 @@ def main(args):
                 bad += 1
         if step % args.save_every == 0 or step == args.steps:
             save_last()
+        if args.hf_repo and step % args.hf_every == 0:
+            hf_push(args, ["last.pt", "best.pt"])
         if args.patience and bad >= args.patience:
             print(f"[train] dừng sớm: {bad} lần đánh giá liên tiếp không cải thiện", flush=True)
-            save_last()
+            finish()
             return
         if args.max_minutes and (time.time() - t0) / 60 > args.max_minutes:
-            save_last()
+            finish()
             print(f"[train] hết {args.max_minutes} phút, đã lưu last.pt; chạy lại cùng lệnh để tiếp tục", flush=True)
             return
+    finish()
     print(f"[train] xong. val tốt nhất {best[0]:.4f} ở bước {best[1]}; dùng best.pt để suy luận (--generate)", flush=True)
 
 
@@ -279,9 +343,21 @@ if __name__ == "__main__":
     ap.add_argument("--log_every", type=int, default=50)
     ap.add_argument("--max_minutes", type=float, default=0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--fast_moe", action="store_true", help="bmm thay vòng lặp expert khi tải đủ cân bằng (fast_moe.py)")
+    ap.add_argument("--fast_waste", type=float, default=3.0)
+    ap.add_argument("--aux", type=float, default=0.0, help="hệ số nhân cho loss phụ của router (cân bằng tải, z-loss); 0 = tắt")
+    ap.add_argument("--hf_repo", default=None, help="vd BachDaThan/TrainAI: đồng bộ checkpoint với Hugging Face")
+    ap.add_argument("--hf_type", default="dataset")
+    ap.add_argument("--hf_every", type=int, default=2000)
     ap.add_argument("--generate", default=None, help="chế độ sinh văn bản từ best.pt với prompt này")
     ap.add_argument("--k", type=int, default=2)
     ap.add_argument("--max_new", type=int, default=100)
     ap.add_argument("--temp", type=float, default=0.8)
     ap.add_argument("--top_k", type=int, default=40)
-    main(ap.parse_args())
+    try:
+        main(ap.parse_args())
+    except KeyboardInterrupt:
+        print("\n[train] bị ngắt (Ctrl+C): đang lưu last.pt và đẩy lên Hugging Face...", flush=True)
+        if CTX.get("on_exit"):
+            CTX["on_exit"]()
+        raise SystemExit(130)
