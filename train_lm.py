@@ -29,7 +29,7 @@ mặc định 0 = như các thí nghiệm trong README, vốn chưa dùng loss n
 
 Chạy nhanh để kiểm tra lỗi:  python train_lm.py --out run_test --mb 2 --steps 200 --eval_every 100 --save_every 100
 """
-import argparse, json, math, os, random, time
+import argparse, json, math, os, random, re, time
 import torch
 import torch.nn.functional as F
 from adaptive_moe import set_k_cap, gather_aux_loss
@@ -105,6 +105,22 @@ def read_hf(spec, mb, seed, min_chars):
     return docs
 
 
+def read_hf_files(args, prefix, mb):
+    """Nạp mọi file <prefix>N.txt (vd pretrain/1.txt, pretrain/2.txt...) từ repo HF --hf_repo; cùng cách tách đoạn như --text_files."""
+    from huggingface_hub import HfApi, hf_hub_download
+    pat = re.compile("^" + re.escape(prefix) + r"(\d+)\.txt$")
+    names = sorted((n for n in HfApi().list_repo_files(args.hf_repo, repo_type=args.hf_type) if pat.match(n)),
+                   key=lambda n: int(pat.match(n).group(1)))
+    docs, size = [], 0
+    for n in names:
+        p = hf_hub_download(args.hf_repo, n, repo_type=args.hf_type, local_dir=os.path.join(args.out, "hf_files"), force_download=True)
+        for d in read_file(p, mb):
+            docs.append(d)
+            size += len(d.encode("utf-8"))
+    print(f"[train] {prefix}*.txt trên HF: {len(names)} file, {len(docs)} đoạn, {size / 1e6:.1f} MB", flush=True)
+    return docs
+
+
 def parse_upsample(spec):
     """'yui=20,abc=5' -> {'yui': 20, 'abc': 5}: nhân bản bài train của ngôn ngữ nhỏ (chỉ train, không đụng val)."""
     out = {}
@@ -143,9 +159,20 @@ def build_data(args):
     files = dict(kv.split("=", 1) for kv in args.text_files.split(",")) if args.text_files else {}
     tr_docs, va_docs = {}, {}
     ups = parse_upsample(args.upsample)
+    hf_files = dict(kv.split("=", 1) for kv in (args.hf_files or "").split(",") if "=" in kv)   # lang -> thư mục trên repo HF
+    extra = {}   # --hf_extra "news=repo:config:truong:MB,..." -> {lang: (spec, MB)}
+    for kv in (args.hf_extra or "").split(","):
+        if "=" in kv:
+            name, v = kv.split("=", 1)
+            parts = v.split(":")
+            extra[name.strip()] = (":".join(parts[:3]), float(parts[3]) if len(parts) > 3 else args.hf_mb)
     for lang in langs:
         if lang == "web" and args.hf_dataset:
             docs = read_hf(args.hf_dataset, args.hf_mb, args.seed, args.min_chars)
+        elif lang in hf_files:
+            docs = read_hf_files(args, hf_files[lang], args.mb)
+        elif lang in extra:
+            docs = read_hf(extra[lang][0], extra[lang][1], args.seed, args.min_chars)
         elif lang in files:
             docs = read_file(files[lang], args.mb)
         else:
@@ -396,6 +423,8 @@ if __name__ == "__main__":
     ap.add_argument("--min_chars", type=int, default=1000)
     ap.add_argument("--hf_dataset", default=None, help="nguồn web thêm, dùng cùng --langs vi,web; vd HuggingFaceFW/fineweb-2:vie_Latn:text")
     ap.add_argument("--hf_mb", type=float, default=300)
+    ap.add_argument("--hf_files", default="", help='nạp file N.txt trên repo HF (--hf_repo) làm một "ngôn ngữ" mới: "gen=pretrain/" (cùng make_data.py pretrain)')
+    ap.add_argument("--hf_extra", default="", help='thêm nguồn HF, mỗi nguồn là một "ngôn ngữ" mới trong --langs: "tin=repo:config:truong:MB,phude=repo::text:200"')
     ap.add_argument("--val_frac", type=float, default=0.02)
     ap.add_argument("--upsample", default="", help="nhân bản bài train của ngôn ngữ nhỏ, vd yui=20 (dùng với --text_files yui=duong_dan)")
     ap.add_argument("--bpe_mb", type=float, default=150, help="chỉ lấy tối đa ngần này MB văn bản để train BPE (chống hết RAM)")

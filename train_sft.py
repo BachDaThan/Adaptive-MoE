@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from adaptive_moe import set_k_cap
 from langcheck import add_dropout
 from train_lm import build_model, set_cap, hf_pull, hf_push, atomic_save
-from sft_format import load_convs, encode_pairs
+from sft_format import load_convs, encode_pairs, parse_text
 
 STATE = "sft_state.json"
 
@@ -61,6 +61,17 @@ def discover(args):
         for n in sorted(names, key=lambda s: int(pat.match(s).group(1))):
             p = hf_hub_download(repo_id=args.hf_repo, filename=n, repo_type=args.hf_type, local_dir=d, force_download=True)
             data[n] = open(p, "rb").read()
+    # file dữ liệu thêm (không đánh số), vd chat_chat.jsonl: cùng định dạng JSON hội thoại như N.txt
+    for n in [x.strip() for x in args.extra.split(",") if x.strip()]:
+        try:
+            if args.local:
+                data[n] = open(os.path.join(args.local, n), "rb").read()
+            else:
+                from huggingface_hub import hf_hub_download
+                data[n] = open(hf_hub_download(repo_id=args.hf_repo, filename=n, repo_type=args.hf_type,
+                                               local_dir=os.path.join(args.out, "sft_data"), force_download=True), "rb").read()
+        except Exception as e:  # noqa: BLE001
+            raise SystemExit(f"[sft] không lấy được file --extra '{n}': {str(e)[:100]}")
     return data
 
 
@@ -147,6 +158,11 @@ def main(args):
     L = cfg["L"]
 
     # 3. mã hoá
+    for n, b in data.items():
+        if n in [x.strip() for x in args.extra.split(",")] or not re.match(r"^\d+\.txt$", os.path.basename(n)):
+            cs, bd = parse_text(b.decode("utf-8", errors="ignore"))
+            print(f"[sft] {n}: đọc được {len(cs)} hội thoại, {bd} bản ghi không đọc được"
+                  f"{'  <-- 0 hội thoại: định dạng file này không phải JSON hội thoại' if not cs else ''}", flush=True)
     convs, st = load_convs({n: b.decode("utf-8", errors="ignore") for n, b in data.items()}, args.max_chars)
     exs, skipped = [], 0
     for c in convs:
@@ -185,7 +201,7 @@ def main(args):
     r0 = evaluate(model, val, eos, args, device, amp)
     print(f"[sft] val trước khi fine-tune: k=1 {r0[1]:.4f} k=2 {r0[2]:.4f}", flush=True)
 
-    best, bad, step, t0 = (float("inf"), 0), 0, time.time()
+    best, bad, step, t0 = (float("inf"), 0), 0, 0, time.time()
     best_sd = None
     for ep in range(1, args.epochs + 1):
         model.train()
@@ -251,6 +267,7 @@ if __name__ == "__main__":
     ap.add_argument("--hf_public", action="store_true")
     ap.add_argument("--hf_squash", type=int, default=0)
     ap.add_argument("--sft_prefix", default="", help="thư mục chứa 1.txt, 2.txt... trong repo (vd 'sft/'); mặc định là gốc repo")
+    ap.add_argument("--extra", default="", help="thêm file dữ liệu JSON hội thoại không đánh số, cách nhau dấu phẩy (vd chat_chat.jsonl,yui_chat.jsonl)")
     ap.add_argument("--local", default=None, help="đọc N.txt từ thư mục này thay vì Hugging Face")
     ap.add_argument("--no_push", action="store_true")
     ap.add_argument("--base", choices=["best", "last"], default="best")

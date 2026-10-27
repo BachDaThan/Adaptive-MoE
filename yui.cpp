@@ -11,8 +11,17 @@
 //
 // Phép tính khớp adaptive_moe.py + elastic_ctx.py: LayerNorm -> attention RoPE (KV cache) -> MoE top-p (shared expert luôn bật,
 // expert SwiGLU, trọng số = prob chuẩn hoá * strength). Chat: "User: ...\nYui: ...<eos>" như sft_format.py.
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <malloc.h>
+#endif
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <ctime>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -28,26 +37,56 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <memory>
+#include <stdexcept>
+#ifndef YUI_LIB   // server HTTP chỉ có ở bản dòng lệnh (POSIX); bản thư viện cho app (-DYUI_LIB) không cần
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 using std::string;
 using std::vector;
 
-[[noreturn]] static void die(const string& m) { fprintf(stderr, "[yui] LỖI: %s\n", m.c_str()); exit(1); }
+struct YuiError : std::runtime_error { using std::runtime_error::runtime_error; };
+[[noreturn]] static void die(const string& m) { throw YuiError(m); }
 
 // ============================ đọc file .yui ============================
+static void* aalloc_raw(size_t n) {
+    n = (n + 63) / 64 * 64; void* p = nullptr;
+#ifdef _WIN32
+    p = _aligned_malloc(n, 64); if (!p) die("hết RAM");
+#else
+    if (posix_memalign(&p, 64, n)) die("hết RAM");
+#endif
+    return p;
+}
+static void afree(void* p) {
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    free(p);
+#endif
+}
+static FILE* fopen_utf8(const string& p) {   // đường dẫn UTF-8 (Windows: tên người dùng có dấu tiếng Việt)
+#ifdef _WIN32
+    int n = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0); if (n <= 0) return nullptr;
+    std::wstring w(n, L'\0'); MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, &w[0], n);
+    return _wfopen(w.c_str(), L"rb");
+#else
+    return fopen(p.c_str(), "rb");
+#endif
+}
 struct Reader {
-    FILE* f;
+    FILE* f; vector<void*>* mem;
+    void* alloc(size_t n) { void* p = aalloc_raw(n); mem->push_back(p); return p; }
     template <class T> T get() { T v; if (fread(&v, sizeof v, 1, f) != 1) die("file .yui bị cụt"); return v; }
     void bytes(void* p, size_t n) { if (n && fread(p, 1, n, f) != n) die("file .yui bị cụt"); }
     string str() { uint16_t n = get<uint16_t>(); string s(n, '\0'); bytes(&s[0], n); return s; }
 };
 
-static void* aalloc(size_t n) { void* p = nullptr; if (posix_memalign(&p, 64, (n + 63) / 64 * 64)) die("hết RAM"); return p; }
 
 struct Mat {
     int rows = 0, cols = 0; bool q = false;
@@ -58,14 +97,14 @@ static Mat load_mat(Reader& r, int rows, int cols, bool quantized) {
     Mat m; m.rows = rows; m.cols = cols; m.q = quantized;
     size_t n = (size_t)rows * cols;
     if (quantized) {
-        m.sc = (float*)aalloc(rows * sizeof(float)); r.bytes(m.sc, rows * sizeof(float));
-        m.i8 = (int8_t*)aalloc(n); r.bytes(m.i8, n);
+        m.sc = (float*)r.alloc(rows * sizeof(float)); r.bytes(m.sc, rows * sizeof(float));
+        m.i8 = (int8_t*)r.alloc(n); r.bytes(m.i8, n);
     } else {
-        m.f = (float*)aalloc(n * sizeof(float)); r.bytes(m.f, n * sizeof(float));
+        m.f = (float*)r.alloc(n * sizeof(float)); r.bytes(m.f, n * sizeof(float));
     }
     return m;
 }
-static float* load_vec(Reader& r, size_t n) { float* p = (float*)aalloc(n * sizeof(float)); r.bytes(p, n * sizeof(float)); return p; }
+static float* load_vec(Reader& r, size_t n) { float* p = (float*)r.alloc(n * sizeof(float)); r.bytes(p, n * sizeof(float)); return p; }
 
 // y[r] = dot(W[r,:], x)
 static void matvec(const Mat& m, const float* x, float* y) {
@@ -243,11 +282,15 @@ struct Session {   // KV cache + bộ nhớ tạm của MỘT cuộc sinh (model
 };
 
 struct Model {
-    Cfg c; Mat emb, head; float *nfw, *nfb; vector<Layer> ly; Tok tok; vector<float> cosT, sinT;
+    Cfg c; Mat emb, head; float *nfw, *nfb; vector<Layer> ly; Tok tok; vector<float> cosT, sinT; vector<void*> mem;
+    Model() = default;
+    Model(const Model&) = delete;
+    Model& operator=(const Model&) = delete;
+    ~Model() { for (void* p : mem) afree(p); }
 
     void load(const string& path) {
-        FILE* f = fopen(path.c_str(), "rb"); if (!f) die("không mở được " + path);
-        Reader r{f};
+        std::unique_ptr<FILE, int (*)(FILE*)> fp(fopen_utf8(path), &fclose); if (!fp) die("không mở được " + path);
+        Reader r{fp.get(), &mem};
         char mg[4]; r.bytes(mg, 4); if (memcmp(mg, "YUI1", 4)) die("không phải file .yui (sai magic)");
         uint32_t ver = r.get<uint32_t>(); if (ver != 1) die("phiên bản .yui không hỗ trợ");
         c.quant = r.get<uint32_t>(); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
@@ -285,7 +328,6 @@ struct Model {
         }
         nfw = load_vec(r, D); nfb = load_vec(r, D);
         head = load_mat(r, c.V, D, q);
-        fclose(f);
         const int half = c.hd / 2; cosT.resize((size_t)c.L * half); sinT.resize((size_t)c.L * half);
         for (int p = 0; p < (int)c.L; p++)
             for (int i = 0; i < half; i++) {
@@ -486,29 +528,43 @@ struct TextStream {
     }
 };
 
-// Sinh với KV cache + dịch ngữ cảnh khi cache đầy. on_text trả false = dừng (khách ngắt kết nối). Trả số token đã sinh.
-static int generate(const Model& m, vector<int> hist, const GenOpts& o, bool chat, const std::function<bool(const string&)>& on_text) {
-    const int L = m.c.L, keep = std::max(16, L / 2), V = m.c.V;
-    Session s(m.c); vector<float> lg(V);
-    std::mt19937_64 rng(o.seed ? o.seed : std::random_device{}());
-    if (hist.empty()) hist.push_back(m.tok.eos >= 0 ? m.tok.eos : 0);
-    auto prefill = [&](size_t from) { s.n = 0; for (size_t i = from; i < hist.size(); i++) m.step(s, hist[i], o.k, i + 1 == hist.size() ? lg.data() : nullptr); };
-    prefill(hist.size() > (size_t)(L - 8) ? hist.size() - (L - 8) : 0);
-    TextStream ts(m, chat); vector<int> gen; int n = 0;
-    for (; n < o.max_new; n++) {
-        vector<float> work(lg);
-        int nxt = sample(work, gen, o, rng);
-        if (nxt == m.tok.eos) break;
-        gen.push_back(nxt); hist.push_back(nxt);
-        if (getenv("YUI_DEBUG_IDS")) fprintf(stderr, "%d ", nxt);
-        string d = ts.feed(nxt);
-        if (!d.empty() && !on_text(d)) return n + 1;
-        if (ts.done) return n + 1;
-        if (s.n >= L) prefill(hist.size() > (size_t)keep ? hist.size() - keep : 0);
-        else m.step(s, nxt, o.k, lg.data());
+// Bộ sinh từng bước (KV cache + dịch ngữ cảnh khi cache đầy). next() trả đoạn văn bản mới cho tới khi hết; dùng chung cho CLI, server và API C.
+struct Gen {
+    const Model& m; GenOpts o; bool chat; Session s; vector<float> lg; std::mt19937_64 rng; vector<int> hist, gen;
+    TextStream ts; int n = 0; bool finished = false, flushed = false; int L, keep;
+    Gen(const Model& mm, vector<int> ids, const GenOpts& op, bool c)
+        : m(mm), o(op), chat(c), s(mm.c), lg(mm.c.V), rng(op.seed ? op.seed : std::random_device{}()), hist(std::move(ids)), ts(mm, c),
+          L((int)mm.c.L), keep(std::max(16, (int)mm.c.L / 2)) {
+        if (hist.empty()) hist.push_back(m.tok.eos >= 0 ? m.tok.eos : 0);
+        prefill(hist.size() > (size_t)(L - 8) ? hist.size() - (L - 8) : 0);
     }
-    string d = ts.finish(); if (!d.empty()) on_text(d);
-    return n;
+    void prefill(size_t from) { s.n = 0; for (size_t i = from; i < hist.size(); i++) m.step(s, hist[i], o.k, i + 1 == hist.size() ? lg.data() : nullptr); }
+    bool next(string& delta) {
+        delta.clear();
+        while (true) {
+            if (finished) {
+                if (flushed) return false;
+                flushed = true; delta = ts.finish(); return !delta.empty();
+            }
+            if (n >= o.max_new) { finished = true; continue; }
+            vector<float> work(lg);
+            int nxt = sample(work, gen, o, rng);
+            if (nxt == m.tok.eos) { finished = true; continue; }
+            gen.push_back(nxt); hist.push_back(nxt); n++;
+            if (getenv("YUI_DEBUG_IDS")) fprintf(stderr, "%d ", nxt);
+            string d = ts.feed(nxt);
+            if (ts.done) { finished = true; flushed = true; delta = d; return !delta.empty(); }
+            if (s.n >= L) prefill(hist.size() > (size_t)keep ? hist.size() - keep : 0);
+            else m.step(s, nxt, o.k, lg.data());
+            if (!d.empty()) { delta = d; return true; }
+        }
+    }
+};
+// on_text trả false = dừng (khách ngắt kết nối). Trả số token đã sinh.
+static int generate(const Model& m, vector<int> hist, const GenOpts& o, bool chat, const std::function<bool(const string&)>& on_text) {
+    Gen g(m, std::move(hist), o, chat); string d;
+    while (g.next(d)) if (!on_text(d)) break;
+    return g.n;
 }
 
 // ============================ JSON tối giản ============================
@@ -582,6 +638,84 @@ static string jesc(const string& s) {
 }
 static string iso_now() { time_t t = time(nullptr); char b[32]; strftime(b, sizeof b, "%Y-%m-%dT%H:%M:%SZ", gmtime(&t)); return b; }
 
+static void parse_messages(const J& j, vector<Msg>& msgs) {   // j: mảng [{role,content}] hoặc object có "messages"
+    const J* ms = j.t == J::ARR ? &j : j.get("messages");
+    if (ms && ms->t == J::ARR) for (auto& x : ms->a) {
+        if (x.t != J::OBJ) continue;
+        Msg mm; auto* r = x.get("role"); auto* c = x.get("content");
+        if (r && r->t == J::STR) mm.role = r->s;
+        if (c && c->t == J::STR) mm.content = c->s;
+        msgs.push_back(mm);
+    }
+}
+static GenOpts parse_opts(const J& body, int def_k) {
+    GenOpts o; o.k = def_k; const J* op = body.get("options");
+    auto num = [&](std::initializer_list<const char*> names, double def) {
+        for (auto n : names) { if (op && op->t == J::OBJ) { auto* v = op->get(n); if (v && v->t == J::NUM) return v->n; } auto* v = body.get(n); if (v && v->t == J::NUM) return v->n; }
+        return def; };
+    int mx = (int)num({"num_predict", "max_tokens"}, 120); o.max_new = mx <= 0 ? 256 : std::min(mx, 4096);
+    o.temp = (float)num({"temperature"}, 0.8); o.top_k = (int)num({"top_k"}, 40); o.top_p = (float)num({"top_p"}, 0.95);
+    o.rep = (float)num({"repeat_penalty"}, 1.1); int k = (int)num({"k"}, def_k); o.k = (k == 1 || k == 2) ? k : def_k;
+    o.seed = (uint64_t)num({"seed"}, 0); return o;
+}
+
+// ============================ API C (cho app Flutter/FFI, kiểu poll, không callback) ============================
+#ifdef _WIN32
+#define YUI_API extern "C" __declspec(dllexport)
+#else
+#define YUI_API extern "C" __attribute__((visibility("default")))
+#endif
+struct YuiGenH { Gen g; string pending; size_t off = 0; YuiGenH(const Model& m, vector<int> ids, const GenOpts& o, bool chat) : g(m, std::move(ids), o, chat) {} };
+static void set_err(char* err, int len, const string& m) { if (err && len > 0) snprintf(err, (size_t)len, "%s", m.c_str()); }
+static GenOpts opts_from_json(const char* js, int def_k) {
+    if (js && *js) { string t = js; J j; JP jp(t); if (jp.val(j) && j.t == J::OBJ) return parse_opts(j, def_k); }
+    GenOpts o; o.k = def_k; return o;
+}
+YUI_API const char* yui_version() { return "yui-engine 1.0"; }
+YUI_API void* yui_load(const char* path, char* err, int errlen) {
+    Model* m = new Model();
+    try { m->load(path ? path : ""); } catch (const std::exception& e) { set_err(err, errlen, e.what()); delete m; return nullptr; }
+    return m;
+}
+YUI_API void yui_free(void* h) { delete (Model*)h; }
+YUI_API int yui_info(void* h, char* out, int len) {   // JSON thông tin model; trả số byte, <0 nếu lỗi
+    Model* m = (Model*)h; if (!m || !out) return -1;
+    string s = "{\"d\":" + std::to_string(m->c.D) + ",\"layers\":" + std::to_string(m->c.layers) + ",\"experts\":" + std::to_string(m->c.E) +
+               ",\"heads\":" + std::to_string(m->c.heads) + ",\"ctx\":" + std::to_string(m->c.L) + ",\"vocab\":" + std::to_string(m->c.V) +
+               ",\"quant\":\"" + (m->c.quant ? "int8" : "float32") + "\"}";
+    if ((int)s.size() + 1 > len) return -2;
+    memcpy(out, s.c_str(), s.size() + 1); return (int)s.size();
+}
+YUI_API void* yui_chat_begin(void* h, const char* messages_json, const char* opts_json, int def_k, char* err, int errlen) {
+    try {
+        Model* m = (Model*)h; if (!m) throw YuiError("model chưa nạp");
+        string t = messages_json ? messages_json : ""; J j; JP jp(t); if (!jp.val(j)) throw YuiError("messages_json không phải JSON hợp lệ");
+        vector<Msg> msgs; parse_messages(j, msgs); vector<int> ids; string e;
+        if (!build_prompt(*m, msgs, ids, e)) throw YuiError(e);
+        return new YuiGenH(*m, ids, opts_from_json(opts_json, def_k == 1 ? 1 : 2), true);
+    } catch (const std::exception& e) { set_err(err, errlen, e.what()); return nullptr; }
+}
+YUI_API void* yui_complete_begin(void* h, const char* prompt, const char* opts_json, int def_k, char* err, int errlen) {
+    try {
+        Model* m = (Model*)h; if (!m) throw YuiError("model chưa nạp");
+        return new YuiGenH(*m, m->tok.encode(prompt ? prompt : ""), opts_from_json(opts_json, def_k == 1 ? 1 : 2), false);
+    } catch (const std::exception& e) { set_err(err, errlen, e.what()); return nullptr; }
+}
+// >0: số byte UTF-8 đã ghi vào buf; 0: đã xong; <0: lỗi (-2: buf quá nhỏ)
+YUI_API int yui_gen_next(void* g, char* buf, int buflen) {
+    YuiGenH* h = (YuiGenH*)g; if (!h || !buf || buflen < 8) return -1;
+    try {
+        if (h->off >= h->pending.size()) { h->pending.clear(); h->off = 0; string d; if (!h->g.next(d)) return 0; h->pending = d; }
+        size_t left = h->pending.size() - h->off, n = std::min((size_t)buflen, left);
+        while (n > 0 && n < left && (((unsigned char)h->pending[h->off + n]) & 0xC0) == 0x80) n--;   // không cắt giữa ký tự UTF-8
+        if (n == 0) return -2;
+        memcpy(buf, h->pending.data() + h->off, n); h->off += n; return (int)n;
+    } catch (...) { return -1; }
+}
+YUI_API int yui_gen_tokens(void* g) { return g ? ((YuiGenH*)g)->g.n : 0; }
+YUI_API void yui_gen_end(void* g) { delete (YuiGenH*)g; }
+
+#ifndef YUI_LIB
 // ============================ server HTTP (Ollama + OpenAI) ============================
 static const char* PAGE = R"HTML(<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Yui</title><style>body{font:16px system-ui;margin:0;display:flex;flex-direction:column;height:100dvh}
@@ -622,16 +756,7 @@ struct Server {
         return send_all(fd, string("HTTP/1.0 200 OK\r\nContent-Type: ") + ctype + "\r\nCache-Control: no-cache\r\n" + cors() + "Connection: close\r\n\r\n");
     }
 
-    GenOpts opts(const J& body) {
-        GenOpts o; o.k = def_k; const J* op = body.get("options");
-        auto num = [&](std::initializer_list<const char*> names, double def) {
-            for (auto n : names) { if (op && op->t == J::OBJ) { auto* v = op->get(n); if (v && v->t == J::NUM) return v->n; } auto* v = body.get(n); if (v && v->t == J::NUM) return v->n; }
-            return def; };
-        int mx = (int)num({"num_predict", "max_tokens"}, 120); o.max_new = mx <= 0 ? 256 : std::min(mx, 4096);
-        o.temp = (float)num({"temperature"}, 0.8); o.top_k = (int)num({"top_k"}, 40); o.top_p = (float)num({"top_p"}, 0.95);
-        o.rep = (float)num({"repeat_penalty"}, 1.1); int k = (int)num({"k"}, def_k); o.k = (k == 1 || k == 2) ? k : def_k;
-        o.seed = (uint64_t)num({"seed"}, 0); return o;
-    }
+    GenOpts opts(const J& body) { return parse_opts(body, def_k); }
     void acquire() { std::unique_lock<std::mutex> lk(mu); cv.wait(lk, [&] { return active < parallel; }); active++; }
     void release() { { std::lock_guard<std::mutex> lk(mu); active--; } cv.notify_one(); }
 
@@ -669,8 +794,7 @@ struct Server {
         GenOpts o = opts(j); const J* st = j.get("stream"); 
         if (path == "/api/chat" || path == "/v1/chat/completions") {
             bool openai = path[1] == 'v'; bool stream = st && st->t == J::BOOL ? st->b : !openai;
-            vector<Msg> msgs; const J* ms = j.get("messages");
-            if (ms && ms->t == J::ARR) for (auto& x : ms->a) { if (x.t != J::OBJ) continue; Msg mm; auto* r = x.get("role"); auto* c = x.get("content"); if (r && r->t == J::STR) mm.role = r->s; if (c && c->t == J::STR) mm.content = c->s; msgs.push_back(mm); }
+            vector<Msg> msgs; const J* ms = j.get("messages"); if (ms && ms->t == J::ARR) parse_messages(*ms, msgs);
             vector<int> ids; string err; if (!build_prompt(m, msgs, ids, err)) { jerr(fd, 400, err); return; }
             run(fd, ids, o, true, stream, openai); return;
         }
@@ -716,12 +840,12 @@ struct Server {
         listen(s, 64);
         fprintf(stderr, "[yui] http://%s:%d  (trang chat ở '/'; /api/chat, /api/generate, /v1/chat/completions) %s\n", host.c_str(), port,
                 api_key.empty() ? "[KHÔNG có API key - đừng mở ra Internet]" : "[có API key]");
-        while (true) { int fd = accept(s, nullptr, nullptr); if (fd < 0) continue; std::thread([this, fd] { handle(fd); }).detach(); }
+        while (true) { int fd = accept(s, nullptr, nullptr); if (fd < 0) continue; std::thread([this, fd] { try { handle(fd); } catch (...) { close(fd); } }).detach(); }
     }
 };
 
 // ============================ main ============================
-int main(int argc, char** argv) {
+static int cli_main(int argc, char** argv) {
     string model_path, prompt, enc, ids_s, logits_path, host = "127.0.0.1", api_key; int port = 11434, parallel = 2;
     bool serve = false, bench = false, have_enc = false; GenOpts o; int max_turns = 4;
     if (const char* e = getenv("ENGINE_API_KEY")) api_key = e;
@@ -775,3 +899,9 @@ int main(int argc, char** argv) {
     }
     return 0;
 }
+
+int main(int argc, char** argv) {
+    try { return cli_main(argc, argv); }
+    catch (const std::exception& e) { fprintf(stderr, "[yui] LỖI: %s\n", e.what()); return 1; }
+}
+#endif   // YUI_LIB
