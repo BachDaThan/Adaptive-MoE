@@ -4,6 +4,8 @@ make_data.py - tạo data cho Yui bằng Gemini, TỰ ĐẶT TÊN file theo số
   python make_data.py finetune --files 5      # tạo 5 file hội thoại: nếu repo đã có 1.txt..32.txt thì ra 33.txt..37.txt
   python make_data.py pretrain --files 3      # tạo 3 file văn bản: pretrain/1.txt, pretrain/2.txt, ... (đánh số riêng)
   python make_data.py finetune --dry_models   # chỉ quét model Gemini và in thứ hạng, không tạo gì
+  python make_data.py check --source yui_chat.jsonl        # soi data có sẵn (độ dài, câu mở đầu lặp, dấu hiệu lỗi chính tả) trước khi train
+  python make_data.py restyle --source yui_chat.jsonl --files 3   # lấy CÂU HỎI THẬT trong file cũ, nhờ Gemini viết lại câu trả lời theo giọng Yui mới -> N.txt
 
   - Fine-tune:  N.txt ở gốc repo, mỗi dòng {"messages":[...]}  -> train_sft.py tự quét (như cũ, không đổi gì).
   - Pretrain:   pretrain/N.txt, các đoạn văn cách nhau bằng dòng trống -> train_lm.py nạp bằng  --hf_files "gen=pretrain/"  (xem train_lm.py).
@@ -18,7 +20,7 @@ Cần: pip install huggingface_hub   (cạnh sft_format.py của repo). Up lên 
 import argparse, io, json, os, random, re, sys, time, urllib.error, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sft_format import load_convs  # noqa: E402  (cùng bộ đọc/lọc với train_sft.py)
+from sft_format import load_convs, clean  # noqa: E402  (cùng bộ đọc/lọc với train_sft.py)
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -352,6 +354,133 @@ def clean_pretrain(raw):
     return out
 
 
+def parse_source(text):
+    """Đọc file hội thoại cũ: JSONL {"user","assistant"} / {"messages"} hoặc dạng văn bản 'Người dùng: ...\nYui: ...'. Trả [(hỏi, đáp)]."""
+    t = text.lstrip("\ufeff")
+    if re.match(r"\s*[\[{]", t):
+        convs, _ = load_convs({"s": t}, max_chars=10 ** 6)
+        return [(c[0][0], c[0][1]) for c in convs]
+    pairs = []
+    for blk in re.split(r"\n\s*\n(?=Người dùng:)", t):
+        m = re.match(r"\s*Người dùng:\s*(.*?)\n\s*Yui:\s*(.*)\Z", blk, re.S)
+        if m:
+            pairs.append((clean(m.group(1)), clean(m.group(2))))
+    return pairs
+
+
+def read_source(args, remote):
+    if args.source_file:
+        return open(args.source_file, encoding="utf-8", errors="ignore").read()
+    if not args.source:
+        sys.exit("Thiếu --source TÊN_FILE_TRÊN_REPO hoặc --source_file ĐƯỜNG_DẪN")
+    if remote is None:
+        sys.exit("Không có repo để đọc --source (dùng --source_file, hoặc bỏ --no_upload)")
+    return remote.read(args.source).decode("utf-8", "ignore")
+
+
+def pct(xs, q):
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, int(len(xs) * q))] if xs else 0
+
+
+def check(args, remote):
+    text = read_source(args, remote)
+    pairs = parse_source(text)
+    broken = len(re.findall(r"(?<![a-zA-ZÀ-ỹ])(?:đy|dy)(?![a-zA-ZÀ-ỹ])", text.lower()))
+    if pairs:
+        us, an = [len(u) for u, _ in pairs], [len(a) for _, a in pairs]
+        print(f"📄 {len(pairs)} cặp hỏi-đáp ({len(set(norm_key(u) for u, _ in pairs))} câu hỏi khác nhau)")
+        print(f"   câu hỏi:   trung vị {pct(us, .5)} ký tự, 90% ≤ {pct(us, .9)}, dài nhất {max(us)}")
+        print(f"   câu đáp:   trung vị {pct(an, .5)} ký tự, 90% ≤ {pct(an, .9)}, dài nhất {max(an)}")
+        print(f"   đáp > 200 ký tự: {100 * sum(a > 200 for a in an) / len(an):.0f}%  (model chỉ nhìn được 128 token ~ 400 ký tự cho CẢ hỏi lẫn đáp)")
+        ops = {}
+        for _, a in pairs:
+            k = " ".join(a.split()[:4]).lower()
+            ops[k] = ops.get(k, 0) + 1
+        print("   mở đầu lặp nhiều nhất:", "; ".join(f"“{k}” ×{v}" for k, v in sorted(ops.items(), key=lambda x: -x[1])[:5]))
+        boiler = sum("siêu trợ lý" in a.lower() for _, a in pairs)
+        print(f"   chứa “siêu trợ lý”: {boiler} cặp ({100 * boiler / len(pairs):.0f}%)  -> giọng cũ, khác giọng Yui dễ thương trong 1.txt..N.txt")
+    else:
+        blocks = [b for b in re.split(r"\n\s*\n(?=Chủ đề:)", text) if b.strip()]
+        ln = [len(b) for b in blocks]
+        print(f"📄 dạng văn bản/kiến thức: {len(blocks)} khối, trung vị {pct(ln, .5)} ký tự")
+        print(f"   khối có dấu '[...]' (bị cắt cụt): {sum('[...]' in b for b in blocks)}; có '##' (còn markdown): {sum('##' in b for b in blocks)}")
+    if broken:
+        print(f"⚠ {broken} chỗ nghi mất chữ “â” (vd “đy”/“dy” thay cho “đây”/“dây”): file này có thể bị hỏng chính tả, KHÔNG nên dùng để train trước khi sửa nguồn thu thập")
+    else:
+        print("✅ không thấy dấu hiệu mất chữ “â” (đy/dy)")
+
+
+def restyle_prompt(items):
+    system = ("Bạn tạo dữ liệu huấn luyện cho chatbot tiếng Việt nhỏ tên Yui. " + PERSONA + " Chỉ trả về một mảng JSON, không giải thích.")
+    lines = "\n".join(json.dumps({"i": i, "question": q, "old_answer": a[:220]}, ensure_ascii=False) for i, q, a in items)
+    prompt = ("Dưới đây là các câu người dùng thật đã nhắn cho Yui, kèm câu trả lời cũ (giọng cũ, dài dòng, chỉ để tham khảo ý chính, có thể sai).\n"
+              "Với MỖI câu, viết lại câu trả lời của Yui theo đúng giọng Yui: tối đa 25 từ, đúng ý câu hỏi, tự nhiên, không lặp khuôn.\n"
+              "Nếu câu hỏi cần thông tin thời gian thực (tin tức, thời tiết, giá cả) hoặc việc Yui không làm được thì Yui nói thật là không xem được/không làm được "
+              "theo kiểu dễ thương, tuyệt đối không bịa. Không tự nhận là mô hình ngôn ngữ, không nhắc tên công ty AI. Không nội dung 18+, bạo lực, chính trị.\n"
+              "Các câu:\n" + lines + "\n\nTrả về: [{\"i\":0,\"answer\":\"...\"}, ...] đủ mọi i, đúng thứ tự.")
+    return system, prompt
+
+
+def restyle(args, gem, pool, pub, remote, seen):
+    pairs = parse_source(read_source(args, remote))
+    qs, mine = [], set()
+    for q, a in pairs:
+        q = clean(q)
+        k = norm_key(q)
+        if not (2 <= len(q) <= 200) or not k or k in seen or k in mine or k == "test":
+            continue
+        mine.add(k)
+        qs.append((q, a))
+    random.shuffle(qs)
+    per_file = args.per_file or 100
+    print(f"🔁 restyle: {len(pairs)} cặp trong file nguồn -> {len(qs)} câu hỏi dùng được (đã bỏ trùng với data trên repo)\n", flush=True)
+    buf, done_files, fails, pos = [], 0, 0, 0
+    while done_files < args.files and pos < len(qs):
+        chunk = qs[pos:pos + args.batch]
+        system, prompt = restyle_prompt([(i, q, a) for i, (q, a) in enumerate(chunk)])
+        try:
+            raw = gem.generate(pool[0], system, prompt, temperature=0.9, json_mode=True)
+            ans = {int(x["i"]): clean(str(x["answer"])) for x in json.loads(strip_fence(raw)) if isinstance(x, dict) and "i" in x and "answer" in x}
+        except ModelGone as e:
+            print(f"  ⚠ bỏ model {pool[0]}: {e}", flush=True)
+            pool.pop(0)
+            if not pool:
+                print("❌ hết model để thử")
+                break
+            continue
+        except (Empty, Transient, ValueError, KeyError, TypeError) as e:
+            fails += 1
+            print(f"  ⚠ lỗi tạm ({str(e)[:80]}), lần {fails}", flush=True)
+            if fails >= 8:
+                print("❌ lỗi liên tục, dừng (phần đã tạo vẫn được lưu)")
+                break
+            time.sleep(3)
+            continue
+        except QuotaOut as e:
+            print(f"⛔ {e}. Dừng; phần đã tạo vẫn được lưu.", flush=True)
+            break
+        fails = 0
+        pos += len(chunk)
+        added = 0
+        for i, (q, _) in enumerate(chunk):
+            a = ans.get(i, "")
+            if not a or len(a) > 200 or LEAK.search(a):
+                continue
+            buf.append(json.dumps({"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}, ensure_ascii=False))
+            seen.add(norm_key(q))
+            added += 1
+        print(f"  + {added}/{len(chunk)} cặp hợp lệ (đệm {len(buf)}/{per_file}, còn {len(qs) - pos} câu hỏi)", flush=True)
+        while len(buf) >= per_file and done_files < args.files:
+            part, buf = buf[:per_file], buf[per_file:]
+            pub.publish("\n".join(part) + "\n")
+            done_files += 1
+    if buf and done_files < args.files and len(buf) >= max(10, per_file // 5):
+        pub.publish("\n".join(buf) + "\n")
+        done_files += 1
+    print(f"\n🎉 Xong: {done_files} file mới.", flush=True)
+
+
 def existing_state(repo, prefix):
     """Đọc mọi N.txt đang có (để bỏ trùng + lấy ví dụ giọng văn)."""
     seen, pairs = set(), []
@@ -382,6 +511,9 @@ def existing_state(repo, prefix):
 
 def run(args):
     random.seed(args.seed)
+    if args.mode == "check":
+        check(args, LocalRepo(args.repo_dir) if args.repo_dir else (None if args.source_file else HFRepo(args.repo, args.repo_type)))
+        return
     keys = [k.strip() for k in re.split(r"[,\s]+", args.keys or os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY") or "") if k.strip()]
     if not keys:
         sys.exit("Thiếu key: đặt biến môi trường GEMINI_API_KEYS (nhiều key cách nhau dấu phẩy) hoặc dùng --keys")
@@ -394,11 +526,13 @@ def run(args):
         return
     print(f"✅ Dùng model: {pool[0]} (tự chuyển sang model kế nếu lỗi)\n", flush=True)
 
-    prefix = "" if args.mode == "finetune" else "pretrain/"
+    prefix = "pretrain/" if args.mode == "pretrain" else ""
     remote = LocalRepo(args.repo_dir) if args.repo_dir else (None if args.no_upload else HFRepo(args.repo, args.repo_type))
     pub = Publisher(remote, args.out_dir, prefix, upload=not args.no_upload)
     seen, pairs = existing_state(remote, prefix)
     print(f"📚 Data đang có trên repo: {len(seen)} mục (sẽ không tạo trùng)\n", flush=True)
+    if args.mode == "restyle":
+        return restyle(args, gem, pool, pub, remote, seen)
     batch = args.batch if args.mode == "finetune" else max(2, args.batch // 4)
     per_file = args.per_file or (100 if args.mode == "finetune" else 150)
 
@@ -462,7 +596,9 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["finetune", "pretrain"])
+    ap.add_argument("mode", choices=["finetune", "pretrain", "restyle", "check"])
+    ap.add_argument("--source", default=None, help="restyle/check: tên file nguồn trên repo (vd yui_chat.jsonl)")
+    ap.add_argument("--source_file", default=None, help="restyle/check: đường dẫn file nguồn trên máy")
     ap.add_argument("--files", type=int, default=1, help="số file cần tạo ở lần chạy này")
     ap.add_argument("--per_file", type=int, default=0, help="số hội thoại (finetune, mặc định 100) hoặc đoạn văn (pretrain, mặc định 150) mỗi file")
     ap.add_argument("--keys", default=None)
