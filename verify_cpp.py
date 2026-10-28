@@ -8,6 +8,8 @@ verify_cpp.py - đối chiếu yui (C++) với PyTorch trên model THẬT của 
 1) Tokenizer: mã hoá nhiều chuỗi bằng thư viện tokenizers và bằng ./yui --encode, đếm số chuỗi lệch (mong đợi 0).
 2) Logits: chạy CtxLM của repo (float32, eval, k_cap = 1 và 2) trên một chuỗi id, so với ./yui --ids ... --logits.
    Mong đợi file float32: max|diff| < 1e-3 và argmax khớp ~100%. File int8: argmax khớp cao (thường > 90%), diff lớn hơn là bình thường.
+   Với file int8 script chạy 2 lần: chế độ NHANH (kích hoạt lượng tử int8 theo khối 32, mặc định của yui) và chế độ --exact
+   (kích hoạt float như PyTorch). --exact chỉ sai khác do trọng số int8; nếu chế độ nhanh lệch hẳn so với --exact thì báo lại.
 """
 import argparse, json, os, subprocess, sys, tempfile
 import numpy as np
@@ -61,13 +63,15 @@ def main():
             b.moe.k_cap = k
         with torch.no_grad():
             ref = model(torch.tensor([ids]), None)[0][0].float().numpy()
-        r = run([a.yui, "--model", a.model, "--ids", ",".join(map(str, ids)), "--k", str(k), "--logits", tmp])
-        if r.returncode:
-            print(r.stderr)
-            sys.exit(1)
-        got = np.fromfile(tmp, dtype=np.float32).reshape(len(ids), -1)
-        print(f"[logits] {ck} k={k}: max|diff| = {np.abs(got - ref).max():.2e}, argmax khớp {100 * (got.argmax(-1) == ref.argmax(-1)).mean():.0f}% ({len(ids)} vị trí)")
-
+        for tag, extra in (("nhanh", []), ("exact", ["--exact"])):
+            r = run([a.yui, "--model", a.model, "--ids", ",".join(map(str, ids)), "--k", str(k), "--logits", tmp] + extra)
+            if r.returncode:
+                if extra:   # bản yui cũ chưa có --exact
+                    continue
+                print(r.stderr)
+                sys.exit(1)
+            got = np.fromfile(tmp, dtype=np.float32).reshape(len(ids), -1)
+            print(f"[logits] {ck} k={k} ({tag}): max|diff| = {np.abs(got - ref).max():.2e}, argmax khớp {100 * (got.argmax(-1) == ref.argmax(-1)).mean():.0f}% ({len(ids)} vị trí)")
 
 if __name__ == "__main__":
     main()

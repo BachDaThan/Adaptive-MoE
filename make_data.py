@@ -4,6 +4,7 @@ make_data.py - tạo data cho Yui bằng Gemini, TỰ ĐẶT TÊN file theo số
   python make_data.py finetune --files 5      # tạo 5 file hội thoại: nếu repo đã có 1.txt..32.txt thì ra 33.txt..37.txt
   python make_data.py pretrain --files 3      # tạo 3 file văn bản: pretrain/1.txt, pretrain/2.txt, ... (đánh số riêng)
   python make_data.py finetune --dry_models   # chỉ quét model Gemini và in thứ hạng, không tạo gì
+  python make_data.py finetune --tag 50M --files 5   # xếp theo cỡ model: Fine-tune/50M/N.txt (data train: data/50M/N.txt); thư mục chưa có thì tự tạo. Không có --tag = kiểu cũ (gốc repo / pretrain/)
   python make_data.py check --source yui_chat.jsonl        # soi data có sẵn (độ dài, câu mở đầu lặp, dấu hiệu lỗi chính tả) trước khi train
   python make_data.py restyle --source yui_chat.jsonl --files 3   # lấy CÂU HỎI THẬT trong file cũ, nhờ Gemini viết lại câu trả lời theo giọng Yui mới -> N.txt
 
@@ -16,11 +17,33 @@ make_data.py - tạo data cho Yui bằng Gemini, TỰ ĐẶT TÊN file theo số
   - Tự xoay key khi hết quota, tự chờ đúng thời gian server yêu cầu; lưu từng file ngay khi đủ nên đứt giữa chừng không mất.
   - Lọc: bỏ trùng với CẢ data đã có trên repo, bỏ câu quá dài, bỏ câu lộ "Gemini/Google/mô hình ngôn ngữ".
 Cần: pip install huggingface_hub   (cạnh sft_format.py của repo). Up lên repo private cần HF_TOKEN có quyền write.
+
+TỰ TÌM TRÊN INTERNET (không chỉ chắt lọc data có sẵn):
+  python make_data.py finetune --web both --files 3   # mỗi lần gọi: lấy bài Wikipedia tiếng Việt (hoặc nhờ Gemini tự tra Google) rồi chắt lọc thành hội thoại Yui
+  python make_data.py pretrain --web wiki --files 3   # viết lại văn bản thật thành đoạn văn mới (không chép nguyên văn)
+  --web off (mặc định, như cũ) | wiki (Wikipedia vi, không cần key) | search (Gemini + công cụ google_search) | both
+  Gemini hết quota/không hỗ trợ google_search thì tự chuyển sang Wikipedia; mạng Wikipedia lỗi thì tự chuyển sang search; cả hai lỗi thì tạo như cũ.
+
+CHẾ ĐỘ TỰ ĐỘNG - chỉnh hết bằng BIẾN MÔI TRƯỜNG (Secrets/Variables của Space, Colab, GitHub Actions...):
+  python make_data.py auto            # đọc biến, so với data ĐANG CÓ trên repo, chỉ tạo phần CÒN THIẾU rồi up lên (chạy lại bao nhiêu lần cũng được)
+  python make_data.py auto --plan     # chỉ in kế hoạch, không gọi Gemini
+  HF_TOKEN, GEMINI_API_KEYS           khoá (nhiều key Gemini cách nhau dấu phẩy)
+  HF_REPO                             repo dataset (mặc định BachDaThan/TrainAI-web); file xếp vào Fine-tune/<cỡ>/N.txt và data/<cỡ>/N.txt, <cỡ> tự tính từ số tham số (50M, 120M...) hoặc đặt MODEL_TAG
+  DATA_KINDS                          finetune,pretrain (mặc định cả hai; ghi một cái nếu chỉ cần cái đó)
+  MODEL_PARAMS                        số tham số model, vd 50M / 1.2B / 50000000  -> hệ thống tự tính lượng data hợp với model
+     hoặc MODEL_REPO (repo HF có config.json của model, vd BachDaThan/TrainAI)  hoặc MODEL_D, MODEL_LAYERS, MODEL_EXPERTS, MODEL_VOCAB
+  FT_PAIRS                            TỔNG số cặp hội thoại fine-tune muốn có trên repo (bỏ trống = tự tính theo model); FT_NEW_PAIRS = tạo THÊM đúng ngần này
+  FT_PER_FILE                         số cặp mỗi file N.txt (mặc định 100)
+  PRETRAIN_TOKENS                     TỔNG token văn bản train muốn có (bỏ trống = tự tính); PRETRAIN_NEW_TOKENS = tạo thêm; KHÔNG cần đặt "cặp" cho data train
+  WEB_SEARCH                          off | wiki | search | both (mặc định both)
+  WEB_TOPICS                          chủ đề riêng, cách nhau dấu ; (bỏ trống = dùng danh sách có sẵn + bài Wikipedia ngẫu nhiên)
+  MAX_FILES_PER_RUN                   chặn trên số file tạo mỗi lần chạy (mặc định 40), GEMINI_RPM, GEMINI_MODEL
 """
-import argparse, io, json, os, random, re, sys, time, urllib.error, urllib.request
+import argparse, io, json, math, os, random, re, sys, time, urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sft_format import load_convs, clean  # noqa: E402  (cùng bộ đọc/lọc với train_sft.py)
+from data_layout import params_from_arch, size_tag, finetune_prefix, data_prefix  # noqa: E402
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -61,7 +84,7 @@ PRETRAIN_STYLES = [
 PRETRAIN_TOPICS = TOPICS + ["lịch sử Việt Nam qua các thời kỳ", "thiên nhiên và môi trường", "y học thường thức", "kinh tế và đời sống",
                             "giáo dục", "nghệ thuật truyền thống", "khoa học vũ trụ", "triết lý sống"]
 
-LEAK = re.compile(r"(mô hình ngôn ngữ|\bGemini\b|\bGoogle\b|\bChatGPT\b|\bOpenAI\b|\bClaude\b|\bAnthropic\b|large language model)", re.I)
+LEAK = re.compile(r"(mô hình ngôn ngữ|\bGemini\b|\bGoogle\b|\bChatGPT\b|\bOpenAI\b|\bClaude\b|\bAnthropic\b|large language model|wikipedia|theo tài liệu|tài liệu trên|nguồn tham khảo)", re.I)
 
 
 # ============================ repo (HF hoặc thư mục máy) ============================
@@ -164,13 +187,14 @@ class ModelGone(Exception): pass
 class Transient(Exception): pass
 class Empty(Exception): pass
 class QuotaOut(Exception): pass
+class SearchUnavailable(Exception): pass   # model/gói này không dùng được công cụ google_search
 
 
 class Gemini:
     def __init__(self, keys, base=API_BASE, rpm=8.0, max_wait=900.0):
         self.keys = [{"k": k, "cool": 0.0, "last": 0.0, "dead": False} for k in keys]
         self.base, self.gap, self.max_wait = base.rstrip("/"), 60.0 / max(rpm, 0.1), max_wait
-        self.no_system, self.no_json = set(), set()
+        self.no_system, self.no_json, self.no_search = set(), set(), set()
 
     def _http(self, method, url, key, body=None):
         req = urllib.request.Request(url, method=method, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -216,8 +240,10 @@ class Gemini:
             raise QuotaOut(f"mọi key phải chờ > {int(self.max_wait)}s (hết quota)")
         return best, wait
 
-    def generate(self, model, system, prompt, temperature=1.0, max_tokens=8192, json_mode=True):
+    def generate(self, model, system, prompt, temperature=1.0, max_tokens=8192, json_mode=True, search=False):
         trans = 0
+        if search and model in self.no_search:
+            raise SearchUnavailable(model)
         for _ in range(12 + 3 * len(self.keys)):
             key, wait = self._pick()
             if wait > 0:
@@ -227,7 +253,9 @@ class Gemini:
                     "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens}}
             if model not in self.no_system:
                 body["systemInstruction"] = {"parts": [{"text": system}]}
-            if json_mode and model not in self.no_json:
+            if search:   # Gemini tự tra Google (grounding). Không dùng chung được với chế độ JSON -> prompt tự đòi JSON, phía gọi tự tách
+                body["tools"] = [{"google_search": {}}]
+            elif json_mode and model not in self.no_json:
                 body["generationConfig"]["responseMimeType"] = "application/json"
             key["last"] = time.time()
             st, txt = self._http("POST", f"{self.base}/models/{model}:generateContent", key["k"], body)
@@ -239,6 +267,10 @@ class Gemini:
                 if not out.strip():
                     raise Empty(str(j.get("promptFeedback") or (j.get("candidates") or [{}])[0].get("finishReason") or "rỗng"))
                 return out
+            if search and st in (400, 403, 404, 429) and any(w in low for w in ("google_search", "googlesearch", "grounding", "search tool")):
+                self.no_search.add(model)
+                print(f"  ⚠ {model} không dùng được google_search ({st}); chuyển sang nguồn Wikipedia", flush=True)
+                raise SearchUnavailable(model)
             if st == 429:
                 if "limit: 0" in low:
                     raise ModelGone("model không có quota trên gói này (limit: 0)")
@@ -309,9 +341,100 @@ def strip_fence(t):
     return re.sub(r"\s*```$", "", t)
 
 
-def finetune_prompt(n, examples):
+
+# ============================ internet: Wikipedia tiếng Việt + Gemini google_search ============================
+class Wiki:
+    """Lấy văn bản thật từ Wikipedia tiếng Việt (API công khai, không cần key). Dùng để chắt lọc thành data mới, KHÔNG up nguyên văn."""
+    CUT = re.compile(r"\n=+\s*(Tham khảo|Liên kết ngoài|Chú thích|Xem thêm|Ghi chú|Thư mục)\s*=+.*", re.S | re.I)
+
+    def __init__(self, base="https://vi.wikipedia.org", delay=0.6):
+        self.base, self.delay, self.fails, self.warned = base.rstrip("/"), delay, 0, False
+
+    def _get(self, params):
+        url = f"{self.base}/w/api.php?" + urllib.parse.urlencode({**params, "format": "json", "formatversion": "2"})
+        req = urllib.request.Request(url, headers={"User-Agent": "YuiDataBot/1.0 (educational dataset builder)", "Accept": "application/json"})
+        time.sleep(self.delay)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    def titles(self, topic, n=6):
+        if topic:
+            j = self._get({"action": "query", "list": "search", "srsearch": topic, "srlimit": n, "srnamespace": 0})
+            return [x["title"] for x in j.get("query", {}).get("search", [])]
+        j = self._get({"action": "query", "list": "random", "rnlimit": n, "rnnamespace": 0})
+        return [x["title"] for x in j.get("query", {}).get("random", [])]
+
+    def text(self, title, chars=4000):
+        j = self._get({"action": "query", "prop": "extracts", "explaintext": 1, "exchars": chars, "redirects": 1, "titles": title})
+        pages = j.get("query", {}).get("pages", [])
+        t = (pages[0].get("extract") if pages else "") or ""
+        t = self.CUT.sub("", t)
+        t = re.sub(r"\n=+[^\n]*=+\s*\n", "\n", t)          # bỏ dòng tiêu đề mục
+        t = re.sub(r"\[\d+\]|\[cần dẫn nguồn\]", "", t)
+        t = re.sub(r"\n{2,}", "\n", t).strip()
+        return t
+
+    def doc(self, topic):
+        """Trả {'title','text'} hoặc None nếu lỗi/không có bài đủ dài."""
+        try:
+            ts = self.titles(topic) or self.titles(None)
+            random.shuffle(ts)
+            for title in ts[:4]:
+                t = self.text(title)
+                letters = sum(c.isalpha() for c in t)
+                if len(t) >= 500 and letters > 0.6 * len(t) * 0.8:
+                    self.fails = 0
+                    return {"title": title, "text": t}
+        except Exception as e:  # noqa: BLE001
+            self.fails += 1
+            if not self.warned:
+                self.warned = True
+                print(f"  ⚠ không lấy được Wikipedia ({str(e)[:80]}); sẽ thử nguồn khác", flush=True)
+        return None
+
+
+class WebPicker:
+    """Mỗi lần gọi Gemini chọn nguồn thông tin: bài Wikipedia thật ('wiki'), hay để Gemini tự tra Google ('search'), hay thuần sáng tác."""
+
+    def __init__(self, mode, wiki, topics):
+        self.mode, self.wiki, self.topics = mode, wiki, topics
+
+    def pick(self, model, gem):
+        topic = random.choice(self.topics) if self.topics and random.random() < 0.8 else None   # 20% bài ngẫu nhiên cho đa dạng
+        opts = []
+        if self.mode in ("wiki", "both") and self.wiki.fails < 5:
+            opts.append("wiki")
+        if self.mode in ("search", "both") and model not in gem.no_search:
+            opts.append("search")
+        random.shuffle(opts)
+        for o in opts:
+            if o == "search":
+                return None, topic or random.choice(self.topics or ["một chủ đề đời sống bất kỳ"]), True
+            d = self.wiki.doc(topic)
+            if d:
+                return d, topic, False
+        return None, topic, False
+
+
+def json_slice(t):
+    """Gemini dùng google_search không bật được JSON mode: lấy mảng [...] ra khỏi câu trả lời."""
+    t = strip_fence(t)
+    a, b = t.find("["), t.rfind("]")
+    return t[a:b + 1] if 0 <= a < b else t
+
+
+def too_close(par, doc, n=12):
+    """True nếu đoạn văn chép nguyên >= n từ liên tiếp từ tài liệu gốc (tránh up lại nguyên văn Wikipedia)."""
+    if not doc:
+        return False
+    src = " ".join(norm_key(doc["text"]).split())
+    w = norm_key(par).split()
+    return any(" ".join(w[i:i + n]) in src for i in range(0, max(1, len(w) - n + 1)))
+
+
+def finetune_prompt(n, examples, doc=None, topic=None, search=False):
     sit = random.sample(SITUATIONS, 3)
-    topic = random.choice(TOPICS)
+    topic = topic or random.choice(TOPICS)
     shots = "\n".join(json.dumps({"messages": [{"role": "user", "content": u}, {"role": "assistant", "content": a}]}, ensure_ascii=False)
                       for u, a in examples)
     system = ("Bạn tạo dữ liệu huấn luyện cho chatbot tiếng Việt nhỏ tên Yui. " + PERSONA +
@@ -325,17 +448,43 @@ def finetune_prompt(n, examples):
               "- Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
               "Ví dụ giọng văn (đừng chép lại):\n" + shots + "\n\n"
               'Định dạng: [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
+    if doc:
+        prompt = (f"TÀI LIỆU thật lấy từ internet (chủ đề «{doc['title']}»):\n\"\"\"\n{doc['text']}\n\"\"\"\n\n"
+                  f"Hãy tạo {n} cuộc hội thoại KHÁC NHAU mà người dùng hỏi những điều CÓ TRONG tài liệu trên (hỏi tự nhiên, đời thường, không nhắc tới tài liệu), "
+                  "Yui trả lời ĐÚNG theo tài liệu, ngắn gọn, giọng Yui. Chỉ dùng thông tin có trong tài liệu, không thêm số liệu ngoài tài liệu; "
+                  "Yui không nói 'theo tài liệu/Wikipedia'. Mỗi cuộc có 1 đến 2 lượt, mỗi tin tối đa 25 từ. "
+                  "Giọng user đa dạng (cộc lốc, viết tắt, sai chính tả nhẹ, tò mò). Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
+                  "Ví dụ giọng văn Yui (đừng chép lại):\n" + shots + "\n\n"
+                  'Chỉ trả về mảng JSON: [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
+    elif search:
+        prompt = (f"Hãy TRA CỨU trên Google thông tin chính xác, hữu ích về chủ đề «{topic}», rồi tạo {n} cuộc hội thoại KHÁC NHAU dựa trên thông tin tra được: "
+                  "người dùng hỏi tự nhiên, đời thường (không nhắc việc tra cứu), Yui trả lời ĐÚNG sự thật, ngắn gọn, giọng Yui. "
+                  "Không biết chắc thì Yui nói thật là không rõ. Mỗi cuộc có 1 đến 2 lượt, mỗi tin tối đa 25 từ. Yui không nhắc tên nguồn/Google/Wikipedia. "
+                  "Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
+                  "Ví dụ giọng văn Yui (đừng chép lại):\n" + shots + "\n\n"
+                  'Chỉ trả về mảng JSON (không giải thích, không markdown): [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
     return system, prompt
 
 
-def pretrain_prompt(n):
+def pretrain_prompt(n, doc=None, topic=None, search=False):
     style, level = random.choice(PRETRAIN_STYLES)
-    topic = random.choice(PRETRAIN_TOPICS)
+    topic = topic or random.choice(PRETRAIN_TOPICS)
     system = "Bạn là nhà văn và biên tập viên tiếng Việt. Chỉ trả về văn bản, không lời dẫn, không markdown."
     prompt = (f"Viết {n} đoạn văn tiếng Việt RIÊNG BIỆT, mỗi đoạn 120-250 từ, thể loại: {style}; độ khó: {level}; chủ đề gợi ý: {topic} "
               "(mỗi đoạn có thể đổi góc nhìn). Nội dung phải là sáng tác gốc, không chép lại tác phẩm có bản quyền, thông tin thực tế phải đúng. "
               "Tiếng Việt chuẩn có dấu, tự nhiên. Không đánh số, không tiêu đề, không gạch đầu dòng. "
               "Các đoạn cách nhau bằng một dòng chỉ gồm ba dấu =  (===).")
+    if doc:
+        prompt = (f"TÀI LIỆU thật lấy từ internet (chủ đề «{doc['title']}»):\n\"\"\"\n{doc['text']}\n\"\"\"\n\n"
+                  f"Dựa trên thông tin trong tài liệu, viết {n} đoạn văn tiếng Việt RIÊNG BIỆT, mỗi đoạn 120-250 từ, thể loại: {style}; độ khó: {level}. "
+                  "PHẢI viết lại bằng lời văn của bạn (không chép nguyên câu, không chép quá 8 từ liên tiếp), thông tin đúng như tài liệu, không thêm số liệu ngoài tài liệu. "
+                  "Tiếng Việt chuẩn có dấu, tự nhiên. Không đánh số, không tiêu đề, không gạch đầu dòng, không nhắc tới 'tài liệu' hay Wikipedia. "
+                  "Các đoạn cách nhau bằng một dòng chỉ gồm ba dấu =  (===).")
+    elif search:
+        prompt = (f"Hãy TRA CỨU trên Google thông tin chính xác về chủ đề «{topic}», rồi viết {n} đoạn văn tiếng Việt RIÊNG BIỆT, mỗi đoạn 120-250 từ, "
+                  f"thể loại: {style}; độ khó: {level}, dựa trên thông tin tra được. Viết bằng lời văn của bạn, thông tin phải đúng. "
+                  "Tiếng Việt chuẩn có dấu, tự nhiên. Không đánh số, không tiêu đề, không gạch đầu dòng, không nhắc tên nguồn. "
+                  "Các đoạn cách nhau bằng một dòng chỉ gồm ba dấu =  (===).")
     return system, prompt
 
 
@@ -497,7 +646,7 @@ def existing_state(repo, prefix):
             texts[n] = repo.read(n).decode("utf-8", "ignore")
         except Exception:  # noqa: BLE001
             pass
-    if prefix == "":
+    if not prefix.startswith(("pretrain/", "data/")):
         convs, _ = load_convs(texts)
         for c in convs:
             seen.add(norm_key(c[0][0]))
@@ -507,6 +656,135 @@ def existing_state(repo, prefix):
             for p in re.split(r"\n{2,}", t):
                 seen.add(norm_key(p[:80]))
     return seen, pairs
+
+
+
+# ============================ chế độ tự động: đọc BIẾN MÔI TRƯỜNG, tạo phần còn thiếu ============================
+def env(name, default=None):
+    v = os.environ.get(name)
+    return default if v is None or not v.strip() else v.strip()
+
+
+def parse_count(s):
+    """'50M' -> 50_000_000, '1.2B' -> 1.2e9, '300k', '50tr' (triệu), '50000000'."""
+    m = re.fullmatch(r"\s*([\d.,]+)\s*([kKmMbBgG]|tr|tỷ|ty)?\s*", str(s))
+    if not m:
+        raise ValueError(f"không hiểu số '{s}' (vd 50M, 1.2B, 50000000)")
+    v = float(m.group(1).replace(",", "."))
+    mult = {"k": 1e3, "m": 1e6, "tr": 1e6, "b": 1e9, "g": 1e9, "tỷ": 1e9, "ty": 1e9}.get((m.group(2) or "").lower(), 1)
+    return int(v * mult)
+
+
+def model_params(token=None):
+    """(số tham số, mô tả nguồn). Thứ tự: MODEL_PARAMS > config.json của MODEL_REPO > MODEL_D/LAYERS/EXPERTS/VOCAB."""
+    if env("MODEL_PARAMS"):
+        return parse_count(env("MODEL_PARAMS")), "MODEL_PARAMS"
+    if env("MODEL_REPO"):
+        try:
+            from huggingface_hub import hf_hub_download
+            cfg = json.load(open(hf_hub_download(env("MODEL_REPO"), "config.json", repo_type=env("MODEL_REPO_TYPE", "dataset"), token=token), encoding="utf-8"))
+            return params_from_arch(cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]), f"config.json của {env('MODEL_REPO')}"
+        except Exception as e:  # noqa: BLE001
+            print(f"  ⚠ không đọc được config.json của MODEL_REPO ({str(e)[:80]}); thử biến khác", flush=True)
+    if env("MODEL_D") and env("MODEL_LAYERS") and env("MODEL_EXPERTS"):
+        return params_from_arch(int(env("MODEL_VOCAB", "16000")), int(env("MODEL_D")), int(env("MODEL_LAYERS")), int(env("MODEL_EXPERTS"))), "MODEL_D/LAYERS/EXPERTS/VOCAB"
+    return 50_000_000, "mặc định 50M (preset small của repo; đặt MODEL_PARAMS để đổi)"
+
+
+def fmt_n(n):
+    return f"{n / 1e9:.2f}B" if n >= 1e9 else (f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.1f}k" if n >= 1e3 else str(int(n))))
+
+
+def make_plan(params, have_pairs, have_tokens, tokens_per_file):
+    """Từ tham số model + data đang có -> cần tạo thêm bao nhiêu. Công thức (đều ghi đè được bằng biến):
+       cặp fine-tune mục tiêu = params / 2000 (kẹp 2.000 .. 100.000);   token train mục tiêu = params x 0,2 (PRETRAIN_TOKENS_PER_PARAM; phần lớn data train nên lấy
+       từ web có sẵn qua train_lm.py --hf_dataset, phần tạo bằng Gemini là phần tinh chỉnh chất lượng)."""
+    ft_per_file = int(env("FT_PER_FILE", "100"))
+    pre_per_file = int(env("PRETRAIN_PER_FILE", "150"))
+    if env("FT_NEW_PAIRS"):
+        ft_need = int(parse_count(env("FT_NEW_PAIRS"))); ft_target = have_pairs + ft_need
+    else:
+        ft_target = int(parse_count(env("FT_PAIRS"))) if env("FT_PAIRS") else int(min(100_000, max(2_000, params / 2000)))
+        ft_need = max(0, ft_target - have_pairs)
+    if env("PRETRAIN_NEW_TOKENS"):
+        pre_need = parse_count(env("PRETRAIN_NEW_TOKENS")); pre_target = have_tokens + pre_need
+    else:
+        pre_target = parse_count(env("PRETRAIN_TOKENS")) if env("PRETRAIN_TOKENS") else int(params * float(env("PRETRAIN_TOKENS_PER_PARAM", "0.2")))
+        pre_need = max(0, pre_target - have_tokens)
+    return dict(ft_per_file=ft_per_file, ft_target=ft_target, ft_need=ft_need, ft_files=math.ceil(ft_need / ft_per_file),
+                pre_per_file=pre_per_file, pre_target=pre_target, pre_need=pre_need, pre_files=math.ceil(pre_need / max(1, tokens_per_file)))
+
+
+def count_existing(remote, tag):
+    """Đếm data ĐÃ CÓ cho cỡ model này: Fine-tune/<tag>/N.txt (số cặp) và data/<tag>/N.txt (số ký tự)."""
+    names = remote.list() if remote is not None else []
+    fp, dp = finetune_prefix(tag), data_prefix(tag)
+    ft = [n for n in names if re.fullmatch(re.escape(fp) + r"\d+\.txt", n)]
+    pre = [n for n in names if re.fullmatch(re.escape(dp) + r"\d+\.txt", n)]
+    pairs, chars, pre_files = 0, 0, 0
+    for n in ft:
+        try:
+            pairs += sum(1 for ln in remote.read(n).decode("utf-8", "ignore").splitlines() if ln.strip().startswith(("{", "[")))
+        except Exception:  # noqa: BLE001
+            pass
+    for n in pre:
+        try:
+            chars += len(remote.read(n).decode("utf-8", "ignore")); pre_files += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return pairs, chars, pre_files
+
+
+def auto(args, build_parser):
+    token = env("HF_TOKEN")
+    cpt = float(env("CHARS_PER_TOKEN", "3.0"))
+    kinds = [k.strip() for k in (env("DATA_KINDS", "finetune,pretrain")).split(",") if k.strip() in ("finetune", "pretrain")]
+    if not kinds:
+        sys.exit("DATA_KINDS phải chứa finetune và/hoặc pretrain")
+    repo_dir = env("DATA_REPO_DIR") or args.repo_dir
+    remote = LocalRepo(repo_dir) if repo_dir else HFRepo(env("HF_REPO", args.repo), env("HF_REPO_TYPE", args.repo_type), token)
+    params, src = model_params(token)
+    tag = env("MODEL_TAG") or size_tag(params)
+    try:
+        have_pairs, have_chars, pre_files = count_existing(remote, tag)
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"Không đọc được repo dữ liệu ({str(e)[:120]}): kiểm tra HF_TOKEN / HF_REPO")
+    have_tokens = int(have_chars / cpt)
+    est_file_chars = (have_chars / pre_files) if pre_files else int(env("PRETRAIN_PER_FILE", "150")) * 800
+    plan = make_plan(params, have_pairs, have_tokens, int(est_file_chars / cpt))
+    cap = int(env("MAX_FILES_PER_RUN", "40"))
+    print(f"🧭 Model: {fmt_n(params)} tham số (từ {src}) -> thư mục cỡ '{tag}': Fine-tune/{tag}/ và data/{tag}/")
+    if "finetune" in kinds:
+        print(f"   Fine-tune: đang có {have_pairs} cặp -> mục tiêu {plan['ft_target']} -> cần tạo thêm {plan['ft_need']} cặp "
+              f"= {plan['ft_files']} file ({plan['ft_per_file']} cặp/file; tối đa {cap} file mỗi lần chạy)")
+    if "pretrain" in kinds:
+        print(f"   Data train: đang có ~{fmt_n(have_tokens)} token ({pre_files} file) -> mục tiêu {fmt_n(plan['pre_target'])} -> cần thêm ~{fmt_n(plan['pre_need'])} token "
+              f"= {plan['pre_files']} file (không cần đặt 'cặp'; mỗi file ~{plan['pre_per_file']} đoạn văn)")
+    if args.plan:
+        return
+    web = env("WEB_SEARCH", "both")
+    if web not in ("off", "wiki", "search", "both"):
+        sys.exit("WEB_SEARCH phải là off | wiki | search | both")
+    for kind in kinds:
+        files = min(cap, plan["ft_files"] if kind == "finetune" else plan["pre_files"])
+        if files <= 0:
+            print(f"\n✅ {kind}: đã đủ so với mục tiêu, không tạo thêm.")
+            continue
+        print(f"\n▶ {kind}: tạo {files} file mới...\n", flush=True)
+        argv = [kind, "--files", str(files), "--per_file", str(plan["ft_per_file"] if kind == "finetune" else plan["pre_per_file"]), "--web", web, "--tag", tag,
+                "--repo", env("HF_REPO", args.repo), "--repo_type", env("HF_REPO_TYPE", args.repo_type), "--rpm", env("GEMINI_RPM", str(args.rpm)),
+                "--out_dir", args.out_dir]
+        if repo_dir:
+            argv += ["--repo_dir", repo_dir]
+        if env("GEMINI_MODEL"):
+            argv += ["--model", env("GEMINI_MODEL")]
+        if env("WEB_TOPICS"):
+            argv += ["--topics", env("WEB_TOPICS")]
+        if args.api_base != API_BASE:
+            argv += ["--api_base", args.api_base]
+        if args.wiki_base != WIKI_BASE:
+            argv += ["--wiki_base", args.wiki_base]
+        run(build_parser().parse_args(argv))
 
 
 def run(args):
@@ -526,7 +804,11 @@ def run(args):
         return
     print(f"✅ Dùng model: {pool[0]} (tự chuyển sang model kế nếu lỗi)\n", flush=True)
 
-    prefix = "pretrain/" if args.mode == "pretrain" else ""
+    if args.tag:   # xếp theo cỡ model: data/<tag>/ và Fine-tune/<tag>/ (xem data_layout.py)
+        prefix = data_prefix(args.tag) if args.mode == "pretrain" else finetune_prefix(args.tag)
+        print(f"📁 Thư mục đích trên repo: {prefix} (tự tạo nếu chưa có)", flush=True)
+    else:
+        prefix = "pretrain/" if args.mode == "pretrain" else ""
     remote = LocalRepo(args.repo_dir) if args.repo_dir else (None if args.no_upload else HFRepo(args.repo, args.repo_type))
     pub = Publisher(remote, args.out_dir, prefix, upload=not args.no_upload)
     seen, pairs = existing_state(remote, prefix)
@@ -536,14 +818,28 @@ def run(args):
     batch = args.batch if args.mode == "finetune" else max(2, args.batch // 4)
     per_file = args.per_file or (100 if args.mode == "finetune" else 150)
 
+    webber = None
+    if args.web != "off":
+        topics = [t.strip() for t in re.split(r"[;\n]", args.topics or "") if t.strip()] or (TOPICS if args.mode == "finetune" else PRETRAIN_TOPICS)
+        webber = WebPicker(args.web, Wiki(args.wiki_base), topics)
+        print(f"🌐 Tìm thông tin trên internet: nguồn '{args.web}' ({len(topics)} chủ đề, xen bài ngẫu nhiên)\n", flush=True)
+
     done_files, buf, fails = 0, [], 0
     while done_files < args.files:
+        doc, topic, use_search = (webber.pick(pool[0], gem) if webber else (None, None, False))
+        shots = random.sample(pairs, min(6, len(pairs))) if pairs else []
         if args.mode == "finetune":
-            system, prompt = finetune_prompt(batch, random.sample(pairs, min(6, len(pairs))) if pairs else [])
+            system, prompt = finetune_prompt(batch, shots, doc=doc, topic=topic, search=use_search)
         else:
-            system, prompt = pretrain_prompt(batch)
+            system, prompt = pretrain_prompt(batch, doc=doc, topic=topic, search=use_search)
+        if doc:
+            print(f"  📖 nguồn: Wikipedia «{doc['title']}»", flush=True)
+        elif use_search:
+            print(f"  🔎 Gemini tự tra Google: «{topic}»", flush=True)
         try:
-            raw = gem.generate(pool[0], system, prompt, temperature=args.temperature, json_mode=(args.mode == "finetune"))
+            raw = gem.generate(pool[0], system, prompt, temperature=args.temperature, json_mode=(args.mode == "finetune" and not use_search), search=use_search)
+        except SearchUnavailable:
+            continue   # model này không có google_search: lần sau WebPicker tự bỏ 'search' cho model đó
         except ModelGone as e:
             print(f"  ⚠ bỏ model {pool[0]}: {e}", flush=True)
             pool.pop(0)
@@ -566,7 +862,7 @@ def run(args):
         fails = 0
         added = 0
         if args.mode == "finetune":
-            convs, _ = load_convs({"x": strip_fence(raw)}, max_chars=200)
+            convs, _ = load_convs({"x": json_slice(raw) if use_search else strip_fence(raw)}, max_chars=200)
             for c in convs:
                 k = norm_key(c[0][0])
                 if not k or k in seen or any(LEAK.search(a) for _, a in c):
@@ -578,7 +874,7 @@ def run(args):
         else:
             for p in clean_pretrain(raw):
                 k = norm_key(p[:80])
-                if k in seen:
+                if k in seen or too_close(p, doc):
                     continue
                 seen.add(k)
                 buf.append(p)
@@ -594,9 +890,17 @@ def run(args):
     print(f"\n🎉 Xong: {done_files} file mới.", flush=True)
 
 
-def main():
+WIKI_BASE = "https://vi.wikipedia.org"
+
+
+def build_parser():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["finetune", "pretrain", "restyle", "check"])
+    ap.add_argument("mode", choices=["finetune", "pretrain", "restyle", "check", "auto"])
+    ap.add_argument("--web", choices=["off", "wiki", "search", "both"], default="off", help="tìm thông tin trên internet: wiki = Wikipedia vi, search = Gemini tự tra Google, both = cả hai")
+    ap.add_argument("--topics", default=None, help="chủ đề riêng cho --web, cách nhau dấu ; (mặc định: danh sách có sẵn + bài ngẫu nhiên)")
+    ap.add_argument("--wiki_base", default=WIKI_BASE)
+    ap.add_argument("--tag", default=None, help="cỡ model, vd 50M: file vào Fine-tune/<tag>/N.txt hoặc data/<tag>/N.txt (tự tạo thư mục). Bỏ trống = kiểu cũ")
+    ap.add_argument("--plan", action="store_true", help="mode auto: chỉ in kế hoạch, không tạo gì")
     ap.add_argument("--source", default=None, help="restyle/check: tên file nguồn trên repo (vd yui_chat.jsonl)")
     ap.add_argument("--source_file", default=None, help="restyle/check: đường dẫn file nguồn trên máy")
     ap.add_argument("--files", type=int, default=1, help="số file cần tạo ở lần chạy này")
@@ -614,7 +918,15 @@ def main():
     ap.add_argument("--api_base", default=API_BASE)
     ap.add_argument("--dry_models", action="store_true")
     ap.add_argument("--seed", type=int, default=int(time.time()) % 100000)
-    run(ap.parse_args())
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
+    if args.mode == "auto":
+        random.seed(args.seed)
+        return auto(args, build_parser)
+    run(args)
 
 
 if __name__ == "__main__":

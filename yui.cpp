@@ -39,6 +39,38 @@
 #include <vector>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#define YUI_X86 1
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define YUI_ARM64 1
+#include <arm_neon.h>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sys/auxv.h>
+#endif
+#endif
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+// thuộc tính "target": cho phép biên dịch kernel AVX2 / dotprod trong file không dùng -mavx2 (chọn lúc chạy, xem detect_isa)
+#if defined(_MSC_VER)
+#define YUI_TGT_AVX2
+#define YUI_TGT_DOT
+#else
+#define YUI_TGT_AVX2 __attribute__((target("avx2,fma")))
+#if defined(__clang__)
+#define YUI_TGT_DOT __attribute__((target("dotprod")))
+#else
+#define YUI_TGT_DOT __attribute__((target("arch=armv8.2-a+dotprod")))
+#endif
+#endif
 #ifndef YUI_LIB   // server HTTP chỉ có ở bản dòng lệnh (POSIX); bản thư viện cho app (-DYUI_LIB) không cần
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -53,7 +85,239 @@ using std::vector;
 struct YuiError : std::runtime_error { using std::runtime_error::runtime_error; };
 [[noreturn]] static void die(const string& m) { throw YuiError(m); }
 
-// ============================ đọc file .yui ============================
+// ============================ phần cứng: chọn SIMD lúc chạy + nhóm luồng ============================
+// Một file chạy được trên mọi CPU: lúc khởi động đo CPU (AVX2+FMA trên x86, NEON / NEON+dotprod trên ARM64) rồi chọn kernel nhanh nhất.
+// YUI_ISA=scalar ép chạy kernel thường (để so kết quả); YUI_EXACT=1 tính bằng float như PyTorch (chậm hơn, dùng khi kiểm tra);
+// YUI_THREADS=N chọn số luồng; YUI_MMAP=0/1 tắt/bật nạp model bằng mmap.
+enum Isa { ISA_SCALAR = 0, ISA_AVX2 = 1, ISA_NEON = 2, ISA_DOT = 3 };
+static int detect_isa() {
+    if (const char* e = getenv("YUI_ISA")) if (string(e) == "scalar") return ISA_SCALAR;
+#if defined(YUI_X86)
+  #if defined(_MSC_VER)
+    int r[4]; __cpuid(r, 0);
+    if (r[0] >= 7) {
+        __cpuidex(r, 1, 0);
+        const bool osxsave = (r[2] >> 27) & 1, avx = (r[2] >> 28) & 1, fma = (r[2] >> 12) & 1;
+        if (osxsave && avx && fma && (_xgetbv(0) & 6) == 6) { __cpuidex(r, 7, 0); if ((r[1] >> 5) & 1) return ISA_AVX2; }
+    }
+    return ISA_SCALAR;
+  #else
+    __builtin_cpu_init();
+    return (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) ? ISA_AVX2 : ISA_SCALAR;
+  #endif
+#elif defined(YUI_ARM64)
+  #if defined(__linux__) || defined(__ANDROID__)
+    return (getauxval(AT_HWCAP) & (1UL << 20)) ? ISA_DOT : ISA_NEON;   // HWCAP_ASIMDDP
+  #elif defined(__ARM_FEATURE_DOTPROD)
+    return ISA_DOT;
+  #else
+    return ISA_NEON;
+  #endif
+#else
+    return ISA_SCALAR;
+#endif
+}
+static int isa() { static const int v = detect_isa(); return v; }
+static const char* isa_name() { static const char* n[] = {"scalar", "avx2+fma", "neon", "neon+dotprod"}; return n[isa()]; }
+static bool g_exact = [] { const char* e = getenv("YUI_EXACT"); return e && *e == '1'; }();
+
+// ---- tích vô hướng int8 x int8: kích hoạt (activation) được lượng tử theo khối 32 phần tử, mỗi khối một hệ số (như Q8_0 của llama.cpp);
+//      trọng số vẫn đúng như trong file .yui (int8, một hệ số mỗi hàng) nên KHÔNG cần xuất lại model.
+static inline float tail_q8(const int8_t* w, const int8_t* xq, const float* xs, int n) {   // phần lẻ cuối hàng (n % 32)
+    const int nb = n / 32, lo = nb * 32; if (lo == n) return 0.f;
+    int s = 0; for (int i = lo; i < n; i++) s += (int)w[i] * (int)xq[i];
+    return (float)s * xs[nb];
+}
+static void rows_q8_scalar(const int8_t* W, int C, const int8_t* xq, const float* xs, const float* sc, float* y, int r0, int r1) {
+    const int nb = (C + 31) / 32;
+    for (int r = r0; r < r1; r++) {
+        const int8_t* w = W + (size_t)r * C; float acc = 0.f;
+        for (int b = 0; b < nb; b++) {
+            const int lo = b * 32, hi = std::min(C, lo + 32); int s = 0;
+            for (int i = lo; i < hi; i++) s += (int)w[i] * (int)xq[i];
+            acc += (float)s * xs[b];
+        }
+        y[r] = acc * sc[r];
+    }
+}
+static void rows_f32_scalar(const float* W, int C, const float* x, float* y, int r0, int r1) {
+    for (int r = r0; r < r1; r++) {
+        const float* w = W + (size_t)r * C; float acc = 0.f;
+        #pragma omp simd reduction(+ : acc)
+        for (int c = 0; c < C; c++) acc += w[c] * x[c];
+        y[r] = acc;
+    }
+}
+static void rows_q8x_scalar(const int8_t* W, int C, const float* x, const float* sc, float* y, int r0, int r1) {   // YUI_EXACT: int8 x float như bản cũ
+    for (int r = r0; r < r1; r++) {
+        const int8_t* w = W + (size_t)r * C; float acc = 0.f;
+        #pragma omp simd reduction(+ : acc)
+        for (int c = 0; c < C; c++) acc += (float)w[c] * x[c];
+        y[r] = acc * sc[r];
+    }
+}
+#ifdef YUI_X86
+YUI_TGT_AVX2 static inline float hsum256(__m256 v) {
+    __m128 lo = _mm256_castps256_ps128(v), hi = _mm256_extractf128_ps(v, 1);
+    lo = _mm_add_ps(lo, hi); lo = _mm_add_ps(lo, _mm_movehl_ps(lo, lo)); lo = _mm_add_ss(lo, _mm_shuffle_ps(lo, lo, 1));
+    return _mm_cvtss_f32(lo);
+}
+YUI_TGT_AVX2 static inline __m256 q8blk_avx2(const int8_t* w, const int8_t* x, __m256i one) {
+    const __m256i vw = _mm256_loadu_si256((const __m256i*)w), vx = _mm256_loadu_si256((const __m256i*)x);
+    // |w| (không dấu) x (x mang dấu của w): maddubs cần toán hạng đầu không dấu. |w| <= 127 nên cặp tổng <= 32258, không tràn int16.
+    const __m256i p = _mm256_maddubs_epi16(_mm256_sign_epi8(vw, vw), _mm256_sign_epi8(vx, vw));
+    return _mm256_cvtepi32_ps(_mm256_madd_epi16(p, one));
+}
+YUI_TGT_AVX2 static void rows_q8_avx2(const int8_t* W, int C, const int8_t* xq, const float* xs, const float* sc, float* y, int r0, int r1) {
+    const int nb = C / 32; const __m256i one = _mm256_set1_epi16(1);
+    for (int r = r0; r < r1; r++) {
+        const int8_t* w = W + (size_t)r * C; __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps(); int b = 0;
+        for (; b + 1 < nb; b += 2) {
+            a0 = _mm256_fmadd_ps(q8blk_avx2(w + b * 32, xq + b * 32, one), _mm256_set1_ps(xs[b]), a0);
+            a1 = _mm256_fmadd_ps(q8blk_avx2(w + b * 32 + 32, xq + b * 32 + 32, one), _mm256_set1_ps(xs[b + 1]), a1);
+        }
+        for (; b < nb; b++) a0 = _mm256_fmadd_ps(q8blk_avx2(w + b * 32, xq + b * 32, one), _mm256_set1_ps(xs[b]), a0);
+        y[r] = (hsum256(_mm256_add_ps(a0, a1)) + tail_q8(w, xq, xs, C)) * sc[r];
+    }
+}
+YUI_TGT_AVX2 static void rows_f32_avx2(const float* W, int C, const float* x, float* y, int r0, int r1) {
+    const int n16 = C / 16 * 16;
+    for (int r = r0; r < r1; r++) {
+        const float* w = W + (size_t)r * C; __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
+        for (int c = 0; c < n16; c += 16) {
+            a0 = _mm256_fmadd_ps(_mm256_loadu_ps(w + c), _mm256_loadu_ps(x + c), a0);
+            a1 = _mm256_fmadd_ps(_mm256_loadu_ps(w + c + 8), _mm256_loadu_ps(x + c + 8), a1);
+        }
+        float a = hsum256(_mm256_add_ps(a0, a1)); for (int c = n16; c < C; c++) a += w[c] * x[c];
+        y[r] = a;
+    }
+}
+#endif
+#ifdef YUI_ARM64
+static void rows_q8_neon(const int8_t* W, int C, const int8_t* xq, const float* xs, const float* sc, float* y, int r0, int r1) {
+    const int nb = C / 32;
+    for (int r = r0; r < r1; r++) {
+        const int8_t* w = W + (size_t)r * C; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int b = 0; b < nb; b++) {
+            const int8x16_t w0 = vld1q_s8(w + b * 32), w1 = vld1q_s8(w + b * 32 + 16), x0 = vld1q_s8(xq + b * 32), x1 = vld1q_s8(xq + b * 32 + 16);
+            int16x8_t p0 = vmull_s8(vget_low_s8(w0), vget_low_s8(x0)); p0 = vmlal_s8(p0, vget_high_s8(w0), vget_high_s8(x0));
+            int16x8_t p1 = vmull_s8(vget_low_s8(w1), vget_low_s8(x1)); p1 = vmlal_s8(p1, vget_high_s8(w1), vget_high_s8(x1));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(vpadalq_s16(vpaddlq_s16(p0), p1)), xs[b]);
+        }
+        y[r] = (vaddvq_f32(acc) + tail_q8(w, xq, xs, C)) * sc[r];
+    }
+}
+YUI_TGT_DOT static void rows_q8_dot(const int8_t* W, int C, const int8_t* xq, const float* xs, const float* sc, float* y, int r0, int r1) {
+    const int nb = C / 32;
+    for (int r = r0; r < r1; r++) {
+        const int8_t* w = W + (size_t)r * C; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int b = 0; b < nb; b++) {
+            int32x4_t s = vdupq_n_s32(0);
+            s = vdotq_s32(s, vld1q_s8(w + b * 32), vld1q_s8(xq + b * 32));
+            s = vdotq_s32(s, vld1q_s8(w + b * 32 + 16), vld1q_s8(xq + b * 32 + 16));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(s), xs[b]);
+        }
+        y[r] = (vaddvq_f32(acc) + tail_q8(w, xq, xs, C)) * sc[r];
+    }
+}
+static void rows_f32_neon(const float* W, int C, const float* x, float* y, int r0, int r1) {
+    const int n8 = C / 8 * 8;
+    for (int r = r0; r < r1; r++) {
+        const float* w = W + (size_t)r * C; float32x4_t a0 = vdupq_n_f32(0.f), a1 = vdupq_n_f32(0.f);
+        for (int c = 0; c < n8; c += 8) { a0 = vfmaq_f32(a0, vld1q_f32(w + c), vld1q_f32(x + c)); a1 = vfmaq_f32(a1, vld1q_f32(w + c + 4), vld1q_f32(x + c + 4)); }
+        float a = vaddvq_f32(vaddq_f32(a0, a1)); for (int c = n8; c < C; c++) a += w[c] * x[c];
+        y[r] = a;
+    }
+}
+#endif
+
+// ---- nhóm luồng (không cần OpenMP nên chạy giống nhau trên Android / Windows / Linux) ----
+// Mỗi lần run() chia n tác vụ cho các luồng nền + luồng gọi; luồng nền quay vòng chờ rất ngắn rồi ngủ nên không tốn pin lúc rảnh.
+static inline void cpu_relax() {
+#if defined(YUI_X86)
+    _mm_pause();
+#elif defined(YUI_ARM64) && !defined(_MSC_VER)
+    __asm__ __volatile__("yield");
+#else
+    std::this_thread::yield();
+#endif
+}
+struct Pool {
+    typedef void (*Fn)(void*, int);
+    std::mutex run_mu, mu; std::condition_variable cv;
+    std::atomic<uint64_t> ticket{0};   // 32 bit cao: thế hệ lần chạy; 32 bit thấp: số tác vụ đã có người nhận
+    std::atomic<Fn> fn{nullptr}; std::atomic<void*> ctx{nullptr};
+    std::atomic<int> ntask{0}, remaining{0}, sleepers{0}, alive{0};
+    std::atomic<bool> stop{false};
+    int nthreads = 1;   // tính cả luồng gọi
+
+    void claim(uint32_t g) {
+        uint64_t cur = ticket.load();
+        while (true) {
+            if ((uint32_t)(cur >> 32) != g) return;
+            const uint32_t idx = (uint32_t)cur; if ((int)idx >= ntask.load()) return;
+            if (ticket.compare_exchange_weak(cur, cur + 1)) {
+                Fn f = fn.load(); void* c = ctx.load(); f(c, (int)idx);
+                remaining.fetch_sub(1); cur = ticket.load();
+            }
+        }
+    }
+    void worker() {
+        uint32_t seen = (uint32_t)(ticket.load() >> 32);
+        while (true) {
+            auto t0 = std::chrono::steady_clock::now(); int spins = 0; uint64_t t;
+            while (true) {
+                if (stop.load()) { alive.fetch_sub(1); return; }
+                t = ticket.load();
+                if ((uint32_t)(t >> 32) != seen) break;
+                if (++spins < 256) { cpu_relax(); continue; }
+                if (std::chrono::steady_clock::now() - t0 < std::chrono::microseconds(150)) { spins = 0; continue; }   // quay vòng ~150µs rồi mới ngủ
+                std::unique_lock<std::mutex> lk(mu); sleepers.fetch_add(1);
+                cv.wait_for(lk, std::chrono::milliseconds(20), [&] { return stop.load() || (uint32_t)(ticket.load() >> 32) != seen; });
+                sleepers.fetch_sub(1); t0 = std::chrono::steady_clock::now(); spins = 0;
+            }
+            seen = (uint32_t)(t >> 32); claim(seen);
+        }
+    }
+    void resize(int n) {
+        n = std::max(1, std::min(n, 64)); std::lock_guard<std::mutex> lk(run_mu);
+        stop.store(true); { std::lock_guard<std::mutex> l2(mu); cv.notify_all(); }
+        while (alive.load() > 0) std::this_thread::sleep_for(std::chrono::microseconds(200));
+        stop.store(false); nthreads = n;
+        for (int i = 1; i < n; i++) { alive.fetch_add(1); std::thread([this] { worker(); }).detach(); }
+    }
+    void run(int n, Fn f, void* c) {
+        if (n <= 0) return;
+        if (nthreads <= 1 || n == 1 || !run_mu.try_lock()) { for (int i = 0; i < n; i++) f(c, i); return; }   // đang bận (nhiều phiên cùng lúc) -> chạy tại chỗ
+        fn.store(f); ctx.store(c); ntask.store(n); remaining.store(n);
+        const uint32_t g = (uint32_t)(ticket.load() >> 32) + 1;
+        ticket.store((uint64_t)g << 32);
+        if (sleepers.load() > 0) { std::lock_guard<std::mutex> lk(mu); cv.notify_all(); }
+        claim(g);
+        for (int spins = 0; remaining.load() > 0; spins++) { if (spins < 2000) cpu_relax(); else std::this_thread::yield(); }
+        run_mu.unlock();
+    }
+};
+static int default_threads() {
+    if (const char* e = getenv("YUI_THREADS")) { int v = atoi(e); if (v > 0) return std::min(v, 64); }
+    int hw = (int)std::thread::hardware_concurrency(); if (hw <= 0) hw = 1;
+#if defined(YUI_ARM64)
+    return std::min(hw, 4);   // điện thoại big.LITTLE: dùng cả lõi nhỏ thường chậm hơn; chỉnh bằng YUI_THREADS hoặc yui_set_threads
+#else
+    return std::min(hw, 6);
+#endif
+}
+static Pool& pool() {   // cố ý không huỷ (tránh treo khi gỡ DLL trên Windows)
+    static Pool* p = [] { Pool* q = new Pool(); q->resize(default_threads()); return q; }();
+    return *p;
+}
+template <class F> static void par_for(int n, F&& f) {
+    Pool& p = pool();
+    if (n <= 1 || p.nthreads <= 1) { for (int i = 0; i < n; i++) f(i); return; }
+    p.run(n, [](void* c, int i) { (*(typename std::remove_reference<F>::type*)c)(i); }, (void*)&f);
+}
+
+// ---- file model: mmap (Linux/Android: không nhân đôi RAM, mở gần như tức thì) hoặc đọc vào RAM ----
 static void* aalloc_raw(size_t n) {
     n = (n + 63) / 64 * 64; void* p = nullptr;
 #ifdef _WIN32
@@ -79,18 +343,92 @@ static FILE* fopen_utf8(const string& p) {   // đường dẫn UTF-8 (Windows: 
     return fopen(p.c_str(), "rb");
 #endif
 }
+struct MappedFile {
+    const uint8_t* data = nullptr; size_t size = 0; bool mapped = false;
+    void* heap = nullptr;
+#ifdef _WIN32
+    HANDLE hf = INVALID_HANDLE_VALUE, hm = nullptr;
+#endif
+    MappedFile() = default;
+    MappedFile(const MappedFile&) = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+    ~MappedFile() { close(); }
+    void close() {
+#ifdef _WIN32
+        if (mapped && data) UnmapViewOfFile(data);
+        if (hm) CloseHandle(hm);
+        if (hf != INVALID_HANDLE_VALUE) CloseHandle(hf);
+        hm = nullptr; hf = INVALID_HANDLE_VALUE;
+#else
+        if (mapped && data) munmap((void*)data, size);
+#endif
+        if (heap) afree(heap);
+        heap = nullptr; data = nullptr; size = 0; mapped = false;
+    }
+    void open(const string& path) {
+        close();
+        bool want = true;
+#ifdef _WIN32
+        want = false;   // Windows: file đang mmap không thể đổi tên/xoá -> mặc định đọc vào RAM (đặt YUI_MMAP=1 để bật)
+#endif
+        if (const char* e = getenv("YUI_MMAP")) want = (*e == '1');
+        if (want) {
+#ifdef _WIN32
+            int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+            if (n > 0) {
+                std::wstring w(n, L'\0'); MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &w[0], n);
+                hf = CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                LARGE_INTEGER sz; sz.QuadPart = 0;
+                if (hf != INVALID_HANDLE_VALUE && GetFileSizeEx(hf, &sz) && sz.QuadPart > 0) {
+                    hm = CreateFileMappingW(hf, nullptr, PAGE_READONLY, 0, 0, nullptr);
+                    void* p = hm ? MapViewOfFile(hm, FILE_MAP_READ, 0, 0, 0) : nullptr;
+                    if (p) { data = (const uint8_t*)p; size = (size_t)sz.QuadPart; mapped = true; return; }
+                }
+                close();
+            }
+#else
+            int fd = ::open(path.c_str(), O_RDONLY);
+            if (fd >= 0) {
+                struct stat st;
+                if (fstat(fd, &st) == 0 && st.st_size > 0) {
+                    int flags = MAP_PRIVATE;
+#ifdef MAP_POPULATE
+                    if (const char* e = getenv("YUI_PRELOAD")) if (*e == '1') flags |= MAP_POPULATE;   // nạp sẵn toàn bộ vào RAM (khởi động chậm hơn, token đầu nhanh hơn)
+#endif
+                    void* p = mmap(nullptr, (size_t)st.st_size, PROT_READ, flags, fd, 0);
+                    if (p != MAP_FAILED) {
+#ifdef MADV_WILLNEED
+                        madvise(p, (size_t)st.st_size, MADV_WILLNEED);
+#endif
+                        ::close(fd); data = (const uint8_t*)p; size = (size_t)st.st_size; mapped = true; return;
+                    }
+                }
+                ::close(fd);
+            }
+#endif
+        }
+        std::unique_ptr<FILE, int (*)(FILE*)> fp(fopen_utf8(path), &fclose); if (!fp) die("không mở được " + path);
+        if (fseek(fp.get(), 0, SEEK_END) != 0) die("không đọc được " + path);
+        long long n = (long long)ftell(fp.get()); if (n <= 0) die("file rỗng: " + path);
+        fseek(fp.get(), 0, SEEK_SET);
+        heap = aalloc_raw((size_t)n);
+        if (fread(heap, 1, (size_t)n, fp.get()) != (size_t)n) die("file .yui bị cụt");
+        data = (const uint8_t*)heap; size = (size_t)n;
+    }
+};
 struct Reader {
-    FILE* f; vector<void*>* mem;
-    void* alloc(size_t n) { void* p = aalloc_raw(n); mem->push_back(p); return p; }
-    template <class T> T get() { T v; if (fread(&v, sizeof v, 1, f) != 1) die("file .yui bị cụt"); return v; }
-    void bytes(void* p, size_t n) { if (n && fread(p, 1, n, f) != n) die("file .yui bị cụt"); }
+    const uint8_t* p; const uint8_t* end; vector<void*>* mem;
+    void need(size_t n) const { if ((size_t)(end - p) < n) die("file .yui bị cụt"); }
+    void* alloc(size_t n) { void* q = aalloc_raw(n); mem->push_back(q); return q; }
+    template <class T> T get() { need(sizeof(T)); T v; memcpy(&v, p, sizeof v); p += sizeof v; return v; }
+    void bytes(void* dst, size_t n) { need(n); if (n) memcpy(dst, p, n); p += n; }
+    const uint8_t* skip(size_t n) { need(n); const uint8_t* r = p; p += n; return r; }
     string str() { uint16_t n = get<uint16_t>(); string s(n, '\0'); bytes(&s[0], n); return s; }
 };
 
-
 struct Mat {
     int rows = 0, cols = 0; bool q = false;
-    float* f = nullptr; int8_t* i8 = nullptr; float* sc = nullptr;
+    float* f = nullptr; const int8_t* i8 = nullptr; float* sc = nullptr;   // i8 trỏ thẳng vào file mmap (không sao chép)
 };
 
 static Mat load_mat(Reader& r, int rows, int cols, bool quantized) {
@@ -98,7 +436,7 @@ static Mat load_mat(Reader& r, int rows, int cols, bool quantized) {
     size_t n = (size_t)rows * cols;
     if (quantized) {
         m.sc = (float*)r.alloc(rows * sizeof(float)); r.bytes(m.sc, rows * sizeof(float));
-        m.i8 = (int8_t*)r.alloc(n); r.bytes(m.i8, n);
+        m.i8 = (const int8_t*)r.skip(n);
     } else {
         m.f = (float*)r.alloc(n * sizeof(float)); r.bytes(m.f, n * sizeof(float));
     }
@@ -106,41 +444,56 @@ static Mat load_mat(Reader& r, int rows, int cols, bool quantized) {
 }
 static float* load_vec(Reader& r, size_t n) { float* p = (float*)r.alloc(n * sizeof(float)); r.bytes(p, n * sizeof(float)); return p; }
 
-// y[r] = dot(W[r,:], x)
-static void matvec(const Mat& m, const float* x, float* y) {
-    const int C = m.cols;
-    if (!m.q) {
-        for (int r = 0; r < m.rows; r++) {
-            const float* w = m.f + (size_t)r * C; float acc = 0.f;
-            #pragma omp simd reduction(+ : acc)
-            for (int c = 0; c < C; c++) acc += w[c] * x[c];
-            y[r] = acc;
-        }
-    } else {
-        for (int r = 0; r < m.rows; r++) {
-            const int8_t* w = m.i8 + (size_t)r * C; float acc = 0.f;
-            #pragma omp simd reduction(+ : acc)
-            for (int c = 0; c < C; c++) acc += (float)w[c] * x[c];
-            y[r] = acc * m.sc[r];
-        }
+// kích hoạt int8 theo khối 32: q có (n+31)/32*32 byte, s có (n+31)/32 float
+static void quant_act(const float* x, int n, int8_t* q, float* s) {
+    const int nb = (n + 31) / 32;
+    for (int b = 0; b < nb; b++) {
+        const int lo = b * 32, hi = std::min(n, lo + 32); float amax = 0.f;
+        for (int i = lo; i < hi; i++) amax = std::max(amax, fabsf(x[i]));
+        const float d = amax / 127.f, id = d > 0.f ? 1.f / d : 0.f; s[b] = d;
+        for (int i = lo; i < hi; i++) q[i] = (int8_t)lrintf(x[i] * id);
+        for (int i = hi; i < lo + 32; i++) q[i] = 0;
     }
 }
-static void matvec_par(const Mat& m, const float* x, float* y) {  // cho head (rất nhiều hàng)
-    const int C = m.cols;
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(static)
-    #endif
-    for (int r = 0; r < m.rows; r++) {
-        float acc = 0.f;
-        if (!m.q) { const float* w = m.f + (size_t)r * C;
-            #pragma omp simd reduction(+ : acc)
-            for (int c = 0; c < C; c++) acc += w[c] * x[c];
-        } else { const int8_t* w = m.i8 + (size_t)r * C;
-            #pragma omp simd reduction(+ : acc)
-            for (int c = 0; c < C; c++) acc += (float)w[c] * x[c];
-            acc *= m.sc[r]; }
-        y[r] = acc;
+
+static void rows_q(const Mat& m, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    switch (isa()) {
+#ifdef YUI_X86
+    case ISA_AVX2: rows_q8_avx2(m.i8, m.cols, xq, xs, m.sc, y, r0, r1); return;
+#endif
+#ifdef YUI_ARM64
+    case ISA_DOT: rows_q8_dot(m.i8, m.cols, xq, xs, m.sc, y, r0, r1); return;
+    case ISA_NEON: rows_q8_neon(m.i8, m.cols, xq, xs, m.sc, y, r0, r1); return;
+#endif
+    default: rows_q8_scalar(m.i8, m.cols, xq, xs, m.sc, y, r0, r1);
     }
+}
+static void rows_f(const Mat& m, const float* x, float* y, int r0, int r1) {
+    switch (isa()) {
+#ifdef YUI_X86
+    case ISA_AVX2: rows_f32_avx2(m.f, m.cols, x, y, r0, r1); return;
+#endif
+#ifdef YUI_ARM64
+    case ISA_DOT: case ISA_NEON: rows_f32_neon(m.f, m.cols, x, y, r0, r1); return;
+#endif
+    default: rows_f32_scalar(m.f, m.cols, x, y, r0, r1);
+    }
+}
+struct Act { int8_t* q; float* s; };   // kích hoạt đã lượng tử (chỉ dùng khi model int8 và không YUI_EXACT)
+static inline bool use_qact(bool model_q) { return model_q && !g_exact; }
+
+// y = W x. par=true: chia hàng cho nhóm luồng nếu ma trận đủ lớn (>= ~0,5 triệu phép nhân)
+static void mv(const Mat& m, const float* x, const Act& a, float* y, bool par) {
+    const int R = m.rows;
+    auto body = [&](int r0, int r1) {
+        if (!m.q) rows_f(m, x, y, r0, r1);
+        else if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1);
+        else rows_q(m, a.q, a.s, y, r0, r1);
+    };
+    const Pool& p = pool();
+    if (!par || p.nthreads <= 1 || (size_t)R * m.cols < (1u << 19)) { body(0, R); return; }
+    const int ch = std::max(16, (R / (p.nthreads * 4) + 3) / 4 * 4), nt = (R + ch - 1) / ch;
+    par_for(nt, [&](int t) { body(t * ch, std::min(R, (t + 1) * ch)); });
 }
 static void layernorm(const float* x, const float* w, const float* b, float* y, int n) {
     float mean = 0.f; for (int i = 0; i < n; i++) mean += x[i]; mean /= n;
@@ -273,24 +626,31 @@ struct Cfg { uint32_t quant, V, D, layers, heads, E, F, nshared, L, min_k, max_k
 struct Expert { Mat g, u, d; };
 struct Layer { float *n1w, *n1b, *n2w, *n2b; Mat qkv, o, gate; float* sw; float sb; vector<Expert> ex, sh; };
 
+struct ExScratch { vector<float> tg, tu, ty, out, qs; vector<int8_t> q; };   // bộ nhớ riêng của MỖI expert để nhiều expert chạy song song
 struct Session {   // KV cache + bộ nhớ tạm của MỘT cuộc sinh (model chỉ đọc nên nhiều Session chạy song song được)
     vector<float> K, V; int n = 0;
-    vector<float> x, xn, qkv, att, y, moe, tg, tu, ty, sc;
+    vector<float> x, xn, qkv, att, y, moe, sc, xs; vector<int8_t> xq; vector<ExScratch> ex;
     explicit Session(const Cfg& c)
         : K((size_t)c.layers * c.L * c.D), V((size_t)c.layers * c.L * c.D), x(c.D), xn(c.D), qkv(3 * c.D), att(c.D),
-          y(c.D), moe(c.D), tg(c.F), tu(c.F), ty(c.D), sc(c.L) {}
+          y(c.D), moe(c.D), sc(c.L) {
+        const size_t pad = ((size_t)std::max(c.D, c.F) + 31) / 32 * 32;
+        xq.assign(pad, 0); xs.assign(pad / 32 + 1, 0.f);
+        const size_t nt = std::min<size_t>(std::max(c.max_k, c.min_k), c.E) + c.nshared;
+        ex.resize(nt);
+        for (auto& e : ex) { e.tg.resize(c.F); e.tu.resize(c.F); e.ty.resize(c.D); e.out.resize(c.D); e.q.assign(pad, 0); e.qs.assign(pad / 32 + 1, 0.f); }
+    }
 };
 
 struct Model {
-    Cfg c; Mat emb, head; float *nfw, *nfb; vector<Layer> ly; Tok tok; vector<float> cosT, sinT; vector<void*> mem;
+    Cfg c; Mat emb, head; float *nfw, *nfb; vector<Layer> ly; Tok tok; vector<float> cosT, sinT; vector<void*> mem; MappedFile file;
     Model() = default;
     Model(const Model&) = delete;
     Model& operator=(const Model&) = delete;
     ~Model() { for (void* p : mem) afree(p); }
 
     void load(const string& path) {
-        std::unique_ptr<FILE, int (*)(FILE*)> fp(fopen_utf8(path), &fclose); if (!fp) die("không mở được " + path);
-        Reader r{fp.get(), &mem};
+        file.open(path);
+        Reader r{file.data, file.data + file.size, &mem};
         char mg[4]; r.bytes(mg, 4); if (memcmp(mg, "YUI1", 4)) die("không phải file .yui (sai magic)");
         uint32_t ver = r.get<uint32_t>(); if (ver != 1) die("phiên bản .yui không hỗ trợ");
         c.quant = r.get<uint32_t>(); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
@@ -341,24 +701,29 @@ struct Model {
         if (!emb.q) memcpy(out, emb.f + (size_t)t * c.D, c.D * sizeof(float));
         else { const int8_t* w = emb.i8 + (size_t)t * c.D; float s = emb.sc[t]; for (int i = 0; i < (int)c.D; i++) out[i] = (float)w[i] * s; }
     }
-    void run_expert(const Expert& e, const float* x, Session& s, float w, float* out) const {
-        matvec(e.g, x, s.tg.data()); matvec(e.u, x, s.tu.data());
-        for (int i = 0; i < (int)c.F; i++) { float z = s.tg[i]; s.tg[i] = z / (1.f + expf(-z)) * s.tu[i]; }
-        matvec(e.d, s.tg.data(), s.ty.data());
-        for (int i = 0; i < (int)c.D; i++) out[i] += w * s.ty[i];
+    // Một expert SwiGLU: out = w * down(silu(gate(x)) * up(x)). xa = x đã lượng tử (dùng chung cho gate/up của mọi expert).
+    void run_expert(const Expert& e, const float* x, const Act& xa, ExScratch& sc, float w) const {
+        mv(e.g, x, xa, sc.tg.data(), false); mv(e.u, x, xa, sc.tu.data(), false);
+        for (int i = 0; i < (int)c.F; i++) { float z = sc.tg[i]; sc.tg[i] = z / (1.f + expf(-z)) * sc.tu[i]; }
+        Act a2{sc.q.data(), sc.qs.data()};
+        if (use_qact(c.quant == 1)) quant_act(sc.tg.data(), (int)c.F, a2.q, a2.s);
+        mv(e.d, sc.tg.data(), a2, sc.ty.data(), false);
+        for (int i = 0; i < (int)c.D; i++) sc.out[i] = w * sc.ty[i];
     }
     // Nạp 1 token tại vị trí s.n (phải < L), cập nhật KV cache. logits != nullptr thì tính logits [V].
     void step(Session& s, int tok_id, int kcap, float* logits) const {
         const int D = c.D, H = c.heads, hd = c.hd, half = hd / 2, L = c.L, E = c.E;
-        const int pos = s.n;
+        const int pos = s.n; const bool qa = use_qact(c.quant == 1);
         if (pos >= L) die("Session.n >= L (lỗi nội bộ)");
         embed(tok_id, s.x.data());
         const float* cs = &cosT[(size_t)pos * half]; const float* sn = &sinT[(size_t)pos * half];
         const float scale = 1.f / sqrtf((float)hd);
+        const Act xa{s.xq.data(), s.xs.data()};
         for (int li = 0; li < (int)c.layers; li++) {
             const Layer& l = ly[li];
             layernorm(s.x.data(), l.n1w, l.n1b, s.xn.data(), D);
-            matvec(l.qkv, s.xn.data(), s.qkv.data());
+            if (qa) quant_act(s.xn.data(), D, xa.q, xa.s);
+            mv(l.qkv, s.xn.data(), xa, s.qkv.data(), true);
             float *q = s.qkv.data(), *k = q + D, *v = q + 2 * D;
             for (int h = 0; h < H; h++) for (int p = 0; p < 2; p++) {
                 float* x = (p ? k : q) + h * hd;
@@ -370,6 +735,7 @@ struct Model {
                 const float* qh = q + h * hd; float mx = -INFINITY;
                 for (int t = 0; t <= pos; t++) {
                     const float* kt = &s.K[((size_t)li * L + t) * D + h * hd]; float d = 0.f;
+                    #pragma omp simd reduction(+ : d)
                     for (int i = 0; i < hd; i++) d += qh[i] * kt[i];
                     s.sc[t] = d * scale; mx = std::max(mx, s.sc[t]);
                 }
@@ -377,14 +743,16 @@ struct Model {
                 float* yh = s.att.data() + h * hd; for (int i = 0; i < hd; i++) yh[i] = 0.f;
                 for (int t = 0; t <= pos; t++) {
                     float w = s.sc[t] / sum; const float* vt = &s.V[((size_t)li * L + t) * D + h * hd];
+                    #pragma omp simd
                     for (int i = 0; i < hd; i++) yh[i] += w * vt[i];
                 }
             }
-            matvec(l.o, s.att.data(), s.y.data());
+            if (qa) quant_act(s.att.data(), D, xa.q, xa.s);
+            mv(l.o, s.att.data(), xa, s.y.data(), true);
             for (int i = 0; i < D; i++) s.x[i] += s.y[i];
             // ---- MoE ----
             layernorm(s.x.data(), l.n2w, l.n2b, s.xn.data(), D);
-            float lg[256], pr[256], cum[256]; int idx[256];
+            float lg[256], pr[256]; int idx[256];
             for (int e = 0; e < E; e++) { const float* g = l.gate.f + (size_t)e * D; float a = 0.f; for (int i = 0; i < D; i++) a += g[i] * s.xn[i]; lg[e] = a; }
             float mx = lg[0]; for (int e = 1; e < E; e++) mx = std::max(mx, lg[e]);
             float sm = 0.f; for (int e = 0; e < E; e++) { pr[e] = expf(lg[e] - mx); sm += pr[e]; }
@@ -398,19 +766,25 @@ struct Model {
                 bool keep = ((before < c.top_p) || j < (int)c.min_k) && j < cap;
                 wsort[j] = keep ? p : 0.f; wsum += wsort[j];
             }
-            (void)cum;
             float st = 0.f; for (int i = 0; i < D; i++) st += l.sw[i] * s.xn[i]; st += l.sb;
             float strength = c.min_strength + (1.f - c.min_strength) * (1.f / (1.f + expf(-st)));
-            for (int i = 0; i < D; i++) s.moe[i] = 0.f;
-            for (auto& sh : l.sh) run_expert(sh, s.xn.data(), s, 1.f, s.moe.data());
+            if (qa) quant_act(s.xn.data(), D, xa.q, xa.s);   // xn (sau LayerNorm 2) lượng tử MỘT lần cho gate/up của mọi expert
+            struct Task { const Expert* e; float w; } tasks[260]; int nt = 0;
+            for (auto& sh : l.sh) tasks[nt++] = {&sh, 1.f};
             float den = std::max(wsum, 1e-9f);
-            for (int j = 0; j < E; j++) {
-                if (wsort[j] <= 0.f) continue;
-                run_expert(l.ex[idx[j]], s.xn.data(), s, (wsort[j] / den) * strength, s.moe.data());
-            }
+            for (int j = 0; j < E; j++) if (wsort[j] > 0.f) tasks[nt++] = {&l.ex[idx[j]], (wsort[j] / den) * strength};
+            if (nt > (int)s.ex.size()) die("quá nhiều expert được chọn (lỗi nội bộ)");
+            auto work = [&](int t) { run_expert(*tasks[t].e, s.xn.data(), xa, s.ex[t], tasks[t].w); };
+            if (nt >= 2 && (size_t)c.F * D >= (1u << 15)) par_for(nt, work); else for (int t = 0; t < nt; t++) work(t);   // các expert độc lập nên chạy song song
+            for (int i = 0; i < D; i++) s.moe[i] = 0.f;
+            for (int t = 0; t < nt; t++) for (int i = 0; i < D; i++) s.moe[i] += s.ex[t].out[i];   // cộng theo thứ tự cố định -> kết quả không phụ thuộc số luồng
             for (int i = 0; i < D; i++) s.x[i] += s.moe[i];
         }
-        if (logits) { layernorm(s.x.data(), nfw, nfb, s.xn.data(), D); matvec_par(head, s.xn.data(), logits); }
+        if (logits) {
+            layernorm(s.x.data(), nfw, nfb, s.xn.data(), D);
+            if (qa) quant_act(s.xn.data(), D, xa.q, xa.s);
+            mv(head, s.xn.data(), xa, logits, true);
+        }
         s.n++;
     }
 };
@@ -479,23 +853,26 @@ static int sample(vector<float>& lg, const vector<int>& gen, const GenOpts& o, s
     }
     if (o.temp <= 0.f) return (int)(std::max_element(lg.begin(), lg.end()) - lg.begin());
     for (auto& v : lg) v /= o.temp;
+    // Chỉ giữ ứng viên top-k (cùng kết quả với việc che phần còn lại bằng -inf) nên top-p chỉ phải sắp xếp ~40 phần tử thay vì cả từ vựng.
+    vector<int> cand;
     if (o.top_k > 0 && o.top_k < V) {
         vector<float> tmp(lg); std::nth_element(tmp.begin(), tmp.begin() + (o.top_k - 1), tmp.end(), std::greater<float>());
-        float kth = tmp[o.top_k - 1]; for (auto& v : lg) if (v < kth) v = -INFINITY;
-    }
-    float mx = *std::max_element(lg.begin(), lg.end()), sum = 0.f;
-    vector<float> p(V); for (int i = 0; i < V; i++) { p[i] = expf(lg[i] - mx); sum += p[i]; }
+        const float kth = tmp[o.top_k - 1]; for (int i = 0; i < V; i++) if (!(lg[i] < kth)) cand.push_back(i);
+    } else { cand.resize(V); for (int i = 0; i < V; i++) cand[i] = i; }
+    const int C = (int)cand.size();
+    float mx = -INFINITY; for (int j = 0; j < C; j++) mx = std::max(mx, lg[cand[j]]);
+    float sum = 0.f; vector<float> p(C); for (int j = 0; j < C; j++) { p[j] = expf(lg[cand[j]] - mx); sum += p[j]; }
     for (auto& v : p) v /= sum;
     if (o.top_p < 1.f) {
-        vector<int> id(V); for (int i = 0; i < V; i++) id[i] = i;
+        vector<int> id(C); for (int j = 0; j < C; j++) id[j] = j;
         std::sort(id.begin(), id.end(), [&](int a, int b) { return p[a] > p[b]; });
-        float cs = 0.f, tot = 0.f; vector<char> drop(V, 0);
-        for (int i = 0; i < V; i++) { float pi = p[id[i]]; if (cs > o.top_p) drop[id[i]] = 1; cs += pi; }
-        for (int i = 0; i < V; i++) { if (drop[i]) p[i] = 0.f; tot += p[i]; }
+        float cs = 0.f, tot = 0.f; vector<char> drop(C, 0);
+        for (int j = 0; j < C; j++) { float pi = p[id[j]]; if (cs > o.top_p) drop[id[j]] = 1; cs += pi; }
+        for (int j = 0; j < C; j++) { if (drop[j]) p[j] = 0.f; tot += p[j]; }
         for (auto& v : p) v /= tot;
     }
     std::discrete_distribution<int> d(p.begin(), p.end());
-    return d(rng);
+    return cand[d(rng)];
 }
 
 // Chuyển id -> văn bản từng đoạn; ở chế độ chat bỏ khoảng trắng đầu, dừng khi model tự viết "User:".
@@ -671,7 +1048,15 @@ static GenOpts opts_from_json(const char* js, int def_k) {
     if (js && *js) { string t = js; J j; JP jp(t); if (jp.val(j) && j.t == J::OBJ) return parse_opts(j, def_k); }
     GenOpts o; o.k = def_k; return o;
 }
-YUI_API const char* yui_version() { return "yui-engine 1.0"; }
+YUI_API const char* yui_version() { return "yui-engine 1.1"; }
+YUI_API void yui_set_threads(int n) { pool().resize(n > 0 ? n : default_threads()); }   // n <= 0: tự chọn
+YUI_API int yui_get_threads() { return pool().nthreads; }
+YUI_API int yui_cpu_features(char* out, int len) {   // vd "neon+dotprod, 4 luồng"; trả số byte, <0 nếu lỗi
+    if (!out || len <= 0) return -1;
+    string s = string(isa_name()) + (g_exact ? ", exact-float" : "") + ", " + std::to_string(pool().nthreads) + " thread";
+    if ((int)s.size() + 1 > len) return -2;
+    memcpy(out, s.c_str(), s.size() + 1); return (int)s.size();
+}
 YUI_API void* yui_load(const char* path, char* err, int errlen) {
     Model* m = new Model();
     try { m->load(path ? path : ""); } catch (const std::exception& e) { set_err(err, errlen, e.what()); delete m; return nullptr; }
@@ -847,7 +1232,7 @@ struct Server {
 // ============================ main ============================
 static int cli_main(int argc, char** argv) {
     string model_path, prompt, enc, ids_s, logits_path, host = "127.0.0.1", api_key; int port = 11434, parallel = 2;
-    bool serve = false, bench = false, have_enc = false; GenOpts o; int max_turns = 4;
+    int threads = 0; bool serve = false, bench = false, bench_threads = false, have_enc = false; GenOpts o; int max_turns = 4;
     if (const char* e = getenv("ENGINE_API_KEY")) api_key = e;
     for (int i = 1; i < argc; i++) {
         string a = argv[i]; auto nx = [&]() -> string { if (i + 1 >= argc) die("thiếu giá trị cho " + a); return argv[++i]; };
@@ -859,11 +1244,13 @@ static int cli_main(int argc, char** argv) {
         else if (a == "--temp") o.temp = (float)atof(nx().c_str()); else if (a == "--top_k") o.top_k = atoi(nx().c_str());
         else if (a == "--top_p") o.top_p = (float)atof(nx().c_str()); else if (a == "--rep") o.rep = (float)atof(nx().c_str());
         else if (a == "--seed") o.seed = (uint64_t)atoll(nx().c_str()); else if (a == "--max_turns") max_turns = atoi(nx().c_str());
+        else if (a == "--threads") threads = atoi(nx().c_str()); else if (a == "--exact") g_exact = true; else if (a == "--bench_threads") bench_threads = true;
         else die("tham số lạ: " + a);
     }
     if (model_path.empty()) die("cần --model file.yui");
+    if (threads > 0) pool().resize(threads);
     Model m; m.load(model_path);
-    fprintf(stderr, "[yui] %s | d=%u layers=%u experts=%u heads=%u | ngữ cảnh %u | %s | k=%d\n", model_path.c_str(), m.c.D, m.c.layers, m.c.E, m.c.heads, m.c.L, m.c.quant ? "int8" : "float32", o.k);
+    fprintf(stderr, "[yui] %s | d=%u layers=%u experts=%u heads=%u | ngữ cảnh %u | %s | k=%d | CPU: %s, %d luồng%s%s\n", model_path.c_str(), m.c.D, m.c.layers, m.c.E, m.c.heads, m.c.L, m.c.quant ? "int8" : "float32", o.k, isa_name(), pool().nthreads, g_exact ? ", exact" : "", m.file.mapped ? ", mmap" : "");
 
     if (have_enc) { for (int id : m.tok.encode(enc)) printf("%d ", id); printf("\n"); return 0; }
     if (!ids_s.empty()) {   // xuất logits từng vị trí để so với PyTorch
@@ -876,6 +1263,17 @@ static int cli_main(int argc, char** argv) {
     }
     Server sv{m, api_key, o.k, parallel, {}, {}, 0};
     if (serve) { sv.serve(host, port); return 0; }
+    if (bench_threads) {   // thử 1..N luồng, in tốc độ để chọn số luồng tốt nhất cho máy này
+        vector<int> ids = m.tok.encode("Hà Nội là thủ đô của Việt Nam"); GenOpts b = o; b.max_new = 120; b.temp = 0; b.rep = 1.0f;
+        int hw = std::max(1, (int)std::thread::hardware_concurrency()); double best = 0; int bt = 1;
+        for (int t = 1; t <= std::min(hw, 16); t++) {
+            pool().resize(t); generate(m, ids, b, false, [](const string&) { return true; });   // làm nóng
+            auto t0 = std::chrono::steady_clock::now(); int n = generate(m, ids, b, false, [](const string&) { return true; });
+            double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), tps = n / sec;
+            printf("%2d luồng: %.1f token/giây\n", t, tps); if (tps > best) { best = tps; bt = t; }
+        }
+        printf("=> nên dùng --threads %d (hoặc YUI_THREADS=%d)\n", bt, bt); return 0;
+    }
     if (bench) {
         vector<int> ids = m.tok.encode("Hà Nội là thủ đô của Việt Nam"); GenOpts b = o; b.max_new = 200; b.temp = 0; b.rep = 1.0f;
         auto t0 = std::chrono::steady_clock::now(); int n = generate(m, ids, b, false, [](const string&) { return true; });

@@ -530,3 +530,18 @@ python train_demo.py
 ## License
 
 MIT © 2026 BachDaThan, xem [LICENSE](LICENSE).
+
+## Tự tạo data theo cỡ model (make_data.py auto) và engine C++ nhanh hơn
+
+**Thư mục trên repo dataset** (tự tạo nếu chưa có, tên tính từ số tham số model: 49,9M → `50M`):
+```
+data/50M/1.txt, 2.txt, ...        văn bản train từ đầu (đoạn cách nhau bằng dòng trống)
+Fine-tune/50M/1.txt, 2.txt, ...   hội thoại fine-tune, mỗi dòng {"messages":[...]}
+```
+`train_lm.py` tự nạp `data/<cỡ>/` (thành ngôn ngữ `gen`), `train_sft.py` tự vào `Fine-tune/<cỡ>/`; không thấy thư mục cỡ đó thì dùng cách cũ (gốc repo / `pretrain/`). Đổi tên thư mục: `--size_tag` / biến `MODEL_TAG`.
+
+**make_data.py auto**: đặt biến môi trường rồi chạy `python make_data.py auto` (thêm `--plan` để chỉ xem kế hoạch). Nó đọc data đang có, chỉ tạo phần còn thiếu, đánh số tiếp (1.txt → 2.txt…) và up lên.
+Biến: `HF_TOKEN`, `GEMINI_API_KEYS`, `HF_REPO`, `MODEL_PARAMS` (vd 50M) hoặc `MODEL_REPO` hoặc `MODEL_D/LAYERS/EXPERTS/VOCAB`, `FT_PAIRS` (tổng số cặp fine-tune; bỏ trống = params/2000), `PRETRAIN_TOKENS` (tổng token data train; bỏ trống = params×0,2; data train KHÔNG cần đặt "cặp"), `DATA_KINDS`, `WEB_SEARCH` (`off|wiki|search|both`), `WEB_TOPICS`, `MAX_FILES_PER_RUN`. Chi tiết ở đầu file `make_data.py`.
+Nguồn internet: Wikipedia tiếng Việt (không cần key) và công cụ `google_search` của Gemini; data train chỉ được viết lại, không chép nguyên văn. Gemini nào không có `google_search` thì tự chuyển sang Wikipedia.
+
+**yui.cpp (engine C++)**: kernel int8 AVX2 / NEON / NEON+dotprod chọn lúc chạy, nhóm luồng riêng (`--threads N`, `--bench_threads`, `YUI_THREADS`), nạp bằng mmap, lấy mẫu top-k không sắp xếp cả từ vựng. `--exact` / `YUI_EXACT=1` tính bằng float như PyTorch để đối chiếu. `make test` chạy thử kernel; `make portable` build một file chạy mọi CPU.

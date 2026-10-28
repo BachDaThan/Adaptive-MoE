@@ -46,6 +46,29 @@ def check_token(args):
               "Kaggle: đặt os.environ['HF_TOKEN'] = UserSecretsClient().get_secret('HF_TOKEN') trước khi chạy.", flush=True)
 
 
+def resolve_prefix(args):
+    """Tự vào Fine-tune/<cỡ>/ theo cỡ model (tính từ config.json). Không có thư mục đó thì giữ cách cũ (gốc repo hoặc --sft_prefix)."""
+    if args.sft_prefix or args.local or args.size_tag == "off":
+        return
+    from data_layout import params_from_arch, size_tag, finetune_prefix, has_numbered
+    tag = args.size_tag
+    if tag == "auto":
+        hf_pull(args, ["config.json"])
+        cp = os.path.join(args.out, "config.json")
+        if not os.path.exists(cp):
+            print("[sft] chưa có config.json nên chưa biết cỡ model; dùng gốc repo như cũ", flush=True)
+            return
+        cfg = json.load(open(cp, encoding="utf-8"))
+        tag = size_tag(params_from_arch(cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]))
+    from huggingface_hub import HfApi
+    pre = finetune_prefix(tag)
+    if has_numbered(HfApi().list_repo_files(args.hf_repo, repo_type=args.hf_type), pre):
+        args.sft_prefix = pre
+        print(f"[sft] model cỡ {tag}: lấy data trong {pre}", flush=True)
+    else:
+        print(f"[sft] không có thư mục {pre} trên repo: dùng gốc repo như cũ", flush=True)
+
+
 def discover(args):
     """Trả {tên file: bytes} của mọi file N.txt (N số nguyên), sắp theo N."""
     pat = re.compile(r"^" + re.escape(args.sft_prefix) + r"(\d+)\.txt$")
@@ -121,6 +144,7 @@ def main(args):
     check_token(args)
 
     # 1. dữ liệu: quét + tải mọi file N.txt
+    resolve_prefix(args)
     data = discover(args)
     if not data:
         raise SystemExit("[sft] không thấy file nào tên dạng 1.txt, 2.txt, ... (kiểm tra --hf_repo / --sft_prefix / --local)")
@@ -267,6 +291,7 @@ if __name__ == "__main__":
     ap.add_argument("--hf_public", action="store_true")
     ap.add_argument("--hf_squash", type=int, default=0)
     ap.add_argument("--sft_prefix", default="", help="thư mục chứa 1.txt, 2.txt... trong repo (vd 'sft/'); mặc định là gốc repo")
+    ap.add_argument("--size_tag", default="auto", help="tên thư mục cỡ model trong Fine-tune/, vd 50M. auto = tính từ config.json; off = tắt, dùng --sft_prefix/gốc repo")
     ap.add_argument("--extra", default="", help="thêm file dữ liệu JSON hội thoại không đánh số, cách nhau dấu phẩy (vd chat_chat.jsonl,yui_chat.jsonl)")
     ap.add_argument("--local", default=None, help="đọc N.txt từ thư mục này thay vì Hugging Face")
     ap.add_argument("--no_push", action="store_true")

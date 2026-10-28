@@ -109,11 +109,12 @@ def read_hf_files(args, prefix, mb):
     """Nạp mọi file <prefix>N.txt (vd pretrain/1.txt, pretrain/2.txt...) từ repo HF --hf_repo; cùng cách tách đoạn như --text_files."""
     from huggingface_hub import HfApi, hf_hub_download
     pat = re.compile("^" + re.escape(prefix) + r"(\d+)\.txt$")
-    names = sorted((n for n in HfApi().list_repo_files(args.hf_repo, repo_type=args.hf_type) if pat.match(n)),
+    repo = getattr(args, "data_repo", None) or args.hf_repo
+    names = sorted((n for n in HfApi().list_repo_files(repo, repo_type=args.hf_type) if pat.match(n)),
                    key=lambda n: int(pat.match(n).group(1)))
     docs, size = [], 0
     for n in names:
-        p = hf_hub_download(args.hf_repo, n, repo_type=args.hf_type, local_dir=os.path.join(args.out, "hf_files"), force_download=True)
+        p = hf_hub_download(repo, n, repo_type=args.hf_type, local_dir=os.path.join(args.out, "hf_files"), force_download=True)
         for d in read_file(p, mb):
             docs.append(d)
             size += len(d.encode("utf-8"))
@@ -160,6 +161,18 @@ def build_data(args):
     tr_docs, va_docs = {}, {}
     ups = parse_upsample(args.upsample)
     hf_files = dict(kv.split("=", 1) for kv in (args.hf_files or "").split(",") if "=" in kv)   # lang -> thư mục trên repo HF
+    tag = getattr(args, "_tag", None)
+    if tag and args.hf_repo and args.auto_data == "on" and "gen" not in hf_files:   # tự vào data/<cỡ>/ nếu repo có
+        try:
+            from huggingface_hub import HfApi
+            from data_layout import data_prefix, has_numbered
+            if has_numbered(HfApi().list_repo_files(args.data_repo or args.hf_repo, repo_type=args.hf_type), data_prefix(tag)):
+                hf_files["gen"] = data_prefix(tag)
+                if "gen" not in langs:
+                    langs.append("gen")
+                print(f"[train] model cỡ {tag}: tự nạp data train trong {data_prefix(tag)} (ngôn ngữ 'gen')", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[train] không quét được data/<cỡ>/ ({str(e)[:70]})", flush=True)
     extra = {}   # --hf_extra "news=repo:config:truong:MB,..." -> {lang: (spec, MB)}
     for kv in (args.hf_extra or "").split(","):
         if "=" in kv:
@@ -292,6 +305,12 @@ def main(args):
     P = PRESETS[args.size]
     d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
     lr = args.lr or P["lr"]
+    from data_layout import params_from_arch, size_tag
+    cfg0 = {}
+    if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
+        cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
+    args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
+        cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
     train, vals, V, langs = build_data(args)
     cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max)
     json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
@@ -423,6 +442,9 @@ if __name__ == "__main__":
     ap.add_argument("--min_chars", type=int, default=1000)
     ap.add_argument("--hf_dataset", default=None, help="nguồn web thêm, dùng cùng --langs vi,web; vd HuggingFaceFW/fineweb-2:vie_Latn:text")
     ap.add_argument("--hf_mb", type=float, default=300)
+    ap.add_argument("--size_tag", default="auto", help="tên thư mục cỡ model, vd 50M (data/50M/). auto = tính từ cấu hình model")
+    ap.add_argument("--auto_data", choices=["on", "off"], default="on", help="on: nếu repo có data/<cỡ>/N.txt thì tự nạp làm ngôn ngữ 'gen'")
+    ap.add_argument("--data_repo", default=None, help="repo HF chứa data/<cỡ>/ và --hf_files (mặc định = --hf_repo)")
     ap.add_argument("--hf_files", default="", help='nạp file N.txt trên repo HF (--hf_repo) làm một "ngôn ngữ" mới: "gen=pretrain/" (cùng make_data.py pretrain)')
     ap.add_argument("--hf_extra", default="", help='thêm nguồn HF, mỗi nguồn là một "ngôn ngữ" mới trong --langs: "tin=repo:config:truong:MB,phude=repo::text:200"')
     ap.add_argument("--val_frac", type=float, default=0.02)
