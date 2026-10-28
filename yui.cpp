@@ -9,6 +9,7 @@
 // Kiểm tra: ./yui --model model.yui --encode "xin chào"    in id token (so với tokenizers của Hugging Face)
 //           ./yui --model model.yui --ids 5,17,9 --k 2 --logits out.bin   ghi logits float32 từng vị trí (so với PyTorch)
 //
+// Định dạng .yui: v1 (float32 hoặc int8 theo hàng) và v2 (mỗi ma trận một kiểu: float32 / int8 / q4 = 4-bit theo khối 32, xem export_yui.py --quant q4).
 // Phép tính khớp adaptive_moe.py + elastic_ctx.py: LayerNorm -> attention RoPE (KV cache) -> MoE top-p (shared expert luôn bật,
 // expert SwiGLU, trọng số = prob chuẩn hoá * strength). Chat: "User: ...\nYui: ...<eos>" như sft_format.py.
 #ifdef _WIN32
@@ -231,6 +232,82 @@ static void rows_f32_neon(const float* W, int C, const float* x, float* y, int r
 }
 #endif
 
+// ---- q4: trọng số 4-bit theo khối 32 (byte j của khối chứa trọng số j ở nửa thấp, j+16 ở nửa cao; giá trị = (nibble - 8) * hệ số khối) ----
+static void rows_q4_scalar(const uint8_t* Q, const float* S, int nb, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* q = Q + (size_t)r * nb * 16; const float* s = S + (size_t)r * nb; float acc = 0.f;
+        for (int b = 0; b < nb; b++) {
+            const uint8_t* p = q + b * 16; const int8_t* x = xq + b * 32; int sum = 0;
+            for (int j = 0; j < 16; j++) sum += ((int)(p[j] & 15) - 8) * (int)x[j] + ((int)(p[j] >> 4) - 8) * (int)x[16 + j];
+            acc += (float)sum * (s[b] * xs[b]);
+        }
+        y[r] = acc;
+    }
+}
+static void rows_q4x_scalar(const uint8_t* Q, const float* S, int nb, int cols, const float* x, float* y, int r0, int r1) {   // YUI_EXACT: q4 x float
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* q = Q + (size_t)r * nb * 16; const float* s = S + (size_t)r * nb; float acc = 0.f;
+        for (int b = 0; b < nb; b++) {
+            const uint8_t* p = q + b * 16; float blk = 0.f;
+            for (int j = 0; j < 16; j++) {
+                const int i0 = b * 32 + j, i1 = i0 + 16;
+                if (i0 < cols) blk += (float)((int)(p[j] & 15) - 8) * x[i0];
+                if (i1 < cols) blk += (float)((int)(p[j] >> 4) - 8) * x[i1];
+            }
+            acc += blk * s[b];
+        }
+        y[r] = acc;
+    }
+}
+#ifdef YUI_X86
+YUI_TGT_AVX2 static void rows_q4_avx2(const uint8_t* Q, const float* S, int nb, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    const __m128i m4 = _mm_set1_epi8(0x0F); const __m256i eight = _mm256_set1_epi8(8), one = _mm256_set1_epi16(1);
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* q = Q + (size_t)r * nb * 16; const float* s = S + (size_t)r * nb; __m256 acc = _mm256_setzero_ps();
+        for (int b = 0; b < nb; b++) {
+            const __m128i raw = _mm_loadu_si128((const __m128i*)(q + b * 16));
+            const __m128i lo = _mm_and_si128(raw, m4), hi = _mm_and_si128(_mm_srli_epi16(raw, 4), m4);
+            const __m256i w = _mm256_sub_epi8(_mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1), eight);   // 32 trọng số int8 trong [-8, 7]
+            const __m256i vx = _mm256_loadu_si256((const __m256i*)(xq + b * 32));
+            const __m256i p = _mm256_maddubs_epi16(_mm256_sign_epi8(w, w), _mm256_sign_epi8(vx, w));
+            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_madd_epi16(p, one)), _mm256_set1_ps(s[b] * xs[b]), acc);
+        }
+        y[r] = hsum256(acc);
+    }
+}
+#endif
+#ifdef YUI_ARM64
+static void rows_q4_neon(const uint8_t* Q, const float* S, int nb, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    const uint8x16_t m4 = vdupq_n_u8(0x0F); const int8x16_t eight = vdupq_n_s8(8);
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* q = Q + (size_t)r * nb * 16; const float* s = S + (size_t)r * nb; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int b = 0; b < nb; b++) {
+            const uint8x16_t raw = vld1q_u8(q + b * 16);
+            const int8x16_t lo = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(raw, m4)), eight), hi = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(raw, 4)), eight);
+            const int8x16_t x0 = vld1q_s8(xq + b * 32), x1 = vld1q_s8(xq + b * 32 + 16);
+            int16x8_t p0 = vmull_s8(vget_low_s8(lo), vget_low_s8(x0)); p0 = vmlal_s8(p0, vget_high_s8(lo), vget_high_s8(x0));
+            int16x8_t p1 = vmull_s8(vget_low_s8(hi), vget_low_s8(x1)); p1 = vmlal_s8(p1, vget_high_s8(hi), vget_high_s8(x1));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(vpadalq_s16(vpaddlq_s16(p0), p1)), s[b] * xs[b]);
+        }
+        y[r] = vaddvq_f32(acc);
+    }
+}
+YUI_TGT_DOT static void rows_q4_dot(const uint8_t* Q, const float* S, int nb, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    const uint8x16_t m4 = vdupq_n_u8(0x0F); const int8x16_t eight = vdupq_n_s8(8);
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* q = Q + (size_t)r * nb * 16; const float* s = S + (size_t)r * nb; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int b = 0; b < nb; b++) {
+            const uint8x16_t raw = vld1q_u8(q + b * 16);
+            const int8x16_t lo = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(raw, m4)), eight), hi = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(raw, 4)), eight);
+            int32x4_t t = vdotq_s32(vdupq_n_s32(0), lo, vld1q_s8(xq + b * 32));
+            t = vdotq_s32(t, hi, vld1q_s8(xq + b * 32 + 16));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(t), s[b] * xs[b]);
+        }
+        y[r] = vaddvq_f32(acc);
+    }
+}
+#endif
+
 // ---- nhóm luồng (không cần OpenMP nên chạy giống nhau trên Android / Windows / Linux) ----
 // Mỗi lần run() chia n tác vụ cho các luồng nền + luồng gọi; luồng nền quay vòng chờ rất ngắn rồi ngủ nên không tốn pin lúc rảnh.
 static inline void cpu_relax() {
@@ -417,7 +494,7 @@ struct MappedFile {
     }
 };
 struct Reader {
-    const uint8_t* p; const uint8_t* end; vector<void*>* mem;
+    const uint8_t* p; const uint8_t* end; vector<void*>* mem; int ver = 1;
     void need(size_t n) const { if ((size_t)(end - p) < n) die("file .yui bị cụt"); }
     void* alloc(size_t n) { void* q = aalloc_raw(n); mem->push_back(q); return q; }
     template <class T> T get() { need(sizeof(T)); T v; memcpy(&v, p, sizeof v); p += sizeof v; return v; }
@@ -427,19 +504,38 @@ struct Reader {
 };
 
 struct Mat {
-    int rows = 0, cols = 0; bool q = false;
+    int rows = 0, cols = 0, type = 0; bool q = false;   // type: 0 float32, 1 int8 (hệ số mỗi hàng), 2 q4 (4-bit, hệ số mỗi khối 32)
     float* f = nullptr; const int8_t* i8 = nullptr; float* sc = nullptr;   // i8 trỏ thẳng vào file mmap (không sao chép)
+    const uint8_t* q4 = nullptr; float* bs = nullptr; int nb = 0;          // q4: nb khối mỗi hàng, mỗi khối 16 byte (2 trọng số/byte) + 1 hệ số float
 };
-
-static Mat load_mat(Reader& r, int rows, int cols, bool quantized) {
-    Mat m; m.rows = rows; m.cols = cols; m.q = quantized;
-    size_t n = (size_t)rows * cols;
-    if (quantized) {
+static float f16_to_f32(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16, e = (h >> 10) & 0x1F, m = h & 0x3FF, f;
+    if (e == 0) {
+        if (m == 0) f = sign;
+        else { e = 1; while (!(m & 0x400)) { m <<= 1; e--; } f = sign | ((e + 127 - 15) << 23) | ((m & 0x3FF) << 13); }   // số dưới chuẩn
+    } else if (e == 31) f = sign | 0x7F800000u | (m << 13);
+    else f = sign | ((e + 127 - 15) << 23) | (m << 13);
+    float r; memcpy(&r, &f, 4); return r;
+}
+// v1: kiểu theo cờ toàn file (v1_quant). v2: mỗi ma trận đứng sau 1 byte kiểu (typed=false cho ma trận luôn float như router).
+static Mat load_mat(Reader& r, int rows, int cols, bool v1_quant, bool typed = true) {
+    Mat m; m.rows = rows; m.cols = cols;
+    int t = v1_quant ? 1 : 0;
+    if (typed && r.ver >= 2) t = r.get<uint8_t>();
+    m.type = t; m.q = (t == 1);
+    const size_t n = (size_t)rows * cols;
+    if (t == 1) {
         m.sc = (float*)r.alloc(rows * sizeof(float)); r.bytes(m.sc, rows * sizeof(float));
         m.i8 = (const int8_t*)r.skip(n);
-    } else {
+    } else if (t == 2) {
+        m.nb = (cols + 31) / 32; const size_t nblk = (size_t)rows * m.nb;
+        m.bs = (float*)r.alloc(nblk * sizeof(float));
+        const uint8_t* h = r.skip(nblk * 2);   // hệ số fp16 -> float một lần lúc nạp; phần 4-bit dùng thẳng từ mmap
+        for (size_t i = 0; i < nblk; i++) { uint16_t hv; memcpy(&hv, h + 2 * i, 2); m.bs[i] = f16_to_f32(hv); }
+        m.q4 = r.skip(nblk * 16);
+    } else if (t == 0) {
         m.f = (float*)r.alloc(n * sizeof(float)); r.bytes(m.f, n * sizeof(float));
-    }
+    } else die("kiểu ma trận không hỗ trợ trong file .yui");
     return m;
 }
 static float* load_vec(Reader& r, size_t n) { float* p = (float*)r.alloc(n * sizeof(float)); r.bytes(p, n * sizeof(float)); return p; }
@@ -468,6 +564,18 @@ static void rows_q(const Mat& m, const int8_t* xq, const float* xs, float* y, in
     default: rows_q8_scalar(m.i8, m.cols, xq, xs, m.sc, y, r0, r1);
     }
 }
+static void rows_q4(const Mat& m, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    switch (isa()) {
+#ifdef YUI_X86
+    case ISA_AVX2: rows_q4_avx2(m.q4, m.bs, m.nb, xq, xs, y, r0, r1); return;
+#endif
+#ifdef YUI_ARM64
+    case ISA_DOT: rows_q4_dot(m.q4, m.bs, m.nb, xq, xs, y, r0, r1); return;
+    case ISA_NEON: rows_q4_neon(m.q4, m.bs, m.nb, xq, xs, y, r0, r1); return;
+#endif
+    default: rows_q4_scalar(m.q4, m.bs, m.nb, xq, xs, y, r0, r1);
+    }
+}
 static void rows_f(const Mat& m, const float* x, float* y, int r0, int r1) {
     switch (isa()) {
 #ifdef YUI_X86
@@ -486,9 +594,9 @@ static inline bool use_qact(bool model_q) { return model_q && !g_exact; }
 static void mv(const Mat& m, const float* x, const Act& a, float* y, bool par) {
     const int R = m.rows;
     auto body = [&](int r0, int r1) {
-        if (!m.q) rows_f(m, x, y, r0, r1);
-        else if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1);
-        else rows_q(m, a.q, a.s, y, r0, r1);
+        if (m.type == 0) rows_f(m, x, y, r0, r1);
+        else if (m.type == 1) { if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1); else rows_q(m, a.q, a.s, y, r0, r1); }
+        else { if (g_exact) rows_q4x_scalar(m.q4, m.bs, m.nb, m.cols, x, y, r0, r1); else rows_q4(m, a.q, a.s, y, r0, r1); }
     };
     const Pool& p = pool();
     if (!par || p.nthreads <= 1 || (size_t)R * m.cols < (1u << 19)) { body(0, R); return; }
@@ -622,6 +730,7 @@ static string to_text(const string& b, bool& incomplete) {
 }
 
 // ============================ model ============================
+static const char* quant_name(uint32_t q) { return q == 0 ? "float32" : (q == 1 ? "int8" : "q4"); }
 struct Cfg { uint32_t quant, V, D, layers, heads, E, F, nshared, L, min_k, max_k; float top_p, min_strength; int hd; };
 struct Expert { Mat g, u, d; };
 struct Layer { float *n1w, *n1b, *n2w, *n2b; Mat qkv, o, gate; float* sw; float sb; vector<Expert> ex, sh; };
@@ -652,8 +761,8 @@ struct Model {
         file.open(path);
         Reader r{file.data, file.data + file.size, &mem};
         char mg[4]; r.bytes(mg, 4); if (memcmp(mg, "YUI1", 4)) die("không phải file .yui (sai magic)");
-        uint32_t ver = r.get<uint32_t>(); if (ver != 1) die("phiên bản .yui không hỗ trợ");
-        c.quant = r.get<uint32_t>(); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
+        uint32_t ver = r.get<uint32_t>(); if (ver != 1 && ver != 2) die("phiên bản .yui không hỗ trợ (cần yui.cpp mới hơn?)"); r.ver = (int)ver;
+        c.quant = r.get<uint32_t>(); if (c.quant > 2) die("kiểu lượng tử không hỗ trợ"); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
         c.heads = r.get<uint32_t>(); c.E = r.get<uint32_t>(); c.F = r.get<uint32_t>(); c.nshared = r.get<uint32_t>();
         c.L = r.get<uint32_t>(); c.min_k = r.get<uint32_t>(); c.max_k = r.get<uint32_t>();
         c.top_p = r.get<float>(); c.min_strength = r.get<float>();
@@ -679,7 +788,7 @@ struct Model {
             l.n1w = load_vec(r, D); l.n1b = load_vec(r, D);
             l.qkv = load_mat(r, 3 * D, D, q); l.o = load_mat(r, D, D, q);
             l.n2w = load_vec(r, D); l.n2b = load_vec(r, D);
-            l.gate = load_mat(r, c.E, D, false);
+            l.gate = load_mat(r, c.E, D, false, false);
             l.sw = load_vec(r, D); l.sb = r.get<float>();
             l.ex.resize(c.E);
             for (auto& e : l.ex) { e.g = load_mat(r, F, D, q); e.u = load_mat(r, F, D, q); e.d = load_mat(r, D, F, q); }
@@ -698,7 +807,14 @@ struct Model {
 
     void embed(int t, float* out) const {
         if (t < 0 || t >= (int)c.V) t = 0;
-        if (!emb.q) memcpy(out, emb.f + (size_t)t * c.D, c.D * sizeof(float));
+        if (emb.type == 0) memcpy(out, emb.f + (size_t)t * c.D, c.D * sizeof(float));
+        else if (emb.type == 2) {
+            const int D = (int)c.D;
+            for (int b = 0; b < emb.nb; b++) {
+                const float d = emb.bs[(size_t)t * emb.nb + b]; const uint8_t* p = emb.q4 + ((size_t)t * emb.nb + b) * 16;
+                for (int j = 0; j < 16; j++) { const int i0 = b * 32 + j, i1 = i0 + 16; if (i0 < D) out[i0] = (float)((int)(p[j] & 15) - 8) * d; if (i1 < D) out[i1] = (float)((int)(p[j] >> 4) - 8) * d; }
+            }
+        }
         else { const int8_t* w = emb.i8 + (size_t)t * c.D; float s = emb.sc[t]; for (int i = 0; i < (int)c.D; i++) out[i] = (float)w[i] * s; }
     }
     // Một expert SwiGLU: out = w * down(silu(gate(x)) * up(x)). xa = x đã lượng tử (dùng chung cho gate/up của mọi expert).
@@ -706,14 +822,14 @@ struct Model {
         mv(e.g, x, xa, sc.tg.data(), false); mv(e.u, x, xa, sc.tu.data(), false);
         for (int i = 0; i < (int)c.F; i++) { float z = sc.tg[i]; sc.tg[i] = z / (1.f + expf(-z)) * sc.tu[i]; }
         Act a2{sc.q.data(), sc.qs.data()};
-        if (use_qact(c.quant == 1)) quant_act(sc.tg.data(), (int)c.F, a2.q, a2.s);
+        if (use_qact(c.quant >= 1)) quant_act(sc.tg.data(), (int)c.F, a2.q, a2.s);
         mv(e.d, sc.tg.data(), a2, sc.ty.data(), false);
         for (int i = 0; i < (int)c.D; i++) sc.out[i] = w * sc.ty[i];
     }
     // Nạp 1 token tại vị trí s.n (phải < L), cập nhật KV cache. logits != nullptr thì tính logits [V].
     void step(Session& s, int tok_id, int kcap, float* logits) const {
         const int D = c.D, H = c.heads, hd = c.hd, half = hd / 2, L = c.L, E = c.E;
-        const int pos = s.n; const bool qa = use_qact(c.quant == 1);
+        const int pos = s.n; const bool qa = use_qact(c.quant >= 1);
         if (pos >= L) die("Session.n >= L (lỗi nội bộ)");
         embed(tok_id, s.x.data());
         const float* cs = &cosT[(size_t)pos * half]; const float* sn = &sinT[(size_t)pos * half];
@@ -1048,7 +1164,7 @@ static GenOpts opts_from_json(const char* js, int def_k) {
     if (js && *js) { string t = js; J j; JP jp(t); if (jp.val(j) && j.t == J::OBJ) return parse_opts(j, def_k); }
     GenOpts o; o.k = def_k; return o;
 }
-YUI_API const char* yui_version() { return "yui-engine 1.1"; }
+YUI_API const char* yui_version() { return "yui-engine 1.2"; }
 YUI_API void yui_set_threads(int n) { pool().resize(n > 0 ? n : default_threads()); }   // n <= 0: tự chọn
 YUI_API int yui_get_threads() { return pool().nthreads; }
 YUI_API int yui_cpu_features(char* out, int len) {   // vd "neon+dotprod, 4 luồng"; trả số byte, <0 nếu lỗi
@@ -1067,7 +1183,7 @@ YUI_API int yui_info(void* h, char* out, int len) {   // JSON thông tin model; 
     Model* m = (Model*)h; if (!m || !out) return -1;
     string s = "{\"d\":" + std::to_string(m->c.D) + ",\"layers\":" + std::to_string(m->c.layers) + ",\"experts\":" + std::to_string(m->c.E) +
                ",\"heads\":" + std::to_string(m->c.heads) + ",\"ctx\":" + std::to_string(m->c.L) + ",\"vocab\":" + std::to_string(m->c.V) +
-               ",\"quant\":\"" + (m->c.quant ? "int8" : "float32") + "\"}";
+               ",\"quant\":\"" + quant_name(m->c.quant) + "\"}";
     if ((int)s.size() + 1 > len) return -2;
     memcpy(out, s.c_str(), s.size() + 1); return (int)s.size();
 }
@@ -1250,7 +1366,7 @@ static int cli_main(int argc, char** argv) {
     if (model_path.empty()) die("cần --model file.yui");
     if (threads > 0) pool().resize(threads);
     Model m; m.load(model_path);
-    fprintf(stderr, "[yui] %s | d=%u layers=%u experts=%u heads=%u | ngữ cảnh %u | %s | k=%d | CPU: %s, %d luồng%s%s\n", model_path.c_str(), m.c.D, m.c.layers, m.c.E, m.c.heads, m.c.L, m.c.quant ? "int8" : "float32", o.k, isa_name(), pool().nthreads, g_exact ? ", exact" : "", m.file.mapped ? ", mmap" : "");
+    fprintf(stderr, "[yui] %s | d=%u layers=%u experts=%u heads=%u | ngữ cảnh %u | %s | k=%d | CPU: %s, %d luồng%s%s\n", model_path.c_str(), m.c.D, m.c.layers, m.c.E, m.c.heads, m.c.L, quant_name(m.c.quant), o.k, isa_name(), pool().nthreads, g_exact ? ", exact" : "", m.file.mapped ? ", mmap" : "");
 
     if (have_enc) { for (int id : m.tok.encode(enc)) printf("%d ", id); printf("\n"); return 0; }
     if (!ids_s.empty()) {   // xuất logits từng vị trí để so với PyTorch

@@ -3,11 +3,18 @@ export_yui.py - đóng gói model Adaptive-MoE (checkpoint .pt + config.json + t
 
     python export_yui.py --out thu_muc_model --ckpt auto --dst model.yui            # float32 (~200 MB)
     python export_yui.py --out thu_muc_model --ckpt auto --dst model_q8.yui --quant int8   # int8 theo hàng (~50 MB)
+    python export_yui.py --out thu_muc_model --ckpt auto --dst model_q4.yui --quant q4     # expert 4-bit theo khối 32, phần còn lại int8 (định dạng v2)
+    python export_yui.py --out thu_muc_model --ckpt auto --dst model_q4all.yui --quant q4all   # TẤT CẢ ma trận 4-bit (nhỏ nhất, chất lượng giảm nhiều nhất)
 
 File .yui gồm: cấu hình, tokenizer (vocab + merges + bảng chữ cái/số Unicode cho bước tách từ) và toàn bộ trọng số.
 Router (gate, strength) và LayerNorm luôn giữ float32 để việc chọn expert giống hệt PyTorch; int8 chỉ áp cho ma trận lớn
 (embedding, qkv, o, expert, head), mỗi hàng một hệ số scale.
 Định dạng (little-endian): xem hàm write_yui; yui.cpp đọc đúng thứ tự này.
+
+v1 (f32, int8): như cũ, engine nào cũng đọc được. v2 (q4, q4all): sau tiêu đề, MỖI ma trận có 1 byte kiểu: 0 = float32, 1 = int8 theo hàng (hệ số/hàng rồi int8),
+2 = q4: mỗi hàng chia khối 32 trọng số (hàng ngắn hơn thì đệm 0), mỗi khối 1 hệ số fp16 + 16 byte (byte j = trọng số j ở 4 bit thấp, j+16 ở 4 bit cao);
+giá trị = (nibble - 8) * hệ số. Ghi: toàn bộ hệ số fp16 của ma trận, rồi toàn bộ byte 4-bit. Router/LayerNorm luôn float32.
+q4 chỉ lượng tử expert (chiếm ~85% tham số) và giữ attention + embedding + head ở int8: nhỏ hơn int8 khoảng 1/3, chất lượng gần như int8.
 """
 import argparse, json, os, struct, unicodedata
 import numpy as np
@@ -82,7 +89,30 @@ def quantize_rows(w):
     return sc, q
 
 
-def write_yui(sd, cfg, tokenizer_json, dst, quant="f32"):
+def q4_quantize(w):
+    """w [rows, cols] float -> (scales fp16 [rows, nb], packed uint8 [rows, nb, 16]); nb = ceil(cols/32). Kiểu Q4_0: hệ số = (giá trị lớn nhất theo trị tuyệt đối, có dấu) / -8."""
+    w = np.ascontiguousarray(w, dtype=np.float32)
+    rows, cols = w.shape
+    nb = (cols + 31) // 32
+    pad = np.zeros((rows, nb * 32), np.float32)
+    pad[:, :cols] = w
+    blk = pad.reshape(rows, nb, 32)
+    idx = np.abs(blk).argmax(-1)
+    m = np.take_along_axis(blk, idx[..., None], -1)[..., 0]
+    d16 = (m / -8.0).astype(np.float16)
+    d = d16.astype(np.float32)
+    inv = np.where(d != 0, 1.0 / np.where(d != 0, d, 1.0), 0.0).astype(np.float32)
+    q = np.clip(np.floor(blk * inv[..., None] + 8.5), 0, 15).astype(np.uint8)
+    return d16, (q[..., :16] | (q[..., 16:] << 4)).astype(np.uint8)
+
+
+def q4_dequantize(d16, packed, cols):
+    q = np.concatenate([packed & 15, packed >> 4], -1).astype(np.float32)
+    w = (q - 8.0) * d16.astype(np.float32)[..., None]
+    return w.reshape(w.shape[0], -1)[:, :cols]
+
+
+def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None):
     """sd: {tên tham số PyTorch: np.ndarray float32}; cfg: config.json của train_lm.py (+ tuỳ chọn heads, min_k, max_k, min_strength)."""
     V, D, NL, E = cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]
     H = cfg.get("heads", 4)           # CtxLM mặc định 4 head
@@ -91,7 +121,19 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32"):
     min_k, max_k = cfg.get("min_k", 1), cfg.get("max_k", 8)
     ms, top_p = cfg.get("min_strength", 0.3), float(cfg["top_p"])
     n_shared = 1
+    assert quant in ("f32", "int8", "q4", "q4all"), quant
     q8 = quant == "int8"
+    ver = 2 if quant.startswith("q4") else 1
+    qfield = {"f32": 0, "int8": 1, "q4": 2, "q4all": 2}[quant]
+
+    def kind(name):   # 0 f32, 1 int8, 2 q4
+        if quant == "f32":
+            return 0
+        if quant == "int8":
+            return 1
+        if quant == "q4all":
+            return 2
+        return 2 if (".experts." in name or ".shared." in name) else 1
     inv, merges, eos = load_tokenizer(tokenizer_json)
     assert len(inv) == V, f"vocab tokenizer {len(inv)} != config {V}"
     b2u = bytes_to_unicode()
@@ -99,7 +141,7 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32"):
 
     with open(dst, "wb") as f:
         f.write(MAGIC)
-        f.write(struct.pack("<12I", 1, 1 if q8 else 0, V, D, NL, H, E, F, n_shared, L, min_k, max_k))
+        f.write(struct.pack("<12I", ver, qfield, V, D, NL, H, E, F, n_shared, L, min_k, max_k))
         f.write(struct.pack("<2f", top_p, ms))
         # tokenizer
         f.write(struct.pack("<I", len(inv)))
@@ -122,10 +164,21 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32"):
         def put_mat(name, rows, cols):
             w = np.asarray(sd[name], dtype=np.float32)
             assert tuple(w.shape) == (rows, cols), f"{name}: {w.shape} != {(rows, cols)}"
-            if q8:
+            k = kind(name)
+            if ver == 2:
+                f.write(struct.pack("<B", k))
+            if k == 1:
                 sc, q = quantize_rows(w)
                 f.write(sc.tobytes())
                 f.write(q.tobytes())
+            elif k == 2:
+                d16, packed = q4_quantize(w)
+                f.write(d16.tobytes())
+                f.write(packed.tobytes())
+                if stats is not None:   # sai số tương đối của lượng tử hoá (để biết 4-bit làm mất bao nhiêu)
+                    e = stats.setdefault(name.split(".")[0] if not name.startswith("blocks") else name.split(".", 2)[2].split(".")[0], [0.0, 0.0])
+                    e[0] += float(((w - q4_dequantize(d16, packed, cols)) ** 2).sum())
+                    e[1] += float((w ** 2).sum())
             else:
                 f.write(np.ascontiguousarray(w).tobytes())
 
@@ -155,7 +208,8 @@ def main():
     ap.add_argument("--out", required=True, help="thư mục có config.json, tokenizer.json và checkpoint")
     ap.add_argument("--ckpt", default="auto", help="auto = sft_best.pt nếu có, không thì best.pt")
     ap.add_argument("--dst", required=True)
-    ap.add_argument("--quant", choices=["f32", "int8"], default="f32")
+    ap.add_argument("--quant", choices=["f32", "int8", "q4", "q4all"], default="f32",
+                    help="f32 | int8 | q4 (expert 4-bit, còn lại int8) | q4all (mọi ma trận 4-bit; nhỏ nhất nhưng chất lượng giảm nhiều nhất)")
     a = ap.parse_args()
     import torch
     cfg = json.load(open(os.path.join(a.out, "config.json"), encoding="utf-8"))
@@ -164,8 +218,14 @@ def main():
         ck = "sft_best.pt" if os.path.exists(os.path.join(a.out, "sft_best.pt")) else "best.pt"
     obj = torch.load(os.path.join(a.out, ck), map_location="cpu")
     sd = {k: v.float().numpy() for k, v in obj["model"].items()}
-    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), a.dst, a.quant)
+    stats = {}
+    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), a.dst, a.quant, stats)
     print(f"đã ghi {a.dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}")
+    if stats:
+        tot_e = sum(v[0] for v in stats.values()); tot_n = sum(v[1] for v in stats.values())
+        print(f"sai số lượng tử hoá 4-bit (căn bậc hai tỉ lệ năng lượng): tổng {100 * (tot_e / max(tot_n, 1e-12)) ** 0.5:.2f}%  "
+              + ", ".join(f"{k} {100 * (v[0] / max(v[1], 1e-12)) ** 0.5:.2f}%" for k, v in sorted(stats.items())[:6])
+              + "\nKiểm chất lượng thật: python verify_cpp.py --out ... --model <file q4>  (so với PyTorch) rồi thử chat vài câu trước khi dùng.")
 
 
 if __name__ == "__main__":

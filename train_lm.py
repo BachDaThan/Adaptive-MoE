@@ -302,15 +302,31 @@ def main(args):
         hf_pull(args, ["config.json", "tokenizer.json", "best.pt"])
         return generate(args, device)
     hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
-    P = PRESETS[args.size]
+    from data_layout import params_from_arch, size_tag, parse_params, arch_for_params, lr_for_params
+    if args.size in PRESETS:
+        P = PRESETS[args.size]
+    else:   # --size 50M / 120M / 1.2B: tự chọn d, số lớp, số expert cho đúng số tham số
+        n_target = parse_params(args.size)
+        d0, l0, e0 = arch_for_params(n_target, args.vocab)
+        P = dict(d=d0, layers=l0, experts=e0, lr=lr_for_params(params_from_arch(args.vocab, d0, l0, e0)))
+        print(f"[train] --size {args.size}: chọn d={d0}, {l0} lớp, {e0} expert = {params_from_arch(args.vocab, d0, l0, e0) / 1e6:.1f}M tham số, lr={P['lr']:.2e}", flush=True)
     d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
     lr = args.lr or P["lr"]
-    from data_layout import params_from_arch, size_tag
     cfg0 = {}
     if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
         cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
     args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
         cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
+    n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
+    custom = args.size not in PRESETS
+    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key Gemini; không có thì bỏ qua)
+        if os.path.exists(os.path.join(args.out, "data.pt")):
+            print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
+        elif not (args.data_repo or args.hf_repo):
+            print("[train] cần --hf_repo để tạo data lên repo; bỏ qua bước tạo data", flush=True)
+        else:
+            import make_data
+            make_data.make_for_training(n_params, args._tag, args.data_repo or args.hf_repo, args.hf_type, args.make_data_kinds, args.make_data_minutes)
     train, vals, V, langs = build_data(args)
     cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max)
     json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
@@ -453,7 +469,10 @@ if __name__ == "__main__":
     ap.add_argument("--new_tokenizer", action="store_true", help="ép train tokenizer mới (chỉ dùng khi --out mới, không có last.pt)")
     ap.add_argument("--vocab", type=int, default=16000)
     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
-    ap.add_argument("--size", choices=list(PRESETS), default="small")
+    ap.add_argument("--size", default="small", help="small | medium | large, hoặc số tham số muốn có, vd 50M, 120M, 1.2B (tự chọn d/lớp/expert và tự tạo data hợp cỡ model)")
+    ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key Gemini")
+    ap.add_argument("--make_data_kinds", default="finetune,pretrain", help="loại data tạo trước khi train")
+    ap.add_argument("--make_data_minutes", type=float, default=30, help="tối đa bao nhiêu phút cho bước tạo data")
     ap.add_argument("--d", type=int, default=0)
     ap.add_argument("--layers", type=int, default=0)
     ap.add_argument("--experts", type=int, default=0)

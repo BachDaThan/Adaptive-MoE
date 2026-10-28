@@ -29,21 +29,75 @@ CHẾ ĐỘ TỰ ĐỘNG - chỉnh hết bằng BIẾN MÔI TRƯỜNG (Secrets/V
   python make_data.py auto --plan     # chỉ in kế hoạch, không gọi Gemini
   HF_TOKEN, GEMINI_API_KEYS           khoá (nhiều key Gemini cách nhau dấu phẩy)
   HF_REPO                             repo dataset (mặc định BachDaThan/TrainAI-web); file xếp vào Fine-tune/<cỡ>/N.txt và data/<cỡ>/N.txt, <cỡ> tự tính từ số tham số (50M, 120M...) hoặc đặt MODEL_TAG
-  DATA_KINDS                          finetune,pretrain (mặc định cả hai; ghi một cái nếu chỉ cần cái đó)
+  DATA_KINDS                          finetune,pretrain (mặc định cả hai). Thêm ",tools" để tạo cả hội thoại DẠY DÙNG CÔNG CỤ (calc/time/search, không tốn quota; TOOL_PAIRS = số hội thoại, mặc định 10% mục tiêu fine-tune).
+                                      CHỈ bật khi bot/app của bạn chạy qua yui_agent.py (thực thi công cụ), không thì model sẽ in thẻ <tool> thô ra cho người dùng.
   MODEL_PARAMS                        số tham số model, vd 50M / 1.2B / 50000000  -> hệ thống tự tính lượng data hợp với model
      hoặc MODEL_REPO (repo HF có config.json của model, vd BachDaThan/TrainAI)  hoặc MODEL_D, MODEL_LAYERS, MODEL_EXPERTS, MODEL_VOCAB
   FT_PAIRS                            TỔNG số cặp hội thoại fine-tune muốn có trên repo (bỏ trống = tự tính theo model); FT_NEW_PAIRS = tạo THÊM đúng ngần này
   FT_PER_FILE                         số cặp mỗi file N.txt (mặc định 100)
   PRETRAIN_TOKENS                     TỔNG token văn bản train muốn có (bỏ trống = tự tính); PRETRAIN_NEW_TOKENS = tạo thêm; KHÔNG cần đặt "cặp" cho data train
-  WEB_SEARCH                          off | wiki | search | both (mặc định both)
+  WEB_SEARCH                          off | wiki | search | tavily | both (mặc định both: Tavily cào + Wikipedia xen kẽ, Gemini chỉ lọc/chắt lọc; google_search của Gemini chỉ là dự phòng cuối)
   WEB_TOPICS                          chủ đề riêng, cách nhau dấu ; (bỏ trống = dùng danh sách có sẵn + bài Wikipedia ngẫu nhiên)
   MAX_FILES_PER_RUN                   chặn trên số file tạo mỗi lần chạy (mặc định 40), GEMINI_RPM, GEMINI_MODEL
 """
-import argparse, io, json, math, os, random, re, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, io, json, math, os, random, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sft_format import load_convs, clean  # noqa: E402  (cùng bộ đọc/lọc với train_sft.py)
 from data_layout import params_from_arch, size_tag, finetune_prefix, data_prefix  # noqa: E402
+
+def collect_keys(name, extra=None):
+    """Gom key từ: --keys, NAME_S (nhiều key cách nhau dấu phẩy/khoảng trắng), NAME, và NAME1, NAME2, NAME_3, ... (bao nhiêu cũng được). Bỏ trùng, giữ thứ tự."""
+    out = []
+    def add(v):
+        for k in re.split(r"[,;\s]+", v or ""):
+            if k.strip() and k.strip() not in out:
+                out.append(k.strip())
+    add(extra)
+    add(os.environ.get(name + "S")); add(os.environ.get(name))
+    numbered = []
+    for k, v in os.environ.items():
+        m = re.fullmatch(re.escape(name) + r"S?_?(\d+)", k)
+        if m and v.strip():
+            numbered.append((int(m.group(1)), v))
+    for _, v in sorted(numbered):
+        add(v)
+    return out
+
+
+def load_kaggle_secrets(names=("HF_TOKEN", "GEMINI_API_KEYS", "GEMINI_API_KEY", "TAVILY_API_KEYS", "TAVILY_API_KEY"), numbered=("GEMINI_API_KEY", "TAVILY_API_KEY"), limit=30):
+    """Trên Kaggle: tự lấy secret cùng tên vào biến môi trường (không cần viết os.environ[...] = ... cho từng key). Ngoài Kaggle thì không làm gì."""
+    try:
+        from kaggle_secrets import UserSecretsClient
+        cli = UserSecretsClient()
+    except Exception:  # noqa: BLE001
+        return 0
+    got = 0
+    def fetch(n):
+        nonlocal got
+        if os.environ.get(n):
+            return True
+        try:
+            v = cli.get_secret(n)
+        except Exception:  # noqa: BLE001
+            return False
+        if v:
+            os.environ[n] = v; got += 1
+            return True
+        return False
+    for n in names:
+        fetch(n)
+    for base in numbered:
+        miss = 0
+        for i in range(1, limit + 1):   # dừng khi thiếu 2 số liên tiếp
+            if fetch(f"{base}{i}") or fetch(f"{base}_{i}"):
+                miss = 0
+            else:
+                miss += 1
+                if miss >= 2:
+                    break
+    return got
+
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -192,7 +246,8 @@ class SearchUnavailable(Exception): pass   # model/gói này không dùng đư�
 
 class Gemini:
     def __init__(self, keys, base=API_BASE, rpm=8.0, max_wait=900.0):
-        self.keys = [{"k": k, "cool": 0.0, "last": 0.0, "dead": False} for k in keys]
+        # "mcool": hạn mức theo TỪNG model (quota Gemini tính riêng cho mỗi model) -> hết quota 1 model không làm cả key phải nghỉ
+        self.keys = [{"k": k, "cool": 0.0, "last": 0.0, "dead": False, "mcool": {}} for k in keys]
         self.base, self.gap, self.max_wait = base.rstrip("/"), 60.0 / max(rpm, 0.1), max_wait
         self.no_system, self.no_json, self.no_search = set(), set(), set()
 
@@ -230,13 +285,18 @@ class Gemini:
                 print(f"  ✅ key {i + 1}: {n} model hỗ trợ generateContent", flush=True)
         return list(found)
 
-    def _pick(self):
+    def _pick(self, model=None):
         alive = [k for k in self.keys if not k["dead"]]
         if not alive:
             raise QuotaOut("mọi key đều không dùng được")
-        best = min(alive, key=lambda k: max(k["cool"], k["last"] + self.gap))
-        wait = max(0.0, max(best["cool"], best["last"] + self.gap) - time.time())
+        def ready(k):
+            return max(k["cool"], k["mcool"].get(model, 0.0), k["last"] + self.gap)
+        best = min(alive, key=ready)
+        wait = max(0.0, ready(best) - time.time())
         if wait > self.max_wait:
+            if model is not None and any(k["mcool"].get(model, 0.0) > time.time() + self.max_wait for k in alive) and \
+                    all(k["mcool"].get(model, 0.0) > time.time() + self.max_wait for k in alive):
+                raise ModelGone("hết quota NGÀY của model này trên mọi key -> chuyển model kế")
             raise QuotaOut(f"mọi key phải chờ > {int(self.max_wait)}s (hết quota)")
         return best, wait
 
@@ -245,7 +305,7 @@ class Gemini:
         if search and model in self.no_search:
             raise SearchUnavailable(model)
         for _ in range(12 + 3 * len(self.keys)):
-            key, wait = self._pick()
+            key, wait = self._pick(model)
             if wait > 0:
                 print(f"  ⏳ chờ {wait:.0f}s (giới hạn tốc độ/quota)...", flush=True)
                 time.sleep(wait)
@@ -276,8 +336,11 @@ class Gemini:
                     raise ModelGone("model không có quota trên gói này (limit: 0)")
                 m = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', txt)
                 daily = "perday" in low.replace(" ", "").replace("_", "") or "per day" in low
-                key["cool"] = time.time() + (6 * 3600 if daily else (float(m.group(1)) + 1 if m else 30.0))
-                print(f"  ↻ 429: key tạm nghỉ {'(hết quota ngày)' if daily else ''}", flush=True)
+                key["mcool"][model] = time.time() + (6 * 3600 if daily else (float(m.group(1)) + 1 if m else 30.0))
+                if daily:
+                    print(f"  ↻ 429: key ...{key['k'][-4:]} hết quota NGÀY của {model} (các model khác trên key này vẫn dùng được)", flush=True)
+                else:
+                    print(f"  ↻ 429: key ...{key['k'][-4:]} nghỉ {float(m.group(1)) + 1 if m else 30:.0f}s với {model}", flush=True)
                 continue
             if st in (500, 502, 503, 504, 599):
                 trans += 1
@@ -310,23 +373,25 @@ BAN_TOKENS = {"exp", "embedding", "image", "vision", "audio", "tts", "asr", "ima
 
 
 def rank_models(names):
-    """Chỉ model họ gemini; phiên bản cao trước; cùng phiên bản thì bản ổn định trước, flash > flash-lite > pro (nhanh, quota rộng)."""
+    """Chỉ model họ gemini. Xếp phiên bản CAO -> THẤP (so từng số: 3.10 > 3.8); cùng phiên bản thì bản ổn định trước bản preview, flash > flash-lite > pro
+    (nhanh, quota rộng). Các tên bí danh '-latest' chỉ để dự phòng nên xếp CUỐI (trước đây chúng bị xếp đầu nên thứ hạng trông lộn xộn)."""
     scored = []
     for n in names:
         low = n.lower()
         toks = set(re.split(r"[-_.]", low))
         if not low.startswith("gemini") or toks & BAN_TOKENS:
             continue
-        m = re.match(r"^gemini-(\d+(?:\.\d+)?)", low)
+        m = re.match(r"^gemini-(\d+(?:\.\d+)*)", low)
         if m:
-            ver = float(m.group(1))
+            ver, alias = tuple(int(x) for x in m.group(1).split(".")), 0
         elif low.endswith("-latest"):
-            ver = 999.0   # alias luôn trỏ tới bản mới nhất
+            ver, alias = (0,), 1
         else:
             continue
         tier = 2 if "flash" in low and "lite" not in low else (1 if "flash" in low else 0)
-        stable = 0 if not ({"preview"} & toks) else 1
-        scored.append(((-ver, stable, -tier, n), n))
+        stable = 0 if "preview" not in toks else 1
+        neg = tuple(-x for x in (ver + (0, 0, 0))[:3])
+        scored.append(((alias, neg, stable, -tier, n), n))
     return [n for _, n in sorted(scored)]
 
 
@@ -393,27 +458,93 @@ class Wiki:
         return None
 
 
+class Tavily:
+    """Tìm web bằng Tavily (tuỳ chọn). Nhiều key xoay vòng, không giới hạn số key; hết key/hết hạn mức thì tự bỏ nguồn này, các nguồn khác vẫn chạy."""
+
+    def __init__(self, keys, base="https://api.tavily.com", delay=0.3):
+        self.keys = [{"k": k, "cool": 0.0, "dead": False} for k in keys]
+        self.base, self.delay, self.fails, self.calls = base.rstrip("/"), delay, 0, 0
+
+    @property
+    def available(self):
+        return any(not k["dead"] for k in self.keys) and self.fails < 5
+
+    def _post(self, key, body):
+        req = urllib.request.Request(self.base + "/search", method="POST", data=json.dumps(body).encode("utf-8"),
+                                     headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            return 599, str(e)
+
+    def doc(self, topic):
+        """Trả {'title','text'} từ các kết quả tìm kiếm của chủ đề, hoặc None."""
+        query = topic or "kiến thức đời sống thú vị"
+        body = {"query": query, "search_depth": "basic", "max_results": 5, "include_answer": False}
+        for _ in range(len(self.keys) * 2 + 1):
+            alive = [k for k in self.keys if not k["dead"] and k["cool"] <= time.time()]
+            if not alive:
+                break
+            key = random.choice(alive)
+            time.sleep(self.delay)
+            self.calls += 1
+            st, txt = self._post(key["k"], body)
+            if st == 200:
+                try:
+                    res = json.loads(txt).get("results", [])
+                except ValueError:
+                    res = []
+                parts = [f"{r.get('title', '').strip()}: {str(r.get('content', '')).strip()}" for r in res if str(r.get("content", "")).strip()]
+                text = "\n".join(parts)[:4000]
+                if len(text) >= 300:
+                    self.fails = 0
+                    return {"title": query, "text": text}
+                return None
+            if st in (401, 403, 432, 433):    # key sai / hết hạn mức gói -> bỏ key này
+                key["dead"] = True
+                print(f"  ⚠ Tavily: key ...{key['k'][-4:]} bị từ chối/hết hạn mức ({st}), bỏ key này", flush=True)
+                continue
+            if st == 429:
+                key["cool"] = time.time() + 20
+                continue
+            self.fails += 1
+            break
+        return None
+
+
 class WebPicker:
     """Mỗi lần gọi Gemini chọn nguồn thông tin: bài Wikipedia thật ('wiki'), hay để Gemini tự tra Google ('search'), hay thuần sáng tác."""
 
-    def __init__(self, mode, wiki, topics):
-        self.mode, self.wiki, self.topics = mode, wiki, topics
+    def __init__(self, mode, wiki, topics, tavily=None):
+        self.mode, self.wiki, self.topics, self.tavily = mode, wiki, topics, tavily
 
     def pick(self, model, gem):
+        """Tavily (cào web) là nguồn chính khi có key; Wikipedia xen ~25% cho đa dạng (hoặc làm nguồn chính khi không có Tavily).
+        Gemini google_search CHỈ là dự phòng cuối (hoặc khi chọn --web search): Gemini để lọc/chắt lọc, không tốn quota vào việc tra cứu."""
         topic = random.choice(self.topics) if self.topics and random.random() < 0.8 else None   # 20% bài ngẫu nhiên cho đa dạng
-        opts = []
-        if self.mode in ("wiki", "both") and self.wiki.fails < 5:
-            opts.append("wiki")
-        if self.mode in ("search", "both") and model not in gem.no_search:
-            opts.append("search")
-        random.shuffle(opts)
-        for o in opts:
+        can_t = self.mode in ("tavily", "both") and self.tavily is not None and self.tavily.available
+        can_w = self.mode in ("wiki", "both") and self.wiki.fails < 5
+        can_s = self.mode in ("search", "both") and model not in gem.no_search
+        order = []
+        if can_t:
+            order += ["tavily"] + (["wiki"] if can_w and random.random() < 0.25 else [])
+            order += (["wiki"] if can_w and "wiki" not in order else [])
+        elif can_w:
+            order.append("wiki")
+        if can_s:
+            order.append("search")
+        if self.mode == "search":
+            order = [o for o in order if o == "search"] or order
+        for o in order:
             if o == "search":
                 return None, topic or random.choice(self.topics or ["một chủ đề đời sống bất kỳ"]), True
-            d = self.wiki.doc(topic)
+            d = (self.tavily if o == "tavily" else self.wiki).doc(topic)
             if d:
                 return d, topic, False
-        return None, topic, False
+        return None, topic, False   # không nguồn nào dùng được -> thuần sáng tác như cũ
 
 
 def json_slice(t):
@@ -585,7 +716,7 @@ def restyle(args, gem, pool, pub, remote, seen):
     per_file = args.per_file or 100
     print(f"🔁 restyle: {len(pairs)} cặp trong file nguồn -> {len(qs)} câu hỏi dùng được (đã bỏ trùng với data trên repo)\n", flush=True)
     buf, done_files, fails, pos = [], 0, 0, 0
-    while done_files < args.files and pos < len(qs):
+    while done_files < args.files and pos < len(qs) and time.time() <= DEADLINE:
         chunk = qs[pos:pos + args.batch]
         system, prompt = restyle_prompt([(i, q, a) for i, (q, a) in enumerate(chunk)])
         try:
@@ -675,20 +806,28 @@ def parse_count(s):
     return int(v * mult)
 
 
-def model_params(token=None):
-    """(số tham số, mô tả nguồn). Thứ tự: MODEL_PARAMS > config.json của MODEL_REPO > MODEL_D/LAYERS/EXPERTS/VOCAB."""
+def model_params(token=None, remote=None):
+    """(số tham số, mô tả nguồn). Thứ tự: MODEL_PARAMS > config.json của MODEL_REPO > config.json nằm ngay trong repo dataset (train_lm.py --hf_repo tự đẩy lên)
+    > MODEL_D/LAYERS/EXPERTS/VOCAB > mặc định 50M. Nghĩa là: đã train/đẩy checkpoint lên repo thì KHÔNG cần nhập tham số, hệ thống tự nhận."""
+    def from_cfg(cfg):
+        return params_from_arch(cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"])
     if env("MODEL_PARAMS"):
         return parse_count(env("MODEL_PARAMS")), "MODEL_PARAMS"
     if env("MODEL_REPO"):
         try:
             from huggingface_hub import hf_hub_download
             cfg = json.load(open(hf_hub_download(env("MODEL_REPO"), "config.json", repo_type=env("MODEL_REPO_TYPE", "dataset"), token=token), encoding="utf-8"))
-            return params_from_arch(cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]), f"config.json của {env('MODEL_REPO')}"
+            return from_cfg(cfg), f"config.json của {env('MODEL_REPO')}"
         except Exception as e:  # noqa: BLE001
-            print(f"  ⚠ không đọc được config.json của MODEL_REPO ({str(e)[:80]}); thử biến khác", flush=True)
+            print(f"  ⚠ không đọc được config.json của MODEL_REPO ({str(e)[:80]}); thử cách khác", flush=True)
+    if remote is not None:
+        try:
+            return from_cfg(json.loads(remote.read("config.json").decode("utf-8"))), "config.json trong repo dataset (tự nhận)"
+        except Exception:  # noqa: BLE001
+            pass
     if env("MODEL_D") and env("MODEL_LAYERS") and env("MODEL_EXPERTS"):
         return params_from_arch(int(env("MODEL_VOCAB", "16000")), int(env("MODEL_D")), int(env("MODEL_LAYERS")), int(env("MODEL_EXPERTS"))), "MODEL_D/LAYERS/EXPERTS/VOCAB"
-    return 50_000_000, "mặc định 50M (preset small của repo; đặt MODEL_PARAMS để đổi)"
+    return 50_000_000, "mặc định 50M (chưa thấy config.json trong repo; đặt MODEL_PARAMS để đổi)"
 
 
 def fmt_n(n):
@@ -715,6 +854,9 @@ def make_plan(params, have_pairs, have_tokens, tokens_per_file):
                 pre_per_file=pre_per_file, pre_target=pre_target, pre_need=pre_need, pre_files=math.ceil(pre_need / max(1, tokens_per_file)))
 
 
+_TOOL_HAVE = 0   # số hội thoại công cụ đã có (count_existing điền)
+
+
 def count_existing(remote, tag):
     """Đếm data ĐÃ CÓ cho cỡ model này: Fine-tune/<tag>/N.txt (số cặp) và data/<tag>/N.txt (số ký tự)."""
     names = remote.list() if remote is not None else []
@@ -722,9 +864,16 @@ def count_existing(remote, tag):
     ft = [n for n in names if re.fullmatch(re.escape(fp) + r"\d+\.txt", n)]
     pre = [n for n in names if re.fullmatch(re.escape(dp) + r"\d+\.txt", n)]
     pairs, chars, pre_files = 0, 0, 0
+    global _TOOL_HAVE
+    _TOOL_HAVE = 0
     for n in ft:
         try:
-            pairs += sum(1 for ln in remote.read(n).decode("utf-8", "ignore").splitlines() if ln.strip().startswith(("{", "[")))
+            for ln in remote.read(n).decode("utf-8", "ignore").splitlines():
+                if ln.strip().startswith(("{", "[")):
+                    if "<tool>" in ln:
+                        _TOOL_HAVE += 1
+                    else:
+                        pairs += 1
         except Exception:  # noqa: BLE001
             pass
     for n in pre:
@@ -736,14 +885,15 @@ def count_existing(remote, tag):
 
 
 def auto(args, build_parser):
+    load_kaggle_secrets()
     token = env("HF_TOKEN")
     cpt = float(env("CHARS_PER_TOKEN", "3.0"))
-    kinds = [k.strip() for k in (env("DATA_KINDS", "finetune,pretrain")).split(",") if k.strip() in ("finetune", "pretrain")]
+    kinds = [k.strip() for k in (env("DATA_KINDS", "finetune,pretrain")).split(",") if k.strip() in ("finetune", "pretrain", "tools")]
     if not kinds:
-        sys.exit("DATA_KINDS phải chứa finetune và/hoặc pretrain")
+        sys.exit("DATA_KINDS phải chứa finetune, pretrain và/hoặc tools")
     repo_dir = env("DATA_REPO_DIR") or args.repo_dir
     remote = LocalRepo(repo_dir) if repo_dir else HFRepo(env("HF_REPO", args.repo), env("HF_REPO_TYPE", args.repo_type), token)
-    params, src = model_params(token)
+    params, src = model_params(token, remote)
     tag = env("MODEL_TAG") or size_tag(params)
     try:
         have_pairs, have_chars, pre_files = count_existing(remote, tag)
@@ -763,9 +913,23 @@ def auto(args, build_parser):
     if args.plan:
         return
     web = env("WEB_SEARCH", "both")
-    if web not in ("off", "wiki", "search", "both"):
-        sys.exit("WEB_SEARCH phải là off | wiki | search | both")
+    if web not in ("off", "wiki", "search", "tavily", "both"):
+        sys.exit("WEB_SEARCH phải là off | wiki | search | tavily | both")
     for kind in kinds:
+        if kind == "tools":
+            want = int(parse_count(env("TOOL_PAIRS"))) if env("TOOL_PAIRS") else max(500, plan["ft_target"] // 10)
+            need = max(0, want - _TOOL_HAVE)
+            if need <= 0:
+                print(f"\n✅ tools: đã có {_TOOL_HAVE} hội thoại dùng công cụ, đủ mục tiêu {want}.")
+                continue
+            print(f"\n▶ tools: tạo {need} hội thoại dạy dùng công cụ (calc/time/search, không gọi Gemini)...", flush=True)
+            import tool_data
+            convs = tool_data.make(need, random.randrange(10**6), tool_data.load_facts(env("TOOL_FACTS")), [], int(env("TOOL_RESULT_CHARS", "300")), {"calc": 3, "time": 1, "search": 3})
+            pub = Publisher(remote, args.out_dir, finetune_prefix(tag), upload=True)
+            per = plan["ft_per_file"]
+            for i in range(0, len(convs), per):
+                pub.publish("\n".join(json.dumps({"messages": [{"role": r, "content": t} for r, t in c]}, ensure_ascii=False) for c in convs[i:i + per]) + "\n")
+            continue
         files = min(cap, plan["ft_files"] if kind == "finetune" else plan["pre_files"])
         if files <= 0:
             print(f"\n✅ {kind}: đã đủ so với mục tiêu, không tạo thêm.")
@@ -780,10 +944,8 @@ def auto(args, build_parser):
             argv += ["--model", env("GEMINI_MODEL")]
         if env("WEB_TOPICS"):
             argv += ["--topics", env("WEB_TOPICS")]
-        if args.api_base != API_BASE:
-            argv += ["--api_base", args.api_base]
-        if args.wiki_base != WIKI_BASE:
-            argv += ["--wiki_base", args.wiki_base]
+        argv += ["--api_base", args.api_base]
+        argv += ["--wiki_base", args.wiki_base, "--tavily_base", args.tavily_base, "--max_minutes", str(max(0.0, (DEADLINE - time.time()) / 60)) if DEADLINE != float("inf") else "0"]
         run(build_parser().parse_args(argv))
 
 
@@ -792,9 +954,13 @@ def run(args):
     if args.mode == "check":
         check(args, LocalRepo(args.repo_dir) if args.repo_dir else (None if args.source_file else HFRepo(args.repo, args.repo_type)))
         return
-    keys = [k.strip() for k in re.split(r"[,\s]+", args.keys or os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY") or "") if k.strip()]
+    keys = collect_keys("GEMINI_API_KEY", args.keys)
     if not keys:
-        sys.exit("Thiếu key: đặt biến môi trường GEMINI_API_KEYS (nhiều key cách nhau dấu phẩy) hoặc dùng --keys")
+        load_kaggle_secrets()
+        keys = collect_keys("GEMINI_API_KEY", args.keys)
+    if not keys:
+        sys.exit("Thiếu key Gemini: đặt GEMINI_API_KEY1, GEMINI_API_KEY2, ... (hoặc GEMINI_API_KEYS cách nhau dấu phẩy) hoặc dùng --keys")
+    print(f"🔑 {len(keys)} key Gemini" + (f", {len(collect_keys('TAVILY_API_KEY', args.tavily_keys))} key Tavily" if collect_keys("TAVILY_API_KEY", args.tavily_keys) else ", không có key Tavily (dùng Gemini + Wikipedia)"), flush=True)
     gem = Gemini(keys, args.api_base, args.rpm)
     print(f"🔍 Quét model Gemini ({len(keys)} key)...", flush=True)
     names = gem.list_models()
@@ -821,11 +987,20 @@ def run(args):
     webber = None
     if args.web != "off":
         topics = [t.strip() for t in re.split(r"[;\n]", args.topics or "") if t.strip()] or (TOPICS if args.mode == "finetune" else PRETRAIN_TOPICS)
-        webber = WebPicker(args.web, Wiki(args.wiki_base), topics)
+        tkeys = collect_keys("TAVILY_API_KEY", args.tavily_keys)
+        tav = Tavily(tkeys, args.tavily_base) if tkeys else None
+        mode = args.web
+        if mode == "tavily" and tav is None:
+            print("  ⚠ --web tavily nhưng không có key Tavily: dùng các nguồn còn lại (Gemini + Wikipedia)", flush=True)
+            mode = "both"
+        webber = WebPicker(mode, Wiki(args.wiki_base), topics, tav)
         print(f"🌐 Tìm thông tin trên internet: nguồn '{args.web}' ({len(topics)} chủ đề, xen bài ngẫu nhiên)\n", flush=True)
 
     done_files, buf, fails = 0, [], 0
     while done_files < args.files:
+        if time.time() > DEADLINE:
+            print(f"⏱ Hết thời gian cho phép ({args.max_minutes:g} phút); phần đã tạo vẫn được lưu.", flush=True)
+            break
         doc, topic, use_search = (webber.pick(pool[0], gem) if webber else (None, None, False))
         shots = random.sample(pairs, min(6, len(pairs))) if pairs else []
         if args.mode == "finetune":
@@ -891,14 +1066,19 @@ def run(args):
 
 
 WIKI_BASE = "https://vi.wikipedia.org"
+DEADLINE = float("inf")   # đặt trong main() từ --max_minutes
 
 
 def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["finetune", "pretrain", "restyle", "check", "auto"])
-    ap.add_argument("--web", choices=["off", "wiki", "search", "both"], default="off", help="tìm thông tin trên internet: wiki = Wikipedia vi, search = Gemini tự tra Google, both = cả hai")
+    ap.add_argument("--web", choices=["off", "wiki", "search", "tavily", "both"], default="off",
+                    help="tìm thông tin trên internet: wiki = Wikipedia vi, search = Gemini tự tra Google, tavily = Tavily (cần key), both = tất cả nguồn đang dùng được")
+    ap.add_argument("--tavily_keys", default=None, help="key Tavily (hoặc biến TAVILY_API_KEY1, TAVILY_API_KEY2, ... / TAVILY_API_KEYS); không có key vẫn chạy bằng Gemini + Wikipedia")
+    ap.add_argument("--tavily_base", default=env("TAVILY_BASE", "https://api.tavily.com"))
+    ap.add_argument("--max_minutes", type=float, default=0, help="dừng tạo data sau ngần này phút (0 = không giới hạn); phần đã tạo vẫn được lưu")
     ap.add_argument("--topics", default=None, help="chủ đề riêng cho --web, cách nhau dấu ; (mặc định: danh sách có sẵn + bài ngẫu nhiên)")
-    ap.add_argument("--wiki_base", default=WIKI_BASE)
+    ap.add_argument("--wiki_base", default=env("WIKI_BASE", WIKI_BASE))
     ap.add_argument("--tag", default=None, help="cỡ model, vd 50M: file vào Fine-tune/<tag>/N.txt hoặc data/<tag>/N.txt (tự tạo thư mục). Bỏ trống = kiểu cũ")
     ap.add_argument("--plan", action="store_true", help="mode auto: chỉ in kế hoạch, không tạo gì")
     ap.add_argument("--source", default=None, help="restyle/check: tên file nguồn trên repo (vd yui_chat.jsonl)")
@@ -915,18 +1095,36 @@ def build_parser():
     ap.add_argument("--batch", type=int, default=20, help="số hội thoại mỗi lần gọi API (pretrain: batch//4 đoạn)")
     ap.add_argument("--rpm", type=float, default=8.0, help="số yêu cầu/phút cho MỖI key (gói miễn phí thường 5-15)")
     ap.add_argument("--temperature", type=float, default=1.0)
-    ap.add_argument("--api_base", default=API_BASE)
+    ap.add_argument("--api_base", default=env("GEMINI_API_BASE", API_BASE))
     ap.add_argument("--dry_models", action="store_true")
     ap.add_argument("--seed", type=int, default=int(time.time()) % 100000)
     return ap
 
 
 def main():
+    global DEADLINE
     args = build_parser().parse_args()
+    if args.max_minutes > 0:
+        DEADLINE = time.time() + args.max_minutes * 60
     if args.mode == "auto":
         random.seed(args.seed)
         return auto(args, build_parser)
     run(args)
+
+
+def make_for_training(params, tag, repo, repo_type="dataset", kinds="finetune,pretrain", minutes=30):
+    """Gọi từ train_lm.py: tạo (phần còn thiếu của) data cho model `params` tham số TRƯỚC khi train. Không có key Gemini thì bỏ qua, train vẫn chạy.
+    Chạy bằng tiến trình con (`make_data.py auto`) nên lỗi ở đây không làm hỏng lần train."""
+    load_kaggle_secrets()
+    if not collect_keys("GEMINI_API_KEY"):
+        print("[data] chưa có key Gemini (GEMINI_API_KEY1, GEMINI_API_KEY2, ...) nên bỏ qua bước tự tạo data; train bằng data có sẵn.", flush=True)
+        return False
+    e = dict(os.environ, MODEL_PARAMS=str(int(params)), MODEL_TAG=tag, HF_REPO=repo, HF_REPO_TYPE=repo_type, DATA_KINDS=kinds)
+    print(f"[data] tạo data cho model {fmt_n(params)} tham số (thư mục cỡ {tag}) trên {repo}, tối đa {minutes:g} phút...", flush=True)
+    rc = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "auto", "--max_minutes", str(minutes)], env=e).returncode
+    if rc:
+        print(f"[data] bước tạo data kết thúc với mã {rc}; vẫn tiếp tục train.", flush=True)
+    return rc == 0
 
 
 if __name__ == "__main__":

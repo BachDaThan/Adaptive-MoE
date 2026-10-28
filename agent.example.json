@@ -1,0 +1,16 @@
+{
+  "preset": "standard",
+  "scale": 1.0,
+  "workspace": "agent_workspace",
+  "audit": "agent_audit.jsonl",
+  "max_steps": 3,
+  "result_chars": 300,
+  "net": { "allow": ["vi.wikipedia.org", "api.tavily.com"] },
+  "limits": { "cpu_s": 5, "mem_mb": 256, "wall_s": 10, "out_kb": 16, "file_kb": 64, "workspace_mb": 16, "fetch_kb": 256 },
+  "python": { "min_sandbox": "strong" },
+  "confirm": [],
+  "mcp": {
+    "prompts": { "url": "https://prompts.chat/api/mcp" }
+  },
+  "bind": {}
+}

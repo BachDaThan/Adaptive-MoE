@@ -9,6 +9,7 @@ train_lm.py / train_sft.py tự tính cùng tag đó từ config.json rồi vào
 (gốc repo N.txt cho fine-tune, pretrain/N.txt cho data train) nên repo cũ vẫn chạy bình thường.
 Đặt biến MODEL_TAG (make_data.py) hoặc --size_tag (train_*.py) nếu muốn tự gọi tên thư mục, vd "50M-v2".
 """
+import math
 import re
 
 
@@ -56,3 +57,37 @@ def pick_prefix(names, kind, tag):
     if has_numbered(names, LEGACY[kind]):
         return LEGACY[kind]
     return new
+
+
+def parse_params(s):
+    """'50M' -> 50_000_000; '1.2B'; '300k'; '50000000'."""
+    m = re.fullmatch(r"\s*([\d.]+)\s*([kKmMbBgG]?)\s*", str(s))
+    if not m:
+        raise ValueError(f"không hiểu số tham số '{s}' (vd 50M, 1.2B)")
+    return int(float(m.group(1)) * {"": 1, "k": 1e3, "m": 1e6, "b": 1e9, "g": 1e9}[m.group(2).lower()])
+
+
+def arch_for_params(target, vocab=16000, heads=4):
+    """Chọn (d, layers, experts) cho Adaptive-MoE có số tham số gần `target` nhất, hình dáng cân đối (không quá cao/mỏng).
+    d chia hết cho 2*heads, experts <= 256 (giới hạn của yui.cpp). Cùng target luôn ra cùng kết quả. Vd 50M -> d=256, 6 lớp, 16 expert (đúng preset small)."""
+    best = None
+    for d in range(128, 2049, 64):
+        if d % (2 * heads):
+            continue
+        for layers in range(4, 41):
+            ratio = d / layers
+            if ratio < 20 or ratio > 90:            # tránh model quá sâu-mỏng hoặc quá nông-bè
+                continue
+            for experts in (8, 16, 32, 64, 128):
+                p = params_from_arch(vocab, d, layers, experts)
+                err = abs(p - target) / target
+                # phạt nhẹ hình dáng lệch khỏi preset (d/layers ~ 40, 16-32 expert) để chọn cấu hình "quen" khi sai số tương đương
+                score = err + 0.01 * abs(math.log(ratio / 42)) + 0.004 * abs(math.log2(experts / 24))
+                if best is None or score < best[0]:
+                    best = (score, d, layers, experts)
+    return best[1], best[2], best[3]
+
+
+def lr_for_params(n):
+    """Tốc độ học gợi ý, khớp các preset của train_lm.py (50M: 1e-3, ~250M: 6e-4, ~440M: 4e-4) và giảm dần khi model to."""
+    return float(min(1.5e-3, max(1.5e-4, 1e-3 * (5e7 / max(n, 1)) ** 0.3)))

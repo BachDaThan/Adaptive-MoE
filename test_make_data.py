@@ -9,8 +9,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from data_layout import size_tag, params_from_arch, pick_prefix  # noqa: E402
 
-COUNTER = {"n": 0, "search_calls": 0, "wiki_calls": 0}
-STATE = {"search_supported": True}
+COUNTER = {"n": 0, "search_calls": 0, "wiki_calls": 0, "tavily_ok": 0, "tavily_bad": 0}
+STATE = {"search_supported": True, "daily_block": None}
 VI = "Hà Nội là thủ đô của nước Việt Nam, nơi có nhiều hồ nước và những con phố cổ rất đặc sắc, thu hút đông đảo du khách mỗi năm. "
 
 
@@ -30,7 +30,7 @@ class Fake(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path.endswith("/models"):
-            return self._send(200, {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]}]})
+            return self._send(200, {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]}, {"name": "models/gemini-3.0-flash", "supportedGenerationMethods": ["generateContent"]}]})
         if u.path == "/w/api.php":   # Wikipedia giả
             q = parse_qs(u.query); COUNTER["wiki_calls"] += 1
             if q.get("list") == ["search"] or q.get("list") == ["random"]:
@@ -42,7 +42,16 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path.endswith("/search"):   # Tavily giả
+            if self.headers.get("Authorization") == "Bearer bad":
+                COUNTER["tavily_bad"] += 1
+                return self._send(401, {"detail": "invalid key"})
+            COUNTER["tavily_ok"] += 1
+            return self._send(200, {"results": [{"title": f"KQ {i}", "content": VI * 2} for i in range(3)]})
         prompt = body["contents"][0]["parts"][0]["text"]
+        if STATE["daily_block"] and STATE["daily_block"] in self.path:
+            COUNTER["blocked"] = COUNTER.get("blocked", 0) + 1
+            return self._send(429, {"error": {"message": "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 250, GenerateRequestsPerDayPerProjectPerModel-FreeTier"}})
         has_tool = "tools" in body
         if has_tool and not STATE["search_supported"]:
             return self._send(400, {"error": {"message": "google_search tool is not supported for this model"}})
@@ -131,3 +140,89 @@ def test_pick_prefix_prefers_size_folder_then_legacy():
     assert pick_prefix(["1.txt", "2.txt"], "finetune", "50M") == ""
     assert pick_prefix(["pretrain/1.txt"], "pretrain", "50M") == "pretrain/"
     assert pick_prefix([], "pretrain", "50M") == "data/50M/"
+
+
+def test_rank_models_high_to_low_aliases_last():
+    import make_data
+    names = "gemini-flash-latest gemini-pro-latest gemini-4-argon gemini-3.8-flash gemini-3.10-flash gemini-2.5-flash gemini-embedding-001".split()
+    assert make_data.rank_models(names) == ["gemini-4-argon", "gemini-3.10-flash", "gemini-3.8-flash", "gemini-2.5-flash", "gemini-flash-latest", "gemini-pro-latest"]
+
+
+def test_numbered_gemini_keys_and_tavily_rotation(server, tmp_path):
+    env = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", GEMINI_API_KEY2="g2", TAVILY_API_KEY1="bad", TAVILY_API_KEY2="good",
+               MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10", DATA_KINDS="finetune", GEMINI_RPM="600", WEB_SEARCH="tavily")
+    COUNTER.update(tavily_ok=0, tavily_bad=0)
+    out = run(["auto", "--api_base", server, "--wiki_base", server, "--tavily_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    assert "2 key Gemini, 2 key Tavily" in out, out
+    assert COUNTER["tavily_ok"] > 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
+
+
+def test_works_without_tavily_key(server, tmp_path):
+    env = dict(MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10", DATA_KINDS="finetune", GEMINI_RPM="600", WEB_SEARCH="tavily", TAVILY_API_KEY="", TAVILY_API_KEYS="")
+    out = run(["auto", "--api_base", server, "--wiki_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    assert "không có key Tavily" in out and "Fine-tune/50M/1.txt" in files(tmp_path / "repo")
+
+
+def test_auto_detects_params_from_config_json_in_repo(server, tmp_path):
+    repo = tmp_path / "repo"; repo.mkdir()
+    (repo / "config.json").write_text(json.dumps({"vocab": 16000, "d": 512, "layers": 8, "experts": 32}), encoding="utf-8")
+    out = run(["auto", "--plan"], dict(DATA_KINDS="finetune"), repo)
+    assert "tự nhận" in out and "Fine-tune/440M/" in out, out
+
+
+def test_make_for_training_creates_data_before_training(server, tmp_path):
+    """train_lm.py --size 50M gọi make_for_training: tạo Fine-tune/50M + data/50M rồi mới train."""
+    code = ("import make_data; ok = make_data.make_for_training(49_900_000, '50M', 'x/y', 'dataset', 'finetune,pretrain', 5); print('RESULT', ok)")
+    e = {**os.environ, "GEMINI_API_KEY1": "g1", "GEMINI_API_KEYS": "", "GEMINI_API_BASE": server, "WIKI_BASE": server, "TAVILY_BASE": server, "WEB_SEARCH": "wiki",
+         "DATA_REPO_DIR": str(tmp_path / "repo"), "FT_PAIRS": "10", "FT_PER_FILE": "10", "PRETRAIN_TOKENS": "3k", "PRETRAIN_PER_FILE": "5", "GEMINI_RPM": "600",
+         "HF_TOKEN": "x", "PYTHONPATH": HERE}
+    r = subprocess.run([sys.executable, "-c", code], env=e, capture_output=True, text=True, timeout=120, cwd=tmp_path)   # cwd riêng: thư mục data_out không dính lần chạy khác
+    assert "RESULT True" in r.stdout, r.stdout + r.stderr
+    fs = files(tmp_path / "repo")
+    assert "Fine-tune/50M/1.txt" in fs and any(f.startswith("data/50M/") for f in fs), fs
+
+
+def test_make_for_training_skips_without_keys(tmp_path):
+    code = "import make_data; print('RESULT', make_data.make_for_training(1, '50M', 'x/y'))"
+    e = {k: v for k, v in os.environ.items() if not k.startswith("GEMINI")}
+    r = subprocess.run([sys.executable, "-c", code], env={**e, "PYTHONPATH": HERE}, capture_output=True, text=True, timeout=60, cwd=HERE)
+    assert "RESULT False" in r.stdout and "bỏ qua" in r.stdout
+
+
+def test_arch_for_params():
+    from data_layout import arch_for_params, parse_params, lr_for_params
+    assert arch_for_params(parse_params("50M")) == (256, 6, 16)        # đúng preset small
+    assert arch_for_params(parse_params("250M")) == (384, 8, 32)       # đúng preset medium
+    for t in ("10M", "120M", "1B"):
+        d, l, e = arch_for_params(parse_params(t))
+        assert abs(params_from_arch(16000, d, l, e) / parse_params(t) - 1) < 0.05 and d % 8 == 0 and e <= 256
+    assert lr_for_params(50e6) == pytest.approx(1e-3)
+
+
+def test_daily_quota_of_top_model_switches_to_next_model_not_stall(server, tmp_path):
+    STATE["daily_block"] = "gemini-3.0-flash"   # model xếp đầu hết quota ngày trên mọi key
+    try:
+        COUNTER["blocked"] = 0
+        env = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", GEMINI_API_KEY2="g2", MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10", DATA_KINDS="finetune", GEMINI_RPM="600", WEB_SEARCH="off")
+        out = run(["auto", "--api_base", server, "--wiki_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    finally:
+        STATE["daily_block"] = None
+    assert COUNTER["blocked"] >= 1 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
+    assert "hết quota NGÀY" in out and "gemini-2.5-flash" in out
+
+
+def test_tavily_is_primary_source_and_search_only_fallback(server, tmp_path):
+    env = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", TAVILY_API_KEY1="good", MODEL_PARAMS="50M", FT_PAIRS="30", FT_PER_FILE="10", DATA_KINDS="finetune", GEMINI_RPM="600", WEB_SEARCH="both")
+    COUNTER.update(tavily_ok=0, search_calls=0)
+    run(["auto", "--api_base", server, "--wiki_base", server, "--tavily_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    assert COUNTER["tavily_ok"] > 0 and COUNTER["search_calls"] == 0   # có Tavily thì không tốn quota google_search của Gemini
+
+
+def test_auto_tools_kind_is_free_and_opt_in(server, tmp_path):
+    env = dict(MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10", TOOL_PAIRS="25", DATA_KINDS="tools", GEMINI_API_KEYS="", GEMINI_API_KEY1="")
+    calls_before = COUNTER["n"]
+    out = run(["auto", "--api_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    fs = [f for f in files(tmp_path / "repo") if f.startswith("Fine-tune/50M/")]
+    assert fs == ["Fine-tune/50M/1.txt", "Fine-tune/50M/2.txt", "Fine-tune/50M/3.txt"] and COUNTER["n"] == calls_before, out   # không gọi Gemini
+    again = run(["auto", "--api_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    assert "đủ mục tiêu" in again and len(files(tmp_path / "repo")) == 3
