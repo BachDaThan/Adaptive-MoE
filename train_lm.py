@@ -329,7 +329,7 @@ def main(args):
     n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
     heads = cfg0.get("heads") or (4 if cfg0 else (args.heads or heads_for(d)))   # checkpoint cũ không ghi heads = 4; model mới tự chọn để mỗi head <= 128 chiều
     custom = args.size not in PRESETS
-    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key Gemini; không có thì bỏ qua)
+    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key của ít nhất 1 provider LLM: Cohere/OpenRouter/Mistral/Gemini; không có thì bỏ qua)
         if os.path.exists(os.path.join(args.out, "data.pt")):
             print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
         else:
@@ -483,9 +483,9 @@ if __name__ == "__main__":
     ap.add_argument("--vocab", type=int, default=16000)
     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
     ap.add_argument("--size", default="small", help="small | medium | large, hoặc số tham số muốn có, vd 50M, 120M, 1.2B (tự chọn d/lớp/expert và tự tạo data hợp cỡ model)")
-    ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key Gemini")
+    ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key LLM (Cohere/OpenRouter/Mistral/Gemini)")
     ap.add_argument("--make_data_kinds", default="finetune,pretrain", help="loại data tạo trước khi train")
-    ap.add_argument("--make_data_minutes", default="auto", help="tối đa bao nhiêu phút cho bước tạo data; auto = tự tính theo số tham số model và số key Gemini")
+    ap.add_argument("--make_data_minutes", default="auto", help="tối đa bao nhiêu phút cho bước tạo data; auto = tự tính theo số tham số model và số key LLM")
     ap.add_argument("--d", type=int, default=0)
     ap.add_argument("--layers", type=int, default=0)
     ap.add_argument("--experts", type=int, default=0)

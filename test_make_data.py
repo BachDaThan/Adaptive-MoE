@@ -10,13 +10,24 @@ sys.path.insert(0, HERE)
 from data_layout import size_tag, params_from_arch, pick_prefix  # noqa: E402
 
 COUNTER = {"n": 0, "search_calls": 0, "wiki_calls": 0, "tavily_ok": 0, "tavily_bad": 0}
-STATE = {"search_supported": True, "daily_block": None, "overload": None}
+STATE = {"search_supported": True, "daily_block": None, "overload": None, "fail": {}}   # fail: {"cohere": (429, {...}), ...} ép provider/nguồn trả lỗi
 VI = "Hà Nội là thủ đô của nước Việt Nam, nơi có nhiều hồ nước và những con phố cổ rất đặc sắc, thu hút đông đảo du khách mỗi năm. "
 
 
 def vi_paragraph(i):
     return (f"Đoạn số {i} kể về một buổi sáng yên bình ở thành phố ven sông, nơi người dân dậy sớm để chuẩn bị bữa điểm tâm quen thuộc. " * 3 +
             f"Mỗi người một việc, tiếng cười nói rộn ràng khắp ngõ nhỏ và mùi cà phê thơm lừng lan tỏa trong không khí buổi mai {i}.")
+
+
+def llm_text(prompt, n):
+    """Nội dung 'mô hình' giả: hội thoại JSON / đoạn văn pretrain / câu trả lời restyle."""
+    if '"question"' in prompt and "old_answer" in prompt:   # restyle
+        items = [json.loads(ln) for ln in prompt.split("Các câu:\n")[1].split("\n\nTrả về")[0].splitlines() if ln.strip().startswith("{")]
+        return json.dumps([{"i": it["i"], "answer": f"Yui đáp lại {it['i']} nè ùi."} for it in items], ensure_ascii=False)
+    if "hội thoại" in prompt:
+        convs = [{"messages": [{"role": "user", "content": f"Câu hỏi số {n}-{k} về chủ đề này là gì vậy?"}, {"role": "assistant", "content": f"Yui trả lời ngắn nè {n}-{k} ùi."}]} for k in range(10)]
+        return json.dumps(convs, ensure_ascii=False)
+    return "\n===\n".join(vi_paragraph(n * 100 + k) for k in range(5))
 
 
 class Fake(BaseHTTPRequestHandler):
@@ -29,6 +40,15 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/cohere/v2/models":
+            return self._send(200, {"models": [{"name": "command-a-03-2025"}, {"name": "command-r-08-2024"}]})
+        if u.path == "/or/models":
+            free = {"prompt": "0", "completion": "0"}
+            return self._send(200, {"data": [
+                {"id": "google/gemma-3-27b-it:free", "pricing": free, "context_length": 8000, "architecture": {"output_modalities": ["text"]}},
+                {"id": "meta-llama/llama-3.3-70b-instruct:free", "pricing": free, "context_length": 131072, "architecture": {"output_modalities": ["text"]}},
+                {"id": "vendor/paid-model", "pricing": {"prompt": "0.001", "completion": "0.002"}, "architecture": {"output_modalities": ["text"]}},
+                {"id": "vendor/image-gen:free", "pricing": free, "architecture": {"output_modalities": ["text", "image"]}}]})
         if u.path.endswith("/models"):
             return self._send(200, {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]}, {"name": "models/gemini-3.0-flash", "supportedGenerationMethods": ["generateContent"]}]})
         if u.path == "/w/api.php":   # Wikipedia giả
@@ -42,6 +62,28 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        for pre, name in (("/cohere/", "cohere"), ("/or/", "openrouter"), ("/mistral/", "mistral")):   # LLM giả của 3 provider mới
+            if self.path.startswith(pre):
+                COUNTER[name] = COUNTER.get(name, 0) + 1
+                if name in STATE["fail"]:
+                    return self._send(*STATE["fail"][name])
+                prompt = body["messages"][-1]["content"]
+                COUNTER["n"] += 1
+                text = llm_text(prompt, COUNTER["n"])
+                if name == "cohere":   # Cohere giả bọc ```json để thử json_slice
+                    text = "Đây nè:\n```json\n" + text + "\n```" if text.lstrip().startswith("[") else text
+                    return self._send(200, {"message": {"content": [{"type": "text", "text": text}]}})
+                return self._send(200, {"choices": [{"message": {"content": text}}]})
+        for pre, name in (("/exa/", "exa"), ("/linkup/", "linkup"), ("/fire/", "firecrawl")):   # nguồn cào web giả
+            if self.path.startswith(pre):
+                COUNTER[name] = COUNTER.get(name, 0) + 1
+                if name in STATE["fail"]:
+                    return self._send(*STATE["fail"][name])
+                if name == "exa":
+                    return self._send(200, {"results": [{"title": f"Exa {i}", "text": VI * 2} for i in range(3)]})
+                if name == "linkup":
+                    return self._send(200, {"results": [{"type": "text", "name": f"Linkup {i}", "url": "u", "content": VI * 2} for i in range(3)]})
+                return self._send(200, {"success": True, "data": [{"title": f"FC {i}", "markdown": "# Tiêu đề\n![ảnh](http://x/y.png)\n[liên kết](http://x) " + VI * 2} for i in range(3)]})
         if self.path.endswith("/search"):   # Tavily giả
             if self.headers.get("Authorization") == "Bearer bad":
                 COUNTER["tavily_bad"] += 1
@@ -59,14 +101,10 @@ class Fake(BaseHTTPRequestHandler):
             return self._send(400, {"error": {"message": "google_search tool is not supported for this model"}})
         if has_tool:
             COUNTER["search_calls"] += 1
-        COUNTER["n"] += 1; n = COUNTER["n"]
-        if "hội thoại" in prompt:
-            convs = [{"messages": [{"role": "user", "content": f"Câu hỏi số {n}-{k} về chủ đề này là gì vậy?"}, {"role": "assistant", "content": f"Yui trả lời ngắn nè {n}-{k} ùi."}]} for k in range(10)]
-            text = json.dumps(convs, ensure_ascii=False)
-            if has_tool:
-                text = "Đây là kết quả:\n```json\n" + text + "\n```"
-        else:
-            text = "\n===\n".join(vi_paragraph(n * 100 + k) for k in range(5))
+        COUNTER["n"] += 1; n = COUNTER["n"]; COUNTER["gemini"] = COUNTER.get("gemini", 0) + 1
+        text = llm_text(prompt, n)
+        if has_tool and text.lstrip().startswith("["):
+            text = "Đây là kết quả:\n```json\n" + text + "\n```"
         self._send(200, {"candidates": [{"content": {"parts": [{"text": text}]}}]})
 
 
@@ -257,3 +295,163 @@ def test_estimate_minutes_scales_with_model_size():
     import make_data
     a, b, c = (make_data.estimate_minutes(make_data.parse_count(x), 9) for x in ("50M", "1B", "10B"))
     assert a <= b <= c and make_data.estimate_minutes(1e9, 1) >= make_data.estimate_minutes(1e9, 9)
+
+
+# ============================ chuỗi LLM: Cohere -> OpenRouter -> Mistral -> Gemini ============================
+def chain_env(server, **extra):
+    base = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", COHERE_API_KEY1="c1", OPENROUTER_API_KEY1="o1", MISTRAL_API_KEY1="m1",
+                COHERE_BASE=server + "/cohere", OPENROUTER_BASE=server + "/or", MISTRAL_BASE=server + "/mistral",
+                COHERE_RPM="600", OPENROUTER_RPM="600", MISTRAL_RPM="600", GEMINI_RPM="600", MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10",
+                DATA_KINDS="finetune", WEB_SEARCH="off", LLM_ORDER="", SCRAPE_ORDER="")
+    base.update(extra)
+    return base
+
+
+def reset(**kw):
+    for k in ("cohere", "openrouter", "mistral", "gemini", "exa", "linkup", "firecrawl", "tavily_ok"):
+        COUNTER[k] = 0
+    STATE["fail"] = dict(kw)
+
+
+def auto_run(server, tmp_path, env, extra=()):
+    return run(["auto", "--api_base", server, "--wiki_base", server, "--tavily_base", server, "--out_dir", str(tmp_path / "o"), *extra], env, tmp_path / "repo")
+
+
+def test_cohere_is_first_and_nothing_else_is_called(server, tmp_path):
+    reset()
+    out = auto_run(server, tmp_path, chain_env(server, DATA_KINDS="finetune,pretrain", PRETRAIN_TOKENS="3k", PRETRAIN_PER_FILE="5"))
+    fs = files(tmp_path / "repo")
+    assert COUNTER["cohere"] > 0 and COUNTER["openrouter"] == 0 and COUNTER["mistral"] == 0 and COUNTER["gemini"] == 0, out
+    assert "Fine-tune/50M/1.txt" in fs and any(f.startswith("data/50M/") for f in fs), (out, fs)   # cả fine-tune lẫn data train đều qua chuỗi mới
+    assert "Cohere -> OpenRouter -> Mistral -> Gemini" in out and "1 key Cohere, 1 key OpenRouter, 1 key Mistral, 1 key Gemini" in out, out
+
+
+def test_model_ranking_dry_run_lists_every_provider_in_order(server, tmp_path):
+    reset()
+    out = run(["finetune", "--dry_models", "--api_base", server], chain_env(server), tmp_path / "repo")
+    line = next(ln for ln in out.splitlines() if "Thứ hạng" in ln)
+    order = [line.index(x) for x in ("cohere::command-a-03-2025", "openrouter::meta-llama/llama-3.3-70b-instruct:free", "mistral::mistral-large-latest", "gemini::gemini-3.0-flash")]
+    assert order == sorted(order), line
+    assert "command-r-plus" not in line and "paid-model" not in line and "image-gen" not in line, line   # model không có trong danh sách / không miễn phí / sinh ảnh bị loại
+    assert line.index("llama-3.3-70b") < line.index("gemma-3-27b"), line                                   # họ model ưa thích đứng trước dù context ngắn hơn
+
+
+def test_falls_through_every_provider_down_to_gemini(server, tmp_path):
+    reset(cohere=(429, {"message": "You are using a Trial key, which is limited to 1000 API calls / month."}),
+          openrouter=(429, {"error": {"message": "Rate limit exceeded: free-models-per-day"}}),
+          mistral=(401, {"message": "Unauthorized"}))
+    out = auto_run(server, tmp_path, chain_env(server))
+    assert COUNTER["cohere"] == 1 and COUNTER["openrouter"] == 1 and COUNTER["mistral"] == 1 and COUNTER["gemini"] > 0, out   # mỗi provider hỏng chỉ bị thử đúng 1 lần rồi bỏ cả provider
+    assert "Fine-tune/50M/1.txt" in files(tmp_path / "repo") and "hết hạn mức dài hạn" in out, out
+
+
+def test_rate_limited_provider_spills_over_instead_of_waiting(server, tmp_path):
+    reset(cohere=(429, {"message": "Too many requests, please wait before trying again."}))
+    out = auto_run(server, tmp_path, chain_env(server))
+    assert COUNTER["openrouter"] > 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
+    assert "⏳ cohere" not in out, out   # không đứng chờ 30s rồi mới sang provider kế
+
+
+def test_llm_order_env_reorders_and_unknown_names_are_ignored(server, tmp_path):
+    reset()
+    out = auto_run(server, tmp_path, chain_env(server, LLM_ORDER="gemini,bogus,cohere"))
+    assert COUNTER["gemini"] > 0 and COUNTER["cohere"] == 0 and "Gemini -> Cohere" in out and "bogus" in out, out
+
+
+def test_works_with_only_cohere_key_and_without_gemini(server, tmp_path):
+    reset()
+    out = auto_run(server, tmp_path, chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1=""))
+    assert COUNTER["cohere"] > 0 and COUNTER["gemini"] == 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
+
+
+def test_no_llm_key_at_all_exits_with_clear_message(server, tmp_path):
+    e = {**os.environ, **chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1="", COHERE_API_KEY1=""), "HF_TOKEN": "x", "DATA_REPO_DIR": str(tmp_path / "repo")}
+    r = subprocess.run([sys.executable, os.path.join(HERE, "make_data.py"), "auto", "--out_dir", str(tmp_path / "o")], env=e, capture_output=True, text=True, timeout=60)
+    assert r.returncode != 0 and "COHERE_API_KEY1" in (r.stdout + r.stderr)
+
+
+def test_restyle_goes_through_the_chain(server, tmp_path):
+    reset()
+    src = tmp_path / "src.jsonl"
+    src.write_text("\n".join(json.dumps({"messages": [{"role": "user", "content": f"Câu hỏi cũ số {i} là gì thế nhỉ"}, {"role": "assistant", "content": "Dạ em là siêu trợ lý."}]}, ensure_ascii=False) for i in range(25)), encoding="utf-8")
+    out = run(["restyle", "--source_file", str(src), "--files", "1", "--per_file", "10", "--batch", "12", "--tag", "50M", "--api_base", server, "--out_dir", str(tmp_path / "o"),
+               "--repo_dir", str(tmp_path / "repo")], chain_env(server), tmp_path / "repo")
+    assert COUNTER["cohere"] >= 1 and COUNTER["gemini"] == 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
+    assert "Yui đáp lại" in open(tmp_path / "repo" / "Fine-tune" / "50M" / "1.txt", encoding="utf-8").read()
+
+
+def test_make_for_training_runs_with_only_a_non_gemini_key(server, tmp_path):
+    reset()
+    code = "import make_data; print('RESULT', make_data.make_for_training(49_900_000, '50M', 'x/y', 'dataset', 'finetune', 5))"
+    e = {**os.environ, **chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1=""), "DATA_REPO_DIR": str(tmp_path / "repo"), "HF_TOKEN": "x", "PYTHONPATH": HERE}
+    r = subprocess.run([sys.executable, "-c", code], env=e, capture_output=True, text=True, timeout=120, cwd=tmp_path)
+    assert "RESULT True" in r.stdout and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), r.stdout + r.stderr
+
+
+# ============================ chuỗi cào web: Tavily -> Exa -> Linkup -> Firecrawl ============================
+def scrape_env(server, **extra):
+    e = dict(WEB_SEARCH="tavily", TAVILY_API_KEY1="bad", EXA_API_KEY1="e1", LINKUP_API_KEY1="l1", FIRECRAWL_API_KEY1="f1",
+             EXA_BASE=server + "/exa", LINKUP_BASE=server + "/linkup", FIRECRAWL_BASE=server + "/fire",
+             GEMINI_API_KEY1="g1", COHERE_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1="")
+    e.update(extra)
+    return chain_env(server, **e)
+
+
+def test_scrape_chain_tavily_dead_falls_to_exa(server, tmp_path):
+    reset()
+    COUNTER["tavily_bad"] = 0
+    out = auto_run(server, tmp_path, scrape_env(server))
+    assert COUNTER["tavily_bad"] >= 1 and COUNTER["exa"] >= 1 and COUNTER["linkup"] == 0 and COUNTER["firecrawl"] == 0, out
+    assert "nguồn: Exa" in out and "1 key Tavily, 1 key Exa, 1 key Linkup, 1 key Firecrawl" in out, out
+
+
+def test_scrape_chain_reaches_linkup_then_firecrawl(server, tmp_path):
+    reset(exa=(402, {"error": "no credits"}))
+    out = auto_run(server, tmp_path, scrape_env(server))
+    assert COUNTER["exa"] >= 1 and COUNTER["linkup"] >= 1 and COUNTER["firecrawl"] == 0 and "nguồn: Linkup" in out, out
+    reset(exa=(402, {"error": "no credits"}), linkup=(401, {"error": "bad key"}))
+    out2 = auto_run(server, tmp_path / "b", scrape_env(server))
+    assert COUNTER["firecrawl"] >= 1 and "nguồn: Firecrawl" in out2, out2
+    assert "Fine-tune/50M/1.txt" in files(tmp_path / "b" / "repo")
+
+
+def test_scrape_order_env_and_all_sources_down_falls_back_to_wikipedia(server, tmp_path):
+    reset()
+    out = auto_run(server, tmp_path, scrape_env(server, SCRAPE_ORDER="firecrawl,linkup"))
+    assert COUNTER["firecrawl"] >= 1 and COUNTER["exa"] == 0 and "nguồn: Firecrawl" in out, out
+    reset(exa=(402, {}), linkup=(401, {}), firecrawl=(402, {}))
+    out2 = auto_run(server, tmp_path / "c", scrape_env(server, WEB_SEARCH="both"))
+    assert "Wikipedia" in out2 and "Fine-tune/50M/1.txt" in files(tmp_path / "c" / "repo"), out2
+
+
+def test_firecrawl_markdown_is_cleaned_and_v2_shape_is_read():
+    import providers
+    fc = providers.Firecrawl(["k"])
+    items = fc._parse(json.dumps({"data": {"web": [{"title": "T", "markdown": "# Tiêu đề\n![a](http://x/y.png)\n[liên kết](http://x) nội dung **đậm**"}]}}))
+    assert items == [("T", "Tiêu đề liên kết nội dung đậm")]
+
+
+# ============================ router (không cần mạng) ============================
+def test_router_drops_whole_provider_on_quota_and_model_on_repeated_empty():
+    import providers as P
+
+    class Dummy(P.ChatProvider):
+        name = "dummy"
+        def __init__(self, behaviour):
+            super().__init__(["k"], "http://x", ["m1", "m2"]); self.behaviour = behaviour
+        def generate(self, model, system, prompt, temperature=1.0, max_tokens=4096):
+            raise self.behaviour
+
+    r = P.LLMRouter(["dummy"], {"dummy": Dummy(P.QuotaOut("hết"))})
+    with pytest.raises(P.ModelGone):
+        r.generate("dummy::m1", "s", "p")
+    assert "dummy" in r.dead
+    with pytest.raises(P.ModelGone):      # provider đã chết: loại ngay, không gọi lại
+        r.generate("dummy::m2", "s", "p")
+    r2 = P.LLMRouter(["dummy"], {"dummy": Dummy(P.Empty("rỗng"))})
+    for _ in range(2):
+        with pytest.raises(P.Empty):
+            r2.generate("dummy::m1", "s", "p")
+    with pytest.raises(P.ModelGone):      # lần thứ 3 rỗng liên tiếp -> bỏ model
+        r2.generate("dummy::m1", "s", "p")
+    assert not r2.can_search("dummy::m1")  # google_search chỉ có ở Gemini

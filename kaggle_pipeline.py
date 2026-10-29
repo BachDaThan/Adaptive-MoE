@@ -5,7 +5,7 @@ kaggle_pipeline.py - chạy trọn quy trình trên Kaggle: tạo data -> pretra
     STAGES=data python kaggle_pipeline.py         # CHỈ tạo data: chạy ở phiên CPU/máy khác để KHÔNG đốt giờ GPU của Kaggle (data chỉ cần mạng + CPU)
     STAGES=pretrain,sft,export ...                # phiên GPU: chỉ train (data đã có trên repo)
 
-Secrets cần có (Kaggle > Add-ons > Secrets): HF_TOKEN, GEMINI_API_KEY1..N (bao nhiêu cũng được), TAVILY_API_KEY1..N (tuỳ chọn).
+Secrets cần có (Kaggle > Add-ons > Secrets): HF_TOKEN + key LLM: COHERE_API_KEY1..N, OPENROUTER_API_KEY1..N, MISTRAL_API_KEY1..N, GEMINI_API_KEY1..N (bao nhiêu cũng được, có ít nhất 1 loại;\nthứ tự dùng Cohere -> OpenRouter -> Mistral -> Gemini). Cào web (tuỳ chọn): TAVILY_API_KEY1..N, EXA_API_KEY1..N, LINKUP_API_KEY1..N, FIRECRAWL_API_KEY1..N (thứ tự Tavily -> Exa -> Linkup -> Firecrawl).
 Tên model: tự đặt yui-<cỡ>-v<N> (không trùng repo/tài khoản HF) và lưu ở <MODEL_REPO>/models/<tên>/; đặt NAME = "tên-của-bạn" để tự chọn.
 Chạy lại cùng lệnh trên phiên mới = TIẾP TỤC bản mới nhất; NEW_MODEL=True để tạo bản mới.
 """
@@ -29,19 +29,10 @@ DATA_KINDS = os.environ.get("DATA_KINDS", "finetune,pretrain")        # thêm ,t
 # ========================================================
 
 os.environ["HF_REPO"], os.environ["MODEL_PARAMS"], os.environ["DATA_KINDS"] = DATA_REPO, PARAMS, DATA_KINDS
-try:
-    from kaggle_secrets import UserSecretsClient
-    sec = UserSecretsClient()
-    for k in ["HF_TOKEN"] + [f"{b}{i}" for b in ("GEMINI_API_KEY", "TAVILY_API_KEY") for i in range(1, 31)]:
-        try:
-            v = sec.get_secret(k)
-            if v:
-                os.environ[k] = v
-        except Exception:  # noqa: BLE001
-            pass
-except ImportError:
-    pass   # ngoài Kaggle: tự export biến môi trường
-print("Key Gemini:", sum(k.startswith("GEMINI_API_KEY") for k in os.environ), "| Tavily:", sum(k.startswith("TAVILY_API_KEY") for k in os.environ))
+import make_data
+make_data.load_kaggle_secrets()   # trên Kaggle: tự lấy HF_TOKEN + key của mọi provider; ngoài Kaggle: tự export biến môi trường
+print("Key LLM:", ", ".join(f"{lbl} {len(make_data.collect_keys(make_data.LLM_KEY_NAMES[n]))}" for n, lbl in make_data.LLM_LABELS.items()),
+      "| Cào web:", ", ".join(f"{n.capitalize()} {len(make_data.collect_keys(n.upper() + '_API_KEY'))}" for n in ("tavily", "exa", "linkup", "firecrawl")))
 
 
 def sh(cmd, retries=0, wait=30):

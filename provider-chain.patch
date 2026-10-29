@@ -1,0 +1,1285 @@
+diff --git a/README.md b/README.md
+index abeb704..dfe8729 100644
+--- a/README.md
++++ b/README.md
+@@ -544,6 +544,8 @@ Fine-tune/50M/1.txt, 2.txt, ...   hội thoại fine-tune, mỗi dòng {"message
+ Biến: `HF_TOKEN`, `GEMINI_API_KEYS`, `HF_REPO`, `MODEL_PARAMS` (vd 50M) hoặc `MODEL_REPO` hoặc `MODEL_D/LAYERS/EXPERTS/VOCAB`, `FT_PAIRS` (tổng số cặp fine-tune; bỏ trống = params/2000), `PRETRAIN_TOKENS` (tổng token data train; bỏ trống = params×0,2; data train KHÔNG cần đặt "cặp"), `DATA_KINDS`, `WEB_SEARCH` (`off|wiki|search|both`), `WEB_TOPICS`, `MAX_FILES_PER_RUN`. Chi tiết ở đầu file `make_data.py`.
+ Nguồn internet: Wikipedia tiếng Việt (không cần key) và công cụ `google_search` của Gemini; data train chỉ được viết lại, không chép nguyên văn. Gemini nào không có `google_search` thì tự chuyển sang Wikipedia.
+ 
++Nhiều nhà cung cấp LLM (`providers.py`): thứ tự mặc định **Cohere → OpenRouter → Mistral → Gemini** (Gemini hay quá tải nên đứng cuối). Đặt key bằng `COHERE_API_KEY1..`, `OPENROUTER_API_KEY1..`, `MISTRAL_API_KEY1..`, `GEMINI_API_KEY1..` (bao nhiêu cũng được); provider không có key tự bị bỏ qua, provider nào lỗi/hết quota/key chết thì tự rơi xuống provider sau, và provider phải chờ rate-limit lâu (> `SPILL_SECONDS`, mặc định 15s) thì nhường provider kế thay vì đứng đợi. Đổi thứ tự bằng `LLM_ORDER="cohere,openrouter,mistral,gemini"`; ép model bằng `COHERE_MODELS` / `OPENROUTER_MODELS` / `MISTRAL_MODELS` / `GEMINI_MODEL` (OpenRouter mặc định tự quét model `:free`). Cào web (`WEB_SEARCH=tavily|both`): **Tavily → Exa → Linkup → Firecrawl** (`TAVILY_API_KEY1..`, `EXA_API_KEY1..`, `LINKUP_API_KEY1..`, `FIRECRAWL_API_KEY1..`; đổi thứ tự bằng `SCRAPE_ORDER`). `google_search` vẫn chỉ có ở Gemini nên chỉ là dự phòng cuối.
++
+ **yui.cpp (engine C++)**: kernel int8 AVX2 / NEON / NEON+dotprod chọn lúc chạy, nhóm luồng riêng (`--threads N`, `--bench_threads`, `YUI_THREADS`), nạp bằng mmap, lấy mẫu top-k không sắp xếp cả từ vựng. `--exact` / `YUI_EXACT=1` tính bằng float như PyTorch để đối chiếu. `make test` chạy thử kernel; `make portable` build một file chạy mọi CPU.
+ 
+ **Cập nhật: .yui v2 (4-bit), key Gemini/Tavily, `--size 50M`**
+diff --git a/README.vi.md b/README.vi.md
+index a629914..136572c 100644
+--- a/README.vi.md
++++ b/README.vi.md
+@@ -544,6 +544,8 @@ Fine-tune/50M/1.txt, 2.txt, ...   hội thoại fine-tune, mỗi dòng {"message
+ Biến: `HF_TOKEN`, `GEMINI_API_KEYS`, `HF_REPO`, `MODEL_PARAMS` (vd 50M) hoặc `MODEL_REPO` hoặc `MODEL_D/LAYERS/EXPERTS/VOCAB`, `FT_PAIRS` (tổng số cặp fine-tune; bỏ trống = params/2000), `PRETRAIN_TOKENS` (tổng token data train; bỏ trống = params×0,2; data train KHÔNG cần đặt "cặp"), `DATA_KINDS`, `WEB_SEARCH` (`off|wiki|search|both`), `WEB_TOPICS`, `MAX_FILES_PER_RUN`. Chi tiết ở đầu file `make_data.py`.
+ Nguồn internet: Wikipedia tiếng Việt (không cần key) và công cụ `google_search` của Gemini; data train chỉ được viết lại, không chép nguyên văn. Gemini nào không có `google_search` thì tự chuyển sang Wikipedia.
+ 
++Nhiều nhà cung cấp LLM (`providers.py`): thứ tự mặc định **Cohere → OpenRouter → Mistral → Gemini** (Gemini hay quá tải nên đứng cuối). Đặt key bằng `COHERE_API_KEY1..`, `OPENROUTER_API_KEY1..`, `MISTRAL_API_KEY1..`, `GEMINI_API_KEY1..` (bao nhiêu cũng được); provider không có key tự bị bỏ qua, provider nào lỗi/hết quota/key chết thì tự rơi xuống provider sau, và provider phải chờ rate-limit lâu (> `SPILL_SECONDS`, mặc định 15s) thì nhường provider kế thay vì đứng đợi. Đổi thứ tự bằng `LLM_ORDER="cohere,openrouter,mistral,gemini"`; ép model bằng `COHERE_MODELS` / `OPENROUTER_MODELS` / `MISTRAL_MODELS` / `GEMINI_MODEL` (OpenRouter mặc định tự quét model `:free`). Cào web (`WEB_SEARCH=tavily|both`): **Tavily → Exa → Linkup → Firecrawl** (`TAVILY_API_KEY1..`, `EXA_API_KEY1..`, `LINKUP_API_KEY1..`, `FIRECRAWL_API_KEY1..`; đổi thứ tự bằng `SCRAPE_ORDER`). `google_search` vẫn chỉ có ở Gemini nên chỉ là dự phòng cuối.
++
+ **yui.cpp (engine C++)**: kernel int8 AVX2 / NEON / NEON+dotprod chọn lúc chạy, nhóm luồng riêng (`--threads N`, `--bench_threads`, `YUI_THREADS`), nạp bằng mmap, lấy mẫu top-k không sắp xếp cả từ vựng. `--exact` / `YUI_EXACT=1` tính bằng float như PyTorch để đối chiếu. `make test` chạy thử kernel; `make portable` build một file chạy mọi CPU.
+ 
+ **Cập nhật: .yui v2 (4-bit), key Gemini/Tavily, `--size 50M`**
+diff --git a/kaggle_pipeline.py b/kaggle_pipeline.py
+index 56e7252..1769f2e 100644
+--- a/kaggle_pipeline.py
++++ b/kaggle_pipeline.py
+@@ -5,7 +5,7 @@ kaggle_pipeline.py - chạy trọn quy trình trên Kaggle: tạo data -> pretra
+     STAGES=data python kaggle_pipeline.py         # CHỈ tạo data: chạy ở phiên CPU/máy khác để KHÔNG đốt giờ GPU của Kaggle (data chỉ cần mạng + CPU)
+     STAGES=pretrain,sft,export ...                # phiên GPU: chỉ train (data đã có trên repo)
+ 
+-Secrets cần có (Kaggle > Add-ons > Secrets): HF_TOKEN, GEMINI_API_KEY1..N (bao nhiêu cũng được), TAVILY_API_KEY1..N (tuỳ chọn).
++Secrets cần có (Kaggle > Add-ons > Secrets): HF_TOKEN + key LLM: COHERE_API_KEY1..N, OPENROUTER_API_KEY1..N, MISTRAL_API_KEY1..N, GEMINI_API_KEY1..N (bao nhiêu cũng được, có ít nhất 1 loại;\nthứ tự dùng Cohere -> OpenRouter -> Mistral -> Gemini). Cào web (tuỳ chọn): TAVILY_API_KEY1..N, EXA_API_KEY1..N, LINKUP_API_KEY1..N, FIRECRAWL_API_KEY1..N (thứ tự Tavily -> Exa -> Linkup -> Firecrawl).
+ Tên model: tự đặt yui-<cỡ>-v<N> (không trùng repo/tài khoản HF) và lưu ở <MODEL_REPO>/models/<tên>/; đặt NAME = "tên-của-bạn" để tự chọn.
+ Chạy lại cùng lệnh trên phiên mới = TIẾP TỤC bản mới nhất; NEW_MODEL=True để tạo bản mới.
+ """
+@@ -29,19 +29,10 @@ DATA_KINDS = os.environ.get("DATA_KINDS", "finetune,pretrain")        # thêm ,t
+ # ========================================================
+ 
+ os.environ["HF_REPO"], os.environ["MODEL_PARAMS"], os.environ["DATA_KINDS"] = DATA_REPO, PARAMS, DATA_KINDS
+-try:
+-    from kaggle_secrets import UserSecretsClient
+-    sec = UserSecretsClient()
+-    for k in ["HF_TOKEN"] + [f"{b}{i}" for b in ("GEMINI_API_KEY", "TAVILY_API_KEY") for i in range(1, 31)]:
+-        try:
+-            v = sec.get_secret(k)
+-            if v:
+-                os.environ[k] = v
+-        except Exception:  # noqa: BLE001
+-            pass
+-except ImportError:
+-    pass   # ngoài Kaggle: tự export biến môi trường
+-print("Key Gemini:", sum(k.startswith("GEMINI_API_KEY") for k in os.environ), "| Tavily:", sum(k.startswith("TAVILY_API_KEY") for k in os.environ))
++import make_data
++make_data.load_kaggle_secrets()   # trên Kaggle: tự lấy HF_TOKEN + key của mọi provider; ngoài Kaggle: tự export biến môi trường
++print("Key LLM:", ", ".join(f"{lbl} {len(make_data.collect_keys(make_data.LLM_KEY_NAMES[n]))}" for n, lbl in make_data.LLM_LABELS.items()),
++      "| Cào web:", ", ".join(f"{n.capitalize()} {len(make_data.collect_keys(n.upper() + '_API_KEY'))}" for n in ("tavily", "exa", "linkup", "firecrawl")))
+ 
+ 
+ def sh(cmd, retries=0, wait=30):
+diff --git a/make_data.py b/make_data.py
+index c0090b1..d12ea5e 100644
+--- a/make_data.py
++++ b/make_data.py
+@@ -1,9 +1,9 @@
+ """
+-make_data.py - tạo data cho Yui bằng Gemini, TỰ ĐẶT TÊN file theo số kế tiếp trên repo Hugging Face rồi TỰ UP LÊN.
++make_data.py - tạo data cho Yui bằng Cohere -> OpenRouter -> Mistral -> Gemini (provider nào lỗi/hết quota thì tự rơi xuống provider sau), TỰ ĐẶT TÊN file theo số kế tiếp trên repo Hugging Face rồi TỰ UP LÊN.
+ 
+   python make_data.py finetune --files 5      # tạo 5 file hội thoại: nếu repo đã có 1.txt..32.txt thì ra 33.txt..37.txt
+   python make_data.py pretrain --files 3      # tạo 3 file văn bản: pretrain/1.txt, pretrain/2.txt, ... (đánh số riêng)
+-  python make_data.py finetune --dry_models   # chỉ quét model Gemini và in thứ hạng, không tạo gì
++  python make_data.py finetune --dry_models   # chỉ quét model của mọi provider có key và in thứ hạng, không tạo gì
+   python make_data.py finetune --tag 50M --files 5   # xếp theo cỡ model: Fine-tune/50M/N.txt (data train: data/50M/N.txt); thư mục chưa có thì tự tạo. Không có --tag = kiểu cũ (gốc repo / pretrain/)
+   python make_data.py check --source yui_chat.jsonl        # soi data có sẵn (độ dài, câu mở đầu lặp, dấu hiệu lỗi chính tả) trước khi train
+   python make_data.py restyle --source yui_chat.jsonl --files 3   # lấy CÂU HỎI THẬT trong file cũ, nhờ Gemini viết lại câu trả lời theo giọng Yui mới -> N.txt
+@@ -21,9 +21,19 @@ Cần: pip install huggingface_hub   (cạnh sft_format.py của repo). Up lên
+ TỰ TÌM TRÊN INTERNET (không chỉ chắt lọc data có sẵn):
+   python make_data.py finetune --web both --files 3   # mỗi lần gọi: lấy bài Wikipedia tiếng Việt (hoặc nhờ Gemini tự tra Google) rồi chắt lọc thành hội thoại Yui
+   python make_data.py pretrain --web wiki --files 3   # viết lại văn bản thật thành đoạn văn mới (không chép nguyên văn)
+-  --web off (mặc định, như cũ) | wiki (Wikipedia vi, không cần key) | search (Gemini + công cụ google_search) | both
++  --web off (mặc định, như cũ) | wiki (Wikipedia vi, không cần key) | search (Gemini + công cụ google_search) | tavily (chuỗi cào web Tavily->Exa->Linkup->Firecrawl) | both
+   Gemini hết quota/không hỗ trợ google_search thì tự chuyển sang Wikipedia; mạng Wikipedia lỗi thì tự chuyển sang search; cả hai lỗi thì tạo như cũ.
+ 
++NHIỀU NHÀ CUNG CẤP LLM (xem providers.py): thứ tự mặc định Cohere -> OpenRouter -> Mistral -> Gemini (Gemini hay quá tải nên để cuối)
++  COHERE_API_KEY1.. / OPENROUTER_API_KEY1.. / MISTRAL_API_KEY1.. / GEMINI_API_KEY1..   (mỗi loại bao nhiêu key cũng được; hoặc NAME_KEYS cách nhau dấu phẩy; có ít nhất 1 loại là chạy)
++  LLM_ORDER="cohere,openrouter,mistral,gemini"   đổi thứ tự / bỏ bớt provider (provider không có key tự bị bỏ qua)
++  COHERE_MODELS, OPENROUTER_MODELS, MISTRAL_MODELS (cách nhau dấu phẩy) ép danh sách model; bỏ trống = tự chọn (OpenRouter tự quét model ':free'). GEMINI_MODEL ép model Gemini.
++  COHERE_RPM / OPENROUTER_RPM / MISTRAL_RPM  số yêu cầu/phút MỖI key (mặc định 10/10/20; Gemini dùng GEMINI_RPM)
++  LLM_MODEL=provider::model          ép đúng 1 model (tắt chuỗi dự phòng), vd cohere::command-a-03-2025
++  SPILL_SECONDS                      provider phải chờ rate-limit lâu hơn ngần này giây (mặc định 15) thì nhường provider kế thay vì đứng đợi
++CÀO WEB (cho --web tavily / both): thứ tự mặc định Tavily -> Exa -> Linkup -> Firecrawl, đổi bằng SCRAPE_ORDER
++  TAVILY_API_KEY1.. / EXA_API_KEY1.. / LINKUP_API_KEY1.. / FIRECRAWL_API_KEY1..   (nguồn nào hết key/hết hạn mức/không ra kết quả thì tự sang nguồn sau)
++
+ CHẾ ĐỘ TỰ ĐỘNG - chỉnh hết bằng BIẾN MÔI TRƯỜNG (Secrets/Variables của Space, Colab, GitHub Actions...):
+   python make_data.py auto            # đọc biến, so với data ĐANG CÓ trên repo, chỉ tạo phần CÒN THIẾU rồi up lên (chạy lại bao nhiêu lần cũng được)
+   python make_data.py auto --plan     # chỉ in kế hoạch, không gọi Gemini
+@@ -45,6 +55,8 @@ import argparse, io, json, math, os, random, re, subprocess, sys, time, urllib.e
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ from sft_format import load_convs, clean  # noqa: E402  (cùng bộ đọc/lọc với train_sft.py)
+ from data_layout import params_from_arch, size_tag, finetune_prefix, data_prefix  # noqa: E402
++from providers import (ModelGone, Transient, ModelBusy, Empty, QuotaOut, SearchUnavailable, LLMRouter, Cohere, OpenRouter, Mistral,  # noqa: E402,F401
++                       Exa, Linkup, Firecrawl, WebChain)
+ 
+ def collect_keys(name, extra=None):
+     """Gom key từ: --keys, NAME_S (nhiều key cách nhau dấu phẩy/khoảng trắng), NAME, và NAME1, NAME2, NAME_3, ... (bao nhiêu cũng được). Bỏ trùng, giữ thứ tự."""
+@@ -65,7 +77,10 @@ def collect_keys(name, extra=None):
+     return out
+ 
+ 
+-def load_kaggle_secrets(names=("HF_TOKEN", "GEMINI_API_KEYS", "GEMINI_API_KEY", "TAVILY_API_KEYS", "TAVILY_API_KEY"), numbered=("GEMINI_API_KEY", "TAVILY_API_KEY"), limit=30):
++KEY_BASES = ("COHERE_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "EXA_API_KEY", "LINKUP_API_KEY", "FIRECRAWL_API_KEY")
++
++
++def load_kaggle_secrets(names=("HF_TOKEN",) + tuple(b + s for b in KEY_BASES for s in ("S", "")), numbered=KEY_BASES, limit=30):
+     """Trên Kaggle: tự lấy secret cùng tên vào biến môi trường (không cần viết os.environ[...] = ... cho từng key). Ngoài Kaggle thì không làm gì."""
+     try:
+         from kaggle_secrets import UserSecretsClient
+@@ -138,7 +153,7 @@ PRETRAIN_STYLES = [
+ PRETRAIN_TOPICS = TOPICS + ["lịch sử Việt Nam qua các thời kỳ", "thiên nhiên và môi trường", "y học thường thức", "kinh tế và đời sống",
+                             "giáo dục", "nghệ thuật truyền thống", "khoa học vũ trụ", "triết lý sống"]
+ 
+-LEAK = re.compile(r"(mô hình ngôn ngữ|\bGemini\b|\bGoogle\b|\bChatGPT\b|\bOpenAI\b|\bClaude\b|\bAnthropic\b|large language model|wikipedia|theo tài liệu|tài liệu trên|nguồn tham khảo)", re.I)
++LEAK = re.compile(r"(mô hình ngôn ngữ|\bGemini\b|\bGoogle\b|\bChatGPT\b|\bOpenAI\b|\bClaude\b|\bAnthropic\b|\bCohere\b|\bMistral\b|\bOpenRouter\b|\bLlama\b|\bQwen\b|\bDeepSeek\b|large language model|wikipedia|theo tài liệu|tài liệu trên|nguồn tham khảo)", re.I)
+ 
+ 
+ # ============================ repo (HF hoặc thư mục máy) ============================
+@@ -237,12 +252,7 @@ class Publisher:
+ 
+ 
+ # ============================ Gemini (REST) ============================
+-class ModelGone(Exception): pass
+-class Transient(Exception): pass
+-class ModelBusy(Exception): pass   # model đang quá tải (HTTP 503...): thử model khác, quay lại sau
+-class Empty(Exception): pass
+-class QuotaOut(Exception): pass
+-class SearchUnavailable(Exception): pass   # model/gói này không dùng được công cụ google_search
++# (ModelGone, Transient, ModelBusy, Empty, QuotaOut, SearchUnavailable: định nghĩa trong providers.py)
+ 
+ 
+ class Gemini:
+@@ -402,6 +412,103 @@ def rank_models(names):
+     return [n for _, n in sorted(scored)]
+ 
+ 
++# ============================ dựng bộ LLM + chuỗi cào web từ biến môi trường ============================
++LLM_DEFAULT_ORDER = "cohere,openrouter,mistral,gemini"
++SCRAPE_DEFAULT_ORDER = "tavily,exa,linkup,firecrawl"
++LLM_KEY_NAMES = {"cohere": "COHERE_API_KEY", "openrouter": "OPENROUTER_API_KEY", "mistral": "MISTRAL_API_KEY", "gemini": "GEMINI_API_KEY"}
++LLM_LABELS = {"cohere": "Cohere", "openrouter": "OpenRouter", "mistral": "Mistral", "gemini": "Gemini"}
++LLM_RPM = {"cohere": 10.0, "openrouter": 10.0, "mistral": 20.0}   # số yêu cầu/phút MỖI key (an toàn hơn mức tối đa của gói miễn phí)
++
++
++def _split_order(value, default, valid, what):
++    out = []
++    for n in re.split(r"[,;\s]+", (value or default).lower()):
++        if not n or n in out:
++            continue
++        if n not in valid:
++            print(f"  ⚠ {what}: bỏ qua tên lạ '{n}' (hợp lệ: {', '.join(valid)})", flush=True)
++            continue
++        out.append(n)
++    return out
++
++
++def _models_env(name):
++    return [m.strip() for m in re.split(r"[,;\n]+", env(name, "") or "") if m.strip()]
++
++
++def llm_key_total():
++    return sum(len(collect_keys(n)) for n in LLM_KEY_NAMES.values())
++
++
++def total_rpm(gemini_rpm=8.0):
++    """Thông lượng gộp (yêu cầu/phút) của mọi provider đang có key - để ước lượng thời gian tạo data."""
++    return sum(len(collect_keys(LLM_KEY_NAMES[n])) * (gemini_rpm if n == "gemini" else LLM_RPM[n]) for n in LLM_KEY_NAMES)
++
++
++def build_llm(args):
++    """-> (LLMRouter hoặc None nếu không có key nào, danh sách mô tả '2 key Gemini'...). Thứ tự ưu tiên theo LLM_ORDER / --llm_order."""
++    order = _split_order(args.llm_order, LLM_DEFAULT_ORDER, list(LLM_KEY_NAMES), "LLM_ORDER")
++    spill = float(env("SPILL_SECONDS", "15"))
++    provs, gemini, parts = {}, None, []
++    for name in order:
++        keys = collect_keys(LLM_KEY_NAMES[name], args.keys if name == "gemini" else None)
++        if not keys:
++            continue
++        parts.append(f"{len(keys)} key {LLM_LABELS[name]}")
++        rpm = float(env(name.upper() + "_RPM", str(LLM_RPM.get(name, 8))))
++        if name == "gemini":
++            gemini = Gemini(keys, args.api_base, args.rpm)
++        elif name == "cohere":
++            provs[name] = Cohere(keys, env("COHERE_BASE", "https://api.cohere.com"), _models_env("COHERE_MODELS"), rpm=rpm, spill=spill)
++        elif name == "openrouter":
++            provs[name] = OpenRouter(keys, env("OPENROUTER_BASE", "https://openrouter.ai/api/v1"), _models_env("OPENROUTER_MODELS"), rpm=rpm, spill=spill)
++        elif name == "mistral":
++            provs[name] = Mistral(keys, env("MISTRAL_BASE", "https://api.mistral.ai/v1"), _models_env("MISTRAL_MODELS"), rpm=rpm, spill=spill)
++    if not provs and gemini is None:
++        return None, parts
++    return LLMRouter(order, provs, gemini), parts
++
++
++def build_pool(router, forced=None):
++    """Danh sách model theo thứ tự ưu tiên: provider đứng trước, trong từng provider model tốt hơn đứng trước. Gemini tự quét + xếp hạng như cũ."""
++    if forced:   # --model: "provider::model", hoặc tên trần = model Gemini (như trước đây)
++        full = forced if LLMRouter.SEP in forced else "gemini" + LLMRouter.SEP + forced
++        if LLMRouter.split(full)[0] not in router.order:
++            sys.exit(f"--model/LLM_MODEL '{forced}' thuộc provider chưa có key (đang có: {', '.join(router.order)})")
++        return [full]
++    pool = []
++    for name in router.order:
++        if name == "gemini":
++            print(f"🔍 Quét model Gemini ({len(router.gemini.keys)} key)...", flush=True)
++            ms = _models_env("GEMINI_MODEL") or rank_models(router.gemini.list_models())
++        else:
++            ms = router.providers[name].pool()
++        pool += [name + LLMRouter.SEP + m for m in ms]
++    return pool
++
++
++def build_scrapers(args):
++    """-> (WebChain hoặc None, danh sách mô tả '2 key Tavily'...). Thứ tự theo SCRAPE_ORDER / --scrape_order."""
++    order = _split_order(args.scrape_order, SCRAPE_DEFAULT_ORDER, ["tavily", "exa", "linkup", "firecrawl"], "SCRAPE_ORDER")
++    sources, parts = [], []
++    for name in order:
++        keys = collect_keys(name.upper() + "_API_KEY", getattr(args, name + "_keys", None))
++        if not keys:
++            continue
++        parts.append(f"{len(keys)} key {name.capitalize()}")
++        if name == "tavily":
++            sources.append(Tavily(keys, args.tavily_base))
++        elif name == "exa":
++            sources.append(Exa(keys, env("EXA_BASE", "https://api.exa.ai")))
++        elif name == "linkup":
++            sources.append(Linkup(keys, env("LINKUP_BASE", "https://api.linkup.so/v1")))
++        elif name == "firecrawl":
++            sources.append(Firecrawl(keys, env("FIRECRAWL_BASE", "https://api.firecrawl.dev/v1")))
++    if "tavily" not in order or not collect_keys("TAVILY_API_KEY", args.tavily_keys):
++        parts.insert(0, "không có key Tavily")
++    return (WebChain(sources, make_query) if sources else None), parts
++
++
+ # ============================ tạo & lọc ============================
+ def norm_key(s):
+     return re.sub(r"[^\w]+", " ", s.lower()).strip()
+@@ -469,6 +576,12 @@ QUERY_ANGLES = ["là gì", "cách làm", "mẹo hay", "ở Việt Nam", "giải
+                 "nguyên nhân", "lợi ích", "sai lầm thường gặp", "cho người mới", "ngày nay", "ý nghĩa"]
+ 
+ 
++def make_query(topic):
++    """(chủ đề gốc, truy vấn) - thêm "góc nhìn" ngẫu nhiên để mỗi lần tìm ra trang khác nhau, không lặp một truy vấn chung chung."""
++    base = topic or random.choice(["kiến thức đời sống", "mẹo vặt hữu ích", "sự thật thú vị", "kiến thức khoa học cơ bản", "văn hoá Việt Nam", "sức khoẻ đời thường"])
++    return base, f"{base} {random.choice(QUERY_ANGLES)}".strip()
++
++
+ class Tavily:
+     """Tìm web bằng Tavily (tuỳ chọn). Nhiều key xoay vòng, không giới hạn số key; hết key/hết hạn mức thì tự bỏ nguồn này, các nguồn khác vẫn chạy."""
+ 
+@@ -491,10 +604,13 @@ class Tavily:
+         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+             return 599, str(e)
+ 
++    label = "Tavily"
++
+     def doc(self, topic):
+         """Trả {'title','text'} từ các kết quả tìm kiếm của chủ đề, hoặc None."""
+-        base = topic or random.choice(["kiến thức đời sống", "mẹo vặt hữu ích", "sự thật thú vị", "kiến thức khoa học cơ bản", "văn hoá Việt Nam", "sức khoẻ đời thường"])
+-        query = f"{base} {random.choice(QUERY_ANGLES)}".strip()   # thêm "góc nhìn" để mỗi lần tìm ra trang khác nhau, không lặp một truy vấn chung chung
++        return self.fetch(*make_query(topic))
++
++    def fetch(self, base, query):
+         body = {"query": query, "search_depth": "basic", "max_results": 5, "include_answer": False}
+         for _ in range(len(self.keys) * 2 + 1):
+             alive = [k for k in self.keys if not k["dead"] and k["cool"] <= time.time()]
+@@ -528,40 +644,45 @@ class Tavily:
+ 
+ 
+ class WebPicker:
+-    """Mỗi lần gọi Gemini chọn nguồn thông tin: bài Wikipedia thật ('wiki'), hay để Gemini tự tra Google ('search'), hay thuần sáng tác."""
++    """Mỗi lần gọi LLM chọn nguồn thông tin: chuỗi cào web (Tavily -> Exa -> Linkup -> Firecrawl), bài Wikipedia thật ('wiki'),
++    hay để Gemini tự tra Google ('search'), hay thuần sáng tác."""
+ 
+-    def __init__(self, mode, wiki, topics, tavily=None):
+-        self.mode, self.wiki, self.topics, self.tavily = mode, wiki, topics, tavily
++    def __init__(self, mode, wiki, topics, scraper=None):
++        self.mode, self.wiki, self.topics, self.scraper = mode, wiki, topics, scraper
+ 
+     def pick(self, model, gem):
+-        """Tavily (cào web) là nguồn chính khi có key; Wikipedia xen ~25% cho đa dạng (hoặc làm nguồn chính khi không có Tavily).
+-        Gemini google_search CHỈ là dự phòng cuối (hoặc khi chọn --web search): Gemini để lọc/chắt lọc, không tốn quota vào việc tra cứu."""
++        """Cào web là nguồn chính khi có key; Wikipedia xen ~25% cho đa dạng (hoặc làm nguồn chính khi không có key cào).
++        Gemini google_search CHỈ là dự phòng cuối (hoặc khi chọn --web search): LLM để lọc/chắt lọc, không tốn quota vào việc tra cứu.
++        google_search chỉ có ở Gemini: đang dùng model của provider khác thì chế độ 'search' tự chuyển sang Wikipedia/cào web."""
+         topic = random.choice(self.topics) if self.topics and random.random() < 0.8 else None   # 20% bài ngẫu nhiên cho đa dạng
+-        can_t = self.mode in ("tavily", "both") and self.tavily is not None and self.tavily.available
+-        can_w = self.mode in ("wiki", "both") and self.wiki.fails < 5
+-        can_s = self.mode in ("search", "both") and model not in gem.no_search
++        can_s = self.mode in ("search", "both") and gem.can_search(model)
++        mode = "both" if (self.mode == "search" and not can_s) else self.mode
++        can_t = mode in ("tavily", "both") and self.scraper is not None and self.scraper.available
++        can_w = mode in ("wiki", "both") and self.wiki.fails < 5
+         order = []
+         if can_t:
+-            order += ["tavily"] + (["wiki"] if can_w and random.random() < 0.25 else [])
++            order += ["scrape"] + (["wiki"] if can_w and random.random() < 0.25 else [])
+             order += (["wiki"] if can_w and "wiki" not in order else [])
+         elif can_w:
+             order.append("wiki")
+         if can_s:
+             order.append("search")
+-        if self.mode == "search":
++        if mode == "search":
+             order = [o for o in order if o == "search"] or order
+         for o in order:
+             if o == "search":
+                 return None, topic or random.choice(self.topics or ["một chủ đề đời sống bất kỳ"]), True
+-            d = (self.tavily if o == "tavily" else self.wiki).doc(topic)
++            d = (self.scraper if o == "scrape" else self.wiki).doc(topic)
+             if d:
+                 return d, topic, False
+         return None, topic, False   # không nguồn nào dùng được -> thuần sáng tác như cũ
+ 
+ 
+ def json_slice(t):
+-    """Gemini dùng google_search không bật được JSON mode: lấy mảng [...] ra khỏi câu trả lời."""
++    """Gemini dùng google_search (và các provider khác, không có JSON mode kiểu mảng) hay kèm lời dẫn/```json: lấy mảng [...] ra khỏi câu trả lời."""
+     t = strip_fence(t)
++    if t.lstrip().startswith(("[", "{")):   # đã là mảng JSON (hoặc JSONL): giữ nguyên
++        return t
+     a, b = t.find("["), t.rfind("]")
+     return t[a:b + 1] if 0 <= a < b else t
+ 
+@@ -727,16 +848,28 @@ def restyle(args, gem, pool, pub, remote, seen):
+     random.shuffle(qs)
+     per_file = args.per_file or 100
+     print(f"🔁 restyle: {len(pairs)} cặp trong file nguồn -> {len(qs)} câu hỏi dùng được (đã bỏ trùng với data trên repo)\n", flush=True)
+-    buf, done_files, fails, pos = [], 0, 0, 0
++    buf, done_files, fails, pos, idle_since = [], 0, 0, 0, None
+     while done_files < args.files and pos < len(qs) and time.time() <= DEADLINE:
++        now = time.time()
++        cur = next((m for m in pool if gem.busy.get(m, 0.0) <= now), None)   # model xếp hạng cao nhất đang rảnh
++        if cur is None:
++            idle_since = idle_since or now
++            if now - idle_since > 20 * 60:
++                print("❌ mọi model đều bận/quá tải hơn 20 phút, dừng (phần đã tạo vẫn được lưu)", flush=True)
++                break
++            time.sleep(max(5.0, min(60.0, min(gem.busy.get(m, 0.0) for m in pool) - now)))
++            continue
++        idle_since = None
+         chunk = qs[pos:pos + args.batch]
+         system, prompt = restyle_prompt([(i, q, a) for i, (q, a) in enumerate(chunk)])
+         try:
+-            raw = gem.generate(pool[0], system, prompt, temperature=0.9, json_mode=True)
+-            ans = {int(x["i"]): clean(str(x["answer"])) for x in json.loads(strip_fence(raw)) if isinstance(x, dict) and "i" in x and "answer" in x}
++            raw = gem.generate(cur, system, prompt, temperature=0.9, json_mode=True)
++            ans = {int(x["i"]): clean(str(x["answer"])) for x in json.loads(json_slice(raw)) if isinstance(x, dict) and "i" in x and "answer" in x}
++        except ModelBusy:
++            continue   # đã ghi nhận bận: vòng sau tự chọn model/provider kế
+         except ModelGone as e:
+-            print(f"  ⚠ bỏ model {pool[0]}: {e}", flush=True)
+-            pool.pop(0)
++            print(f"  ⚠ bỏ model {cur}: {e}", flush=True)
++            pool.remove(cur)
+             if not pool:
+                 print("❌ hết model để thử")
+                 break
+@@ -952,8 +1085,8 @@ def auto(args, build_parser):
+                 "--out_dir", args.out_dir]
+         if repo_dir:
+             argv += ["--repo_dir", repo_dir]
+-        if env("GEMINI_MODEL"):
+-            argv += ["--model", env("GEMINI_MODEL")]
++        if env("LLM_MODEL"):   # ép đúng 1 model "provider::model" (tắt chuỗi dự phòng); GEMINI_MODEL chỉ ép phần Gemini, xem build_pool
++            argv += ["--model", env("LLM_MODEL")]
+         if env("WEB_TOPICS"):
+             argv += ["--topics", env("WEB_TOPICS")]
+         argv += ["--api_base", args.api_base]
+@@ -1004,21 +1137,18 @@ def _run(args):
+     if args.mode == "check":
+         check(args, LocalRepo(args.repo_dir) if args.repo_dir else (None if args.source_file else HFRepo(args.repo, args.repo_type)))
+         return
+-    keys = collect_keys("GEMINI_API_KEY", args.keys)
+-    if not keys:
+-        load_kaggle_secrets()
+-        keys = collect_keys("GEMINI_API_KEY", args.keys)
+-    if not keys:
+-        sys.exit("Thiếu key Gemini: đặt GEMINI_API_KEY1, GEMINI_API_KEY2, ... (hoặc GEMINI_API_KEYS cách nhau dấu phẩy) hoặc dùng --keys")
+-    print(f"🔑 {len(keys)} key Gemini" + (f", {len(collect_keys('TAVILY_API_KEY', args.tavily_keys))} key Tavily" if collect_keys("TAVILY_API_KEY", args.tavily_keys) else ", không có key Tavily (dùng Gemini + Wikipedia)"), flush=True)
+-    gem = Gemini(keys, args.api_base, args.rpm)
+-    print(f"🔍 Quét model Gemini ({len(keys)} key)...", flush=True)
+-    names = gem.list_models()
+-    pool = [args.model] if args.model else rank_models(names)
+-    print("📋 Thứ hạng model (cao → thấp):", ", ".join(pool[:8]) or "(không có)", flush=True)
++    load_kaggle_secrets()   # trên Kaggle: tự lấy secret; ngoài Kaggle không làm gì
++    gem, llm_parts = build_llm(args)   # gem = LLMRouter: Cohere -> OpenRouter -> Mistral -> Gemini (theo LLM_ORDER), provider không có key bị bỏ qua
++    if gem is None:
++        sys.exit("Thiếu key LLM: đặt ít nhất một loại COHERE_API_KEY1 / OPENROUTER_API_KEY1 / MISTRAL_API_KEY1 / GEMINI_API_KEY1 (bao nhiêu key cũng được; hoặc NAME_KEYS cách nhau dấu phẩy; Gemini còn có --keys)")
++    scraper, scrape_parts = build_scrapers(args)
++    print("🔑 " + ", ".join(llm_parts + scrape_parts) + ("" if scraper else " (dùng LLM + Wikipedia)"), flush=True)
++    print("🔀 Thứ tự LLM: " + " -> ".join(LLM_LABELS[n] for n in gem.order) + (" | cào web: " + " -> ".join(s_.label for s_ in scraper.sources) if scraper else ""), flush=True)
++    pool = build_pool(gem, args.model)
++    print("📋 Thứ hạng model (cao → thấp):", ", ".join(pool[:12]) or "(không có)", flush=True)
+     if args.dry_models or not pool:
+         return
+-    print(f"✅ Dùng model: {pool[0]} (tự chuyển sang model kế nếu lỗi)\n", flush=True)
++    print(f"✅ Dùng model: {pool[0]} (tự chuyển sang model kế / provider kế nếu lỗi)\n", flush=True)
+ 
+     if args.tag:   # xếp theo cỡ model: data/<tag>/ và Fine-tune/<tag>/ (xem data_layout.py)
+         prefix = data_prefix(args.tag) if args.mode == "pretrain" else finetune_prefix(args.tag)
+@@ -1037,13 +1167,11 @@ def _run(args):
+     webber = None
+     if args.web != "off":
+         topics = [t.strip() for t in re.split(r"[;\n]", args.topics or "") if t.strip()] or (TOPICS if args.mode == "finetune" else PRETRAIN_TOPICS)
+-        tkeys = collect_keys("TAVILY_API_KEY", args.tavily_keys)
+-        tav = Tavily(tkeys, args.tavily_base) if tkeys else None
+         mode = args.web
+-        if mode == "tavily" and tav is None:
+-            print("  ⚠ --web tavily nhưng không có key Tavily: dùng các nguồn còn lại (Gemini + Wikipedia)", flush=True)
++        if mode == "tavily" and scraper is None:
++            print("  ⚠ --web tavily nhưng không có key cào web nào (Tavily/Exa/Linkup/Firecrawl): dùng các nguồn còn lại (Wikipedia + Gemini google_search nếu có)", flush=True)
+             mode = "both"
+-        webber = WebPicker(mode, Wiki(args.wiki_base), topics, tav)
++        webber = WebPicker(mode, Wiki(args.wiki_base), topics, scraper)
+         print(f"🌐 Tìm thông tin trên internet: nguồn '{args.web}' ({len(topics)} chủ đề, xen bài ngẫu nhiên)\n", flush=True)
+ 
+     done_files, buf, fails, busy_since, pending = 0, [], 0, None, None
+@@ -1067,7 +1195,7 @@ def _run(args):
+         if fresh:   # chỉ lấy tài liệu MỚI khi lần trước đã dùng xong (thử lại sau lỗi thì dùng lại tài liệu cũ, không tốn lượt Tavily/Wikipedia)
+             pending = webber.pick(cur, gem) if webber else (None, None, False)
+         doc, topic, use_search = pending
+-        if use_search and cur in gem.no_search:
++        if use_search and not gem.can_search(cur):   # google_search chỉ có ở Gemini: model hiện tại không dùng được thì chọn lại nguồn
+             pending = None
+             continue
+         shots = random.sample(pairs, min(6, len(pairs))) if pairs else []
+@@ -1111,7 +1239,7 @@ def _run(args):
+         pending = None   # dùng xong tài liệu này
+         added = 0
+         if args.mode == "finetune":
+-            convs, _ = load_convs({"x": json_slice(raw) if use_search else strip_fence(raw)}, max_chars=200)
++            convs, _ = load_convs({"x": json_slice(raw)}, max_chars=200)
+             for c in convs:
+                 k = norm_key(c[0][0])
+                 if not k or k in seen or any(LEAK.search(a) for _, a in c):
+@@ -1147,8 +1275,13 @@ def build_parser():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("mode", choices=["finetune", "pretrain", "restyle", "check", "auto"])
+     ap.add_argument("--web", choices=["off", "wiki", "search", "tavily", "both"], default="off",
+-                    help="tìm thông tin trên internet: wiki = Wikipedia vi, search = Gemini tự tra Google, tavily = Tavily (cần key), both = tất cả nguồn đang dùng được")
+-    ap.add_argument("--tavily_keys", default=None, help="key Tavily (hoặc biến TAVILY_API_KEY1, TAVILY_API_KEY2, ... / TAVILY_API_KEYS); không có key vẫn chạy bằng Gemini + Wikipedia")
++                    help="tìm thông tin trên internet: wiki = Wikipedia vi, search = Gemini tự tra Google, tavily = chuỗi cào web Tavily->Exa->Linkup->Firecrawl (cần ít nhất 1 key), both = tất cả nguồn đang dùng được")
++    ap.add_argument("--tavily_keys", default=None, help="key Tavily (hoặc biến TAVILY_API_KEY1, TAVILY_API_KEY2, ... / TAVILY_API_KEYS); không có key vẫn chạy bằng LLM + Wikipedia")
++    ap.add_argument("--exa_keys", default=None, help="key Exa (hoặc EXA_API_KEY1.. / EXA_API_KEYS); đứng sau Tavily trong chuỗi cào web")
++    ap.add_argument("--linkup_keys", default=None, help="key Linkup (hoặc LINKUP_API_KEY1.. / LINKUP_API_KEYS); đứng sau Exa")
++    ap.add_argument("--firecrawl_keys", default=None, help="key Firecrawl (hoặc FIRECRAWL_API_KEY1.. / FIRECRAWL_API_KEYS); đứng sau Linkup")
++    ap.add_argument("--llm_order", default=env("LLM_ORDER"), help="thứ tự provider LLM, mặc định cohere,openrouter,mistral,gemini (hoặc biến LLM_ORDER)")
++    ap.add_argument("--scrape_order", default=env("SCRAPE_ORDER"), help="thứ tự nguồn cào web, mặc định tavily,exa,linkup,firecrawl (hoặc biến SCRAPE_ORDER)")
+     ap.add_argument("--tavily_base", default=env("TAVILY_BASE", "https://api.tavily.com"))
+     ap.add_argument("--max_minutes", type=float, default=0, help="dừng tạo data sau ngần này phút (0 = không giới hạn); phần đã tạo vẫn được lưu")
+     ap.add_argument("--topics", default=None, help="chủ đề riêng cho --web, cách nhau dấu ; (mặc định: danh sách có sẵn + bài ngẫu nhiên)")
+@@ -1159,15 +1292,15 @@ def build_parser():
+     ap.add_argument("--source_file", default=None, help="restyle/check: đường dẫn file nguồn trên máy")
+     ap.add_argument("--files", type=int, default=1, help="số file cần tạo ở lần chạy này")
+     ap.add_argument("--per_file", type=int, default=0, help="số hội thoại (finetune, mặc định 100) hoặc đoạn văn (pretrain, mặc định 150) mỗi file")
+-    ap.add_argument("--keys", default=None)
+-    ap.add_argument("--model", default=None, help="ép dùng một model cụ thể thay vì tự xếp hạng")
++    ap.add_argument("--keys", default=None, help="key Gemini (ngoài biến môi trường GEMINI_API_KEY*)")
++    ap.add_argument("--model", default=None, help="ép dùng đúng một model, không dự phòng: 'provider::model' (vd cohere::command-a-03-2025) hoặc tên trần = model Gemini")
+     ap.add_argument("--repo", default="BachDaThan/TrainAI-web")
+     ap.add_argument("--repo_type", default="dataset")
+     ap.add_argument("--repo_dir", default=None, help="dùng một thư mục làm 'repo' (để thử, không cần mạng HF)")
+     ap.add_argument("--no_upload", action="store_true")
+     ap.add_argument("--out_dir", default="data_out")
+     ap.add_argument("--batch", type=int, default=20, help="số hội thoại mỗi lần gọi API (pretrain: batch//4 đoạn)")
+-    ap.add_argument("--rpm", type=float, default=8.0, help="số yêu cầu/phút cho MỖI key (gói miễn phí thường 5-15)")
++    ap.add_argument("--rpm", type=float, default=8.0, help="số yêu cầu/phút cho MỖI key Gemini (gói miễn phí thường 5-15); provider khác: COHERE_RPM/OPENROUTER_RPM/MISTRAL_RPM")
+     ap.add_argument("--temperature", type=float, default=1.0)
+     ap.add_argument("--api_base", default=env("GEMINI_API_BASE", API_BASE))
+     ap.add_argument("--dry_models", action="store_true")
+@@ -1187,7 +1320,7 @@ def main():
+ 
+ 
+ def estimate_minutes(params, n_keys, rpm=8.0, per_call=20, lo=15, hi=240):
+-    """Số phút cần để tạo xong phần fine-tune theo cỡ model: mục tiêu cặp = params/2000 (kẹp 2k..100k), mỗi lượt gọi Gemini ra ~per_call cặp,
++    """Số phút cần để tạo xong phần fine-tune theo cỡ model: mục tiêu cặp = params/2000 (kẹp 2k..100k), mỗi lượt gọi LLM ra ~per_call cặp,
+     thông lượng ~ n_keys x rpm x 0,7 lượt/phút (hao do 429/503), cộng 30% dự phòng. Kẹp [lo, hi] phút; thiếu thì lần chạy sau tự bù tiếp."""
+     pairs = min(100_000, max(2_000, params / 2000))
+     throughput = max(1, n_keys) * rpm * 0.7
+@@ -1195,15 +1328,16 @@ def estimate_minutes(params, n_keys, rpm=8.0, per_call=20, lo=15, hi=240):
+ 
+ 
+ def make_for_training(params, tag, repo, repo_type="dataset", kinds="finetune,pretrain", minutes="auto", extra_env=None):
+-    """Gọi từ train_lm.py: tạo (phần còn thiếu của) data cho model `params` tham số TRƯỚC khi train. Không có key Gemini thì bỏ qua, train vẫn chạy.
++    """Gọi từ train_lm.py: tạo (phần còn thiếu của) data cho model `params` tham số TRƯỚC khi train. Không có key LLM nào (Cohere/OpenRouter/Mistral/Gemini) thì bỏ qua, train vẫn chạy.
+     Chạy bằng tiến trình con (`make_data.py auto`) nên lỗi ở đây không làm hỏng lần train."""
+     load_kaggle_secrets()
+-    if not collect_keys("GEMINI_API_KEY"):
+-        print("[data] chưa có key Gemini (GEMINI_API_KEY1, GEMINI_API_KEY2, ...) nên bỏ qua bước tự tạo data; train bằng data có sẵn.", flush=True)
++    if llm_key_total() == 0:
++        print("[data] chưa có key LLM nào (COHERE_API_KEY1, OPENROUTER_API_KEY1, MISTRAL_API_KEY1, GEMINI_API_KEY1, ...) nên bỏ qua bước tự tạo data; train bằng data có sẵn.", flush=True)
+         return False
+     if minutes in (None, "", "auto"):
+-        minutes = estimate_minutes(params, len(collect_keys("GEMINI_API_KEY")), float(env("GEMINI_RPM", "8")))
+-        print(f"[data] tự tính thời gian tạo data theo cỡ model {fmt_n(params)} và {len(collect_keys('GEMINI_API_KEY'))} key: {minutes} phút", flush=True)
++        rpm = total_rpm(float(env("GEMINI_RPM", "8")))
++        minutes = estimate_minutes(params, 1, rpm)   # rpm = tổng thông lượng mọi key của mọi provider
++        print(f"[data] tự tính thời gian tạo data theo cỡ model {fmt_n(params)} và {llm_key_total()} key (~{rpm:.0f} yêu cầu/phút): {minutes} phút", flush=True)
+     minutes = float(minutes)
+     e = dict(os.environ, MODEL_PARAMS=str(int(params)), MODEL_TAG=tag, HF_REPO=repo, HF_REPO_TYPE=repo_type, DATA_KINDS=kinds, **(extra_env or {}))
+     print(f"[data] tạo data cho model {fmt_n(params)} tham số (thư mục cỡ {tag}) trên {repo}, tối đa {minutes:g} phút...", flush=True)
+diff --git a/providers.py b/providers.py
+new file mode 100644
+index 0000000..c912f14
+--- /dev/null
++++ b/providers.py
+@@ -0,0 +1,482 @@
++"""
++providers.py - các nhà cung cấp LLM và nguồn cào web dùng cho make_data.py (không cần SDK, gọi thẳng REST bằng urllib).
++
++LLM (thứ tự mặc định, đổi bằng biến LLM_ORDER, vd "cohere,openrouter,mistral,gemini"):
++  Cohere -> OpenRouter -> Mistral -> Gemini
++  - Provider nào không có key thì bị bỏ qua. Provider đứng trước được dùng trước; lỗi/hết quota/quá tải thì tự rơi xuống provider sau.
++  - Provider đang phải chờ rate-limit lâu (> SPILL_SECONDS, mặc định 15s) thì KHÔNG đứng chờ: chuyển ngay sang provider kế,
++    hết chờ thì tự quay lại provider ưu tiên cao hơn (vì make_data luôn chọn model xếp hạng cao nhất đang rảnh).
++  - Model đi theo dạng  "<provider>::<model>"  (vd cohere::command-a-03-2025, openrouter::meta-llama/llama-3.3-70b-instruct:free).
++
++Cào web (thứ tự mặc định, đổi bằng SCRAPE_ORDER): Tavily -> Exa -> Linkup -> Firecrawl
++  - Nguồn nào hết key/hết hạn mức/không ra kết quả thì tự sang nguồn sau. Wikipedia vẫn xen kẽ như cũ (do make_data.py quyết).
++"""
++import json, random, re, time, urllib.error, urllib.request
++
++UA = "YuiDataBot/1.0 (educational dataset builder)"
++
++
++class ModelGone(Exception): pass
++class Transient(Exception): pass
++class ModelBusy(Exception): pass   # model/provider đang quá tải hoặc phải chờ lâu: thử model khác, quay lại sau
++class Empty(Exception): pass
++class QuotaOut(Exception): pass
++class SearchUnavailable(Exception): pass   # model/gói này không dùng được công cụ google_search
++
++
++def http(method, url, headers=None, body=None, timeout=120):
++    """(status, text). Lỗi mạng -> (599, lý do). Có User-Agent riêng vì vài API sau Cloudflare chặn 'Python-urllib'."""
++    req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode("utf-8"),
++                                 headers={"Content-Type": "application/json", "User-Agent": UA, "Accept": "application/json", **(headers or {})})
++    try:
++        with urllib.request.urlopen(req, timeout=timeout) as r:
++            return r.status, r.read().decode("utf-8", "replace")
++    except urllib.error.HTTPError as e:
++        return e.code, e.read().decode("utf-8", "replace")
++    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
++        return 599, str(e)
++
++
++# ============================ LLM: lớp chung cho Cohere / OpenRouter / Mistral ============================
++class ChatProvider:
++    name = "?"
++    cool429 = 30.0          # nghỉ bao lâu (giây) sau một lần 429 thường
++    per_model_429 = False   # True: 429 chỉ tính cho model đó (OpenRouter free: giới hạn phía trên theo từng model); False: giới hạn theo KEY, nghỉ cả key
++    def __init__(self, keys, base, models=None, rpm=10.0, max_wait=900.0, spill=15.0):
++        # "mcool": hạn mức theo TỪNG model; "cool": nghỉ cả key (vd hết quota ngày chung)
++        self.keys = [{"k": k, "cool": 0.0, "last": 0.0, "dead": False, "mcool": {}} for k in keys]
++        self.base, self.forced = base.rstrip("/"), list(models or [])
++        self.gap, self.max_wait, self.spill = 60.0 / max(rpm, 0.1), max_wait, spill
++        self.no_system, self.busy = set(), {}
++
++    # ---- phần mỗi provider tự định nghĩa ----
++    def _call(self, key, model, system, prompt, temperature, max_tokens):   # -> (status, text); system có thể None
++        raise NotImplementedError
++
++    def _extract(self, txt):
++        raise NotImplementedError
++
++    def pool(self):
++        """Danh sách model theo thứ tự ưu tiên."""
++        return list(self.forced)
++
++    def _exhausted(self, low):
++        """429 mang nghĩa 'key này hết hạn mức dài hạn' (tháng/tín dụng) -> bỏ key."""
++        return False
++
++    def _cool_daily(self, key, model):
++        key["mcool"][model] = time.time() + 6 * 3600
++
++    # ---- phần chung ----
++    @staticmethod
++    def _daily(low):
++        return "perday" in re.sub(r"[\s_\-]+", "", low)
++
++    def _pick(self, model):
++        alive = [k for k in self.keys if not k["dead"]]
++        if not alive:
++            raise QuotaOut(f"{self.name}: mọi key đều không dùng được")
++        now = time.time()
++        def ready(k):
++            return max(k["cool"], k["mcool"].get(model, 0.0), k["last"] + self.gap)
++        best = min(alive, key=ready)
++        wait = max(0.0, ready(best) - now)
++        if wait > self.max_wait:
++            if all(k["mcool"].get(model, 0.0) > now + self.max_wait for k in alive):
++                raise ModelGone(f"{self.name}: hết quota NGÀY của model này trên mọi key -> chuyển model kế")
++            raise QuotaOut(f"{self.name}: mọi key phải chờ > {int(self.max_wait)}s (hết quota)")
++        if wait > self.spill:   # chờ lâu: nhường cho provider/model khác thay vì đứng đợi
++            self.busy[model] = now + wait
++            raise ModelBusy(model)
++        return best, wait
++
++    def generate(self, model, system, prompt, temperature=1.0, max_tokens=4096):
++        trans = 0
++        if self.busy.get(model, 0.0) > time.time():
++            raise ModelBusy(model)
++        for _ in range(12 + 3 * len(self.keys)):
++            key, wait = self._pick(model)
++            if wait > 0:
++                if wait >= 1:
++                    print(f"  ⏳ {self.name}: chờ {wait:.0f}s (giới hạn tốc độ)...", flush=True)
++                time.sleep(wait)
++            key["last"] = time.time()
++            if model in self.no_system:
++                sysmsg, user = None, system + "\n\n" + prompt
++            else:
++                sysmsg, user = system, prompt
++            st, txt = self._call(key["k"], model, sysmsg, user, temperature, min(max_tokens, 4096))
++            low = txt.lower()
++            if st == 200:
++                try:
++                    out = self._extract(txt)
++                except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
++                    raise Empty(f"{self.name}: không đọc được phản hồi ({str(e)[:60]})")
++                if not out.strip():
++                    raise Empty(f"{self.name}: phản hồi rỗng")
++                return out
++            if st == 429:
++                if self._exhausted(low):
++                    key["dead"] = True
++                    print(f"  ❌ {self.name}: key ...{key['k'][-4:]} hết hạn mức dài hạn (429), bỏ key này", flush=True)
++                    continue
++                if self._daily(low):
++                    self._cool_daily(key, model)
++                    print(f"  ↻ 429: {self.name} key ...{key['k'][-4:]} hết quota NGÀY ({model})", flush=True)
++                else:
++                    if self.per_model_429:
++                        key["mcool"][model] = time.time() + self.cool429
++                    else:
++                        key["cool"] = time.time() + self.cool429
++                    print(f"  ↻ 429: {self.name} key ...{key['k'][-4:]} nghỉ {self.cool429:.0f}s" + (f" với {model}" if self.per_model_429 else ""), flush=True)
++                continue
++            if st in (500, 502, 503, 504, 599):
++                trans += 1
++                key["mcool"][model] = time.time() + min(60.0, 6.0 * 2 ** trans) * random.uniform(0.7, 1.3)
++                if trans >= 3:
++                    self.busy[model] = time.time() + 90.0 * random.uniform(0.8, 1.5)
++                    print(f"  ⏸ {self.name}/{model} đang quá tải (HTTP {st}) -> tạm đổi model ~90s", flush=True)
++                    raise ModelBusy(model)
++                continue
++            if st == 400:
++                if any(s in low for s in ("system instruction", "systeminstruction", "developer instruction", "system message", "system role")) and model not in self.no_system:
++                    self.no_system.add(model)
++                    continue
++                raise ModelGone(f"{self.name} 400: {txt[:160]}")
++            if st == 404:
++                raise ModelGone(f"{self.name}: model không tồn tại")
++            if st in (401, 402, 403):
++                if st == 403 and "model" in low and "key" not in low:
++                    raise ModelGone(f"{self.name}: không có quyền dùng model ({st})")
++                key["dead"] = True
++                print(f"  ❌ {self.name}: key ...{key['k'][-4:]} bị từ chối ({st}), bỏ key này", flush=True)
++                continue
++            raise Transient(f"{self.name} HTTP {st}: {txt[:120]}")
++        raise Transient(f"{self.name}: thử quá nhiều lần")
++
++
++def _msgs(system, prompt):
++    return ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
++
++
++def _content_text(c):
++    """content của chat/completions có thể là chuỗi hoặc danh sách khối {'type':'text','text':...}."""
++    if isinstance(c, str):
++        return c
++    if isinstance(c, list):
++        return "".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type", "text") == "text")
++    return ""
++
++
++class Cohere(ChatProvider):
++    name = "cohere"
++    DEFAULT_MODELS = ["command-a-03-2025", "command-r-plus-08-2024", "command-r-08-2024"]
++    cool429 = 30.0
++
++    def __init__(self, keys, base="https://api.cohere.com", models=None, **kw):
++        super().__init__(keys, base, models, **kw)
++
++    def _call(self, key, model, system, prompt, temperature, max_tokens):
++        body = {"model": model, "messages": _msgs(system, prompt), "temperature": min(max(temperature, 0.0), 1.0), "max_tokens": max_tokens}
++        return http("POST", self.base + "/v2/chat", {"Authorization": "Bearer " + key}, body)
++
++    def _extract(self, txt):
++        j = json.loads(txt)
++        return "".join(p.get("text", "") for p in (j.get("message") or {}).get("content") or [] if isinstance(p, dict) and p.get("type", "text") == "text")
++
++    def _exhausted(self, low):
++        return "month" in low and ("trial" in low or "limit" in low)   # "Trial key ... limited to 1000 API calls / month"
++
++    def pool(self):
++        if self.forced:
++            return list(self.forced)
++        have = set()
++        for k in self.keys:
++            st, txt = http("GET", self.base + "/v2/models?endpoint=chat&page_size=200", {"Authorization": "Bearer " + k["k"]}, timeout=30)
++            if st == 200:
++                try:
++                    have |= {m.get("name") for m in json.loads(txt).get("models", [])}
++                except (ValueError, AttributeError):
++                    pass
++                break
++        ok = [m for m in self.DEFAULT_MODELS if m in have] if have else []
++        return ok or list(self.DEFAULT_MODELS)   # không đọc được danh sách -> dùng mặc định (model sai sẽ tự bị loại khi gặp 404)
++
++
++class Mistral(ChatProvider):
++    name = "mistral"
++    DEFAULT_MODELS = ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "open-mistral-nemo"]
++    cool429 = 10.0   # gói miễn phí ~1 yêu cầu/giây
++
++    def __init__(self, keys, base="https://api.mistral.ai/v1", models=None, **kw):
++        super().__init__(keys, base, models, **kw)
++
++    def _call(self, key, model, system, prompt, temperature, max_tokens):
++        body = {"model": model, "messages": _msgs(system, prompt), "temperature": min(max(temperature, 0.0), 1.0), "max_tokens": max_tokens}
++        return http("POST", self.base + "/chat/completions", {"Authorization": "Bearer " + key}, body)
++
++    def _extract(self, txt):
++        return _content_text(json.loads(txt)["choices"][0]["message"].get("content"))
++
++    def pool(self):
++        return list(self.forced or self.DEFAULT_MODELS)
++
++
++class OpenRouter(ChatProvider):
++    name = "openrouter"
++    # model miễn phí đổi liên tục -> tự đọc danh sách ':free' rồi xếp theo họ model quen thuộc, context dài đứng trước
++    DEFAULT_MODELS = ["meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen3-235b-a22b:free", "openai/gpt-oss-120b:free", "google/gemma-3-27b-it:free"]
++    PREFER = ("llama-3.3-70b", "qwen3-235b", "gpt-oss-120b", "deepseek-chat", "deepseek-v3", "qwen3-next", "gemma-3-27b", "mistral-small", "qwen", "llama", "deepseek", "gemma", "mistral")
++    BAN = {"embedding", "embeddings", "guard", "moderation", "vl", "vision", "image", "audio", "tts", "whisper", "ocr", "safeguard"}
++    cool429 = 30.0
++    per_model_429 = True
++
++    def __init__(self, keys, base="https://openrouter.ai/api/v1", models=None, max_models=6, referer="https://github.com/BachDaThan/Adaptive-MoE", **kw):
++        super().__init__(keys, base, models, **kw)
++        self.max_models, self.referer = max_models, referer
++
++    def _call(self, key, model, system, prompt, temperature, max_tokens):
++        body = {"model": model, "messages": _msgs(system, prompt), "temperature": temperature, "max_tokens": max_tokens}
++        st, txt = http("POST", self.base + "/chat/completions", {"Authorization": "Bearer " + key, "HTTP-Referer": self.referer, "X-Title": "Yui data maker"}, body)
++        if st == 200:   # OpenRouter đôi khi trả 200 kèm {"error": {...}} khi model phía trên lỗi
++            try:
++                j = json.loads(txt)
++            except ValueError:
++                return 502, txt
++            if not j.get("choices") and j.get("error"):
++                code = (j["error"] or {}).get("code")
++                return (code if isinstance(code, int) and code >= 400 else 502), txt
++        return st, txt
++
++    def _extract(self, txt):
++        return _content_text(json.loads(txt)["choices"][0]["message"].get("content"))
++
++    def _cool_daily(self, key, model):
++        key["cool"] = time.time() + 6 * 3600   # hạn mức ngày của model miễn phí tính chung cho cả key
++
++    def pool(self):
++        if self.forced:
++            return list(self.forced)
++        st, txt = http("GET", self.base + "/models", timeout=30)
++        data = []
++        if st == 200:
++            try:
++                data = json.loads(txt).get("data", [])
++            except (ValueError, AttributeError):
++                data = []
++        scored = []
++        for m in data:
++            mid = str(m.get("id", ""))
++            pr = m.get("pricing") or {}
++            free = mid.endswith(":free") or (str(pr.get("prompt")) in ("0", "0.0") and str(pr.get("completion")) in ("0", "0.0"))
++            outs = (m.get("architecture") or {}).get("output_modalities") or ["text"]
++            low = mid.lower()
++            if not free or outs != ["text"] or set(re.split(r"[-_./:]", low)) & self.BAN or low.startswith("openrouter/"):
++                continue
++            rank = next((i for i, t in enumerate(self.PREFER) if t in low), len(self.PREFER))
++            scored.append(((rank, -int(m.get("context_length") or 0), mid), mid))
++        ranked = [mid for _, mid in sorted(scored)][: self.max_models]
++        return ranked or list(self.DEFAULT_MODELS)
++
++
++# ============================ bộ định tuyến: ưu tiên + rơi xuống provider sau ============================
++class LLMRouter:
++    SEP = "::"
++
++    def __init__(self, order, providers, gemini=None):
++        """order: tên provider theo thứ tự ưu tiên; providers: {tên: ChatProvider}; gemini: đối tượng Gemini của make_data (hoặc None)."""
++        self.order = [n for n in order if n in providers or (n == "gemini" and gemini is not None)]
++        self.providers, self.gemini = providers, gemini
++        self.busy, self.dead, self.empty = {}, set(), {}
++
++    @classmethod
++    def split(cls, full):
++        prov, sep, model = full.partition(cls.SEP)
++        return (prov, model) if sep else ("gemini", full)
++
++    def can_search(self, full):
++        prov, model = self.split(full)
++        return prov == "gemini" and self.gemini is not None and "gemini" not in self.dead and model not in self.gemini.no_search
++
++    def generate(self, full, system, prompt, temperature=1.0, max_tokens=8192, json_mode=True, search=False):
++        prov, model = self.split(full)
++        if prov in self.dead:
++            raise ModelGone(f"{prov}: đã hết key/hạn mức trong lần chạy này")
++        if self.busy.get(full, 0.0) > time.time():
++            raise ModelBusy(full)
++        if search and not self.can_search(full):
++            raise SearchUnavailable(full)
++        try:
++            if prov == "gemini":
++                try:
++                    out = self.gemini.generate(model, system, prompt, temperature, max_tokens, json_mode, search)
++                except ModelBusy:
++                    self.busy[full] = self.gemini.busy.get(model, time.time() + 90.0)
++                    raise
++                return out
++            p = self.providers[prov]
++            try:
++                out = p.generate(model, system, prompt, temperature, max_tokens)
++            except ModelBusy:
++                self.busy[full] = p.busy.get(model, time.time() + 60.0)
++                raise
++            except Empty:
++                self.empty[full] = self.empty.get(full, 0) + 1
++                if self.empty[full] >= 3:   # model cứ trả rỗng (vd model suy luận hết token) -> bỏ model này
++                    raise ModelGone(f"{prov}/{model}: trả về rỗng liên tục")
++                raise
++            self.empty[full] = 0
++            return out
++        except QuotaOut as e:   # provider này hết sạch key/hạn mức: bỏ cả provider, make_data sẽ rơi xuống provider sau
++            self.dead.add(prov)
++            raise ModelGone(f"{prov}: {e}")
++
++
++# ============================ cào web: Exa / Linkup / Firecrawl (Tavily nằm trong make_data.py) ============================
++def join_results(base, items, label, chars=4000, need=300):
++    """items: [(tiêu đề, nội dung)] -> {'title','text','source'} hoặc None nếu quá ngắn."""
++    parts = [f"{str(t or '').strip()}: {str(c).strip()}" for t, c in items if str(c or "").strip()]
++    text = "\n".join(parts)[:chars]
++    return {"title": base, "text": text, "source": label} if len(text) >= need else None
++
++
++class KeyedSearch:
++    label, DEAD = "?", (401, 402, 403)
++
++    def __init__(self, keys, base, delay=0.3):
++        self.keys = [{"k": k, "cool": 0.0, "dead": False, "n429": 0} for k in keys]
++        self.base, self.delay, self.fails, self.calls = base.rstrip("/"), delay, 0, 0
++
++    @property
++    def available(self):
++        return any(not k["dead"] for k in self.keys) and self.fails < 5
++
++    def _body(self, query):
++        raise NotImplementedError
++
++    def _request(self, key, body):   # -> (status, text)
++        raise NotImplementedError
++
++    def _parse(self, txt):           # -> [(tiêu đề, nội dung)]
++        raise NotImplementedError
++
++    def fetch(self, base, query):
++        body = self._body(query)
++        for _ in range(len(self.keys) * 2 + 1):
++            alive = [k for k in self.keys if not k["dead"] and k["cool"] <= time.time()]
++            if not alive:
++                break
++            key = random.choice(alive)
++            time.sleep(self.delay)
++            self.calls += 1
++            st, txt = self._request(key["k"], body)
++            if st == 200:
++                key["n429"] = 0
++                try:
++                    items = self._parse(txt)
++                except (ValueError, TypeError, AttributeError, KeyError):
++                    items = []
++                doc = join_results(base, items, self.label)
++                if doc:
++                    self.fails = 0
++                return doc
++            if st in self.DEAD:   # key sai / hết tín dụng -> bỏ key này
++                key["dead"] = True
++                print(f"  ⚠ {self.label}: key ...{key['k'][-4:]} bị từ chối/hết hạn mức ({st}), bỏ key này", flush=True)
++                continue
++            if st == 429:
++                key["cool"] = time.time() + 20
++                key["n429"] += 1
++                if key["n429"] >= 3:   # 429 liên tiếp = rất có thể hết hạn mức gói
++                    key["dead"] = True
++                    print(f"  ⚠ {self.label}: key ...{key['k'][-4:]} bị 429 liên tục, bỏ key này", flush=True)
++                continue
++            self.fails += 1
++            break
++        return None
++
++
++class Exa(KeyedSearch):
++    label = "Exa"
++
++    def __init__(self, keys, base="https://api.exa.ai", delay=0.3):
++        super().__init__(keys, base, delay)
++
++    def _body(self, query):
++        return {"query": query, "numResults": 5, "type": "auto", "contents": {"text": {"maxCharacters": 1200}}}
++
++    def _request(self, key, body):
++        return http("POST", self.base + "/search", {"x-api-key": key}, body, timeout=40)
++
++    def _parse(self, txt):
++        return [(r.get("title"), r.get("text")) for r in json.loads(txt).get("results", [])]
++
++
++class Linkup(KeyedSearch):
++    label = "Linkup"
++
++    def __init__(self, keys, base="https://api.linkup.so/v1", delay=0.3):
++        super().__init__(keys, base, delay)
++
++    def _body(self, query):
++        return {"q": query, "depth": "standard", "outputType": "searchResults"}
++
++    def _request(self, key, body):
++        return http("POST", self.base + "/search", {"Authorization": "Bearer " + key}, body, timeout=40)
++
++    def _parse(self, txt):
++        return [(r.get("name") or r.get("title"), r.get("content")) for r in json.loads(txt).get("results", [])]
++
++
++class Firecrawl(KeyedSearch):
++    label = "Firecrawl"
++
++    def __init__(self, keys, base="https://api.firecrawl.dev/v1", delay=0.3):
++        super().__init__(keys, base, delay)
++
++    def _body(self, query):
++        return {"query": query, "limit": 3, "lang": "vi", "country": "vn", "scrapeOptions": {"formats": ["markdown"]}}
++
++    def _request(self, key, body):
++        st, txt = http("POST", self.base + "/search", {"Authorization": "Bearer " + key}, body, timeout=60)
++        if st == 400 and ("lang" in body or "country" in body):   # bản API không nhận lang/country -> thử lại không có
++            st, txt = http("POST", self.base + "/search", {"Authorization": "Bearer " + key}, {k: v for k, v in body.items() if k not in ("lang", "country")}, timeout=60)
++        return st, txt
++
++    @staticmethod
++    def _clean(md):
++        md = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md or "")             # bỏ ảnh
++        md = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", md)                # [chữ](link) -> chữ
++        md = re.sub(r"[#*_>`|]+", " ", md)
++        return re.sub(r"\s+", " ", md).strip()[:1200]
++
++    def _parse(self, txt):
++        data = json.loads(txt).get("data", [])
++        if isinstance(data, dict):   # bản v2: {"web": [...]}
++            data = data.get("web", [])
++        return [(r.get("title"), self._clean(r.get("markdown")) or r.get("description")) for r in data]
++
++
++class WebChain:
++    """Chuỗi cào web theo thứ tự ưu tiên (mặc định Tavily -> Exa -> Linkup -> Firecrawl). Cùng một truy vấn được thử lần lượt qua từng nguồn."""
++
++    def __init__(self, sources, make_query):
++        self.sources, self.make_query = list(sources), make_query
++
++    @property
++    def available(self):
++        return any(s.available for s in self.sources)
++
++    @property
++    def calls(self):
++        return sum(s.calls for s in self.sources)
++
++    def doc(self, topic):
++        base, query = self.make_query(topic)
++        for s in self.sources:
++            if not s.available:
++                continue
++            d = s.fetch(base, query)
++            if d:
++                return d
++        return None
+diff --git a/test_make_data.py b/test_make_data.py
+index 6bf418a..cf767ae 100644
+--- a/test_make_data.py
++++ b/test_make_data.py
+@@ -10,7 +10,7 @@ sys.path.insert(0, HERE)
+ from data_layout import size_tag, params_from_arch, pick_prefix  # noqa: E402
+ 
+ COUNTER = {"n": 0, "search_calls": 0, "wiki_calls": 0, "tavily_ok": 0, "tavily_bad": 0}
+-STATE = {"search_supported": True, "daily_block": None, "overload": None}
++STATE = {"search_supported": True, "daily_block": None, "overload": None, "fail": {}}   # fail: {"cohere": (429, {...}), ...} ép provider/nguồn trả lỗi
+ VI = "Hà Nội là thủ đô của nước Việt Nam, nơi có nhiều hồ nước và những con phố cổ rất đặc sắc, thu hút đông đảo du khách mỗi năm. "
+ 
+ 
+@@ -19,6 +19,17 @@ def vi_paragraph(i):
+             f"Mỗi người một việc, tiếng cười nói rộn ràng khắp ngõ nhỏ và mùi cà phê thơm lừng lan tỏa trong không khí buổi mai {i}.")
+ 
+ 
++def llm_text(prompt, n):
++    """Nội dung 'mô hình' giả: hội thoại JSON / đoạn văn pretrain / câu trả lời restyle."""
++    if '"question"' in prompt and "old_answer" in prompt:   # restyle
++        items = [json.loads(ln) for ln in prompt.split("Các câu:\n")[1].split("\n\nTrả về")[0].splitlines() if ln.strip().startswith("{")]
++        return json.dumps([{"i": it["i"], "answer": f"Yui đáp lại {it['i']} nè ùi."} for it in items], ensure_ascii=False)
++    if "hội thoại" in prompt:
++        convs = [{"messages": [{"role": "user", "content": f"Câu hỏi số {n}-{k} về chủ đề này là gì vậy?"}, {"role": "assistant", "content": f"Yui trả lời ngắn nè {n}-{k} ùi."}]} for k in range(10)]
++        return json.dumps(convs, ensure_ascii=False)
++    return "\n===\n".join(vi_paragraph(n * 100 + k) for k in range(5))
++
++
+ class Fake(BaseHTTPRequestHandler):
+     def log_message(self, *a):
+         pass
+@@ -29,6 +40,15 @@ class Fake(BaseHTTPRequestHandler):
+ 
+     def do_GET(self):
+         u = urlparse(self.path)
++        if u.path == "/cohere/v2/models":
++            return self._send(200, {"models": [{"name": "command-a-03-2025"}, {"name": "command-r-08-2024"}]})
++        if u.path == "/or/models":
++            free = {"prompt": "0", "completion": "0"}
++            return self._send(200, {"data": [
++                {"id": "google/gemma-3-27b-it:free", "pricing": free, "context_length": 8000, "architecture": {"output_modalities": ["text"]}},
++                {"id": "meta-llama/llama-3.3-70b-instruct:free", "pricing": free, "context_length": 131072, "architecture": {"output_modalities": ["text"]}},
++                {"id": "vendor/paid-model", "pricing": {"prompt": "0.001", "completion": "0.002"}, "architecture": {"output_modalities": ["text"]}},
++                {"id": "vendor/image-gen:free", "pricing": free, "architecture": {"output_modalities": ["text", "image"]}}]})
+         if u.path.endswith("/models"):
+             return self._send(200, {"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]}, {"name": "models/gemini-3.0-flash", "supportedGenerationMethods": ["generateContent"]}]})
+         if u.path == "/w/api.php":   # Wikipedia giả
+@@ -42,6 +62,28 @@ class Fake(BaseHTTPRequestHandler):
+ 
+     def do_POST(self):
+         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
++        for pre, name in (("/cohere/", "cohere"), ("/or/", "openrouter"), ("/mistral/", "mistral")):   # LLM giả của 3 provider mới
++            if self.path.startswith(pre):
++                COUNTER[name] = COUNTER.get(name, 0) + 1
++                if name in STATE["fail"]:
++                    return self._send(*STATE["fail"][name])
++                prompt = body["messages"][-1]["content"]
++                COUNTER["n"] += 1
++                text = llm_text(prompt, COUNTER["n"])
++                if name == "cohere":   # Cohere giả bọc ```json để thử json_slice
++                    text = "Đây nè:\n```json\n" + text + "\n```" if text.lstrip().startswith("[") else text
++                    return self._send(200, {"message": {"content": [{"type": "text", "text": text}]}})
++                return self._send(200, {"choices": [{"message": {"content": text}}]})
++        for pre, name in (("/exa/", "exa"), ("/linkup/", "linkup"), ("/fire/", "firecrawl")):   # nguồn cào web giả
++            if self.path.startswith(pre):
++                COUNTER[name] = COUNTER.get(name, 0) + 1
++                if name in STATE["fail"]:
++                    return self._send(*STATE["fail"][name])
++                if name == "exa":
++                    return self._send(200, {"results": [{"title": f"Exa {i}", "text": VI * 2} for i in range(3)]})
++                if name == "linkup":
++                    return self._send(200, {"results": [{"type": "text", "name": f"Linkup {i}", "url": "u", "content": VI * 2} for i in range(3)]})
++                return self._send(200, {"success": True, "data": [{"title": f"FC {i}", "markdown": "# Tiêu đề\n![ảnh](http://x/y.png)\n[liên kết](http://x) " + VI * 2} for i in range(3)]})
+         if self.path.endswith("/search"):   # Tavily giả
+             if self.headers.get("Authorization") == "Bearer bad":
+                 COUNTER["tavily_bad"] += 1
+@@ -59,14 +101,10 @@ class Fake(BaseHTTPRequestHandler):
+             return self._send(400, {"error": {"message": "google_search tool is not supported for this model"}})
+         if has_tool:
+             COUNTER["search_calls"] += 1
+-        COUNTER["n"] += 1; n = COUNTER["n"]
+-        if "hội thoại" in prompt:
+-            convs = [{"messages": [{"role": "user", "content": f"Câu hỏi số {n}-{k} về chủ đề này là gì vậy?"}, {"role": "assistant", "content": f"Yui trả lời ngắn nè {n}-{k} ùi."}]} for k in range(10)]
+-            text = json.dumps(convs, ensure_ascii=False)
+-            if has_tool:
+-                text = "Đây là kết quả:\n```json\n" + text + "\n```"
+-        else:
+-            text = "\n===\n".join(vi_paragraph(n * 100 + k) for k in range(5))
++        COUNTER["n"] += 1; n = COUNTER["n"]; COUNTER["gemini"] = COUNTER.get("gemini", 0) + 1
++        text = llm_text(prompt, n)
++        if has_tool and text.lstrip().startswith("["):
++            text = "Đây là kết quả:\n```json\n" + text + "\n```"
+         self._send(200, {"candidates": [{"content": {"parts": [{"text": text}]}}]})
+ 
+ 
+@@ -257,3 +295,163 @@ def test_estimate_minutes_scales_with_model_size():
+     import make_data
+     a, b, c = (make_data.estimate_minutes(make_data.parse_count(x), 9) for x in ("50M", "1B", "10B"))
+     assert a <= b <= c and make_data.estimate_minutes(1e9, 1) >= make_data.estimate_minutes(1e9, 9)
++
++
++# ============================ chuỗi LLM: Cohere -> OpenRouter -> Mistral -> Gemini ============================
++def chain_env(server, **extra):
++    base = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", COHERE_API_KEY1="c1", OPENROUTER_API_KEY1="o1", MISTRAL_API_KEY1="m1",
++                COHERE_BASE=server + "/cohere", OPENROUTER_BASE=server + "/or", MISTRAL_BASE=server + "/mistral",
++                COHERE_RPM="600", OPENROUTER_RPM="600", MISTRAL_RPM="600", GEMINI_RPM="600", MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10",
++                DATA_KINDS="finetune", WEB_SEARCH="off", LLM_ORDER="", SCRAPE_ORDER="")
++    base.update(extra)
++    return base
++
++
++def reset(**kw):
++    for k in ("cohere", "openrouter", "mistral", "gemini", "exa", "linkup", "firecrawl", "tavily_ok"):
++        COUNTER[k] = 0
++    STATE["fail"] = dict(kw)
++
++
++def auto_run(server, tmp_path, env, extra=()):
++    return run(["auto", "--api_base", server, "--wiki_base", server, "--tavily_base", server, "--out_dir", str(tmp_path / "o"), *extra], env, tmp_path / "repo")
++
++
++def test_cohere_is_first_and_nothing_else_is_called(server, tmp_path):
++    reset()
++    out = auto_run(server, tmp_path, chain_env(server, DATA_KINDS="finetune,pretrain", PRETRAIN_TOKENS="3k", PRETRAIN_PER_FILE="5"))
++    fs = files(tmp_path / "repo")
++    assert COUNTER["cohere"] > 0 and COUNTER["openrouter"] == 0 and COUNTER["mistral"] == 0 and COUNTER["gemini"] == 0, out
++    assert "Fine-tune/50M/1.txt" in fs and any(f.startswith("data/50M/") for f in fs), (out, fs)   # cả fine-tune lẫn data train đều qua chuỗi mới
++    assert "Cohere -> OpenRouter -> Mistral -> Gemini" in out and "1 key Cohere, 1 key OpenRouter, 1 key Mistral, 1 key Gemini" in out, out
++
++
++def test_model_ranking_dry_run_lists_every_provider_in_order(server, tmp_path):
++    reset()
++    out = run(["finetune", "--dry_models", "--api_base", server], chain_env(server), tmp_path / "repo")
++    line = next(ln for ln in out.splitlines() if "Thứ hạng" in ln)
++    order = [line.index(x) for x in ("cohere::command-a-03-2025", "openrouter::meta-llama/llama-3.3-70b-instruct:free", "mistral::mistral-large-latest", "gemini::gemini-3.0-flash")]
++    assert order == sorted(order), line
++    assert "command-r-plus" not in line and "paid-model" not in line and "image-gen" not in line, line   # model không có trong danh sách / không miễn phí / sinh ảnh bị loại
++    assert line.index("llama-3.3-70b") < line.index("gemma-3-27b"), line                                   # họ model ưa thích đứng trước dù context ngắn hơn
++
++
++def test_falls_through_every_provider_down_to_gemini(server, tmp_path):
++    reset(cohere=(429, {"message": "You are using a Trial key, which is limited to 1000 API calls / month."}),
++          openrouter=(429, {"error": {"message": "Rate limit exceeded: free-models-per-day"}}),
++          mistral=(401, {"message": "Unauthorized"}))
++    out = auto_run(server, tmp_path, chain_env(server))
++    assert COUNTER["cohere"] == 1 and COUNTER["openrouter"] == 1 and COUNTER["mistral"] == 1 and COUNTER["gemini"] > 0, out   # mỗi provider hỏng chỉ bị thử đúng 1 lần rồi bỏ cả provider
++    assert "Fine-tune/50M/1.txt" in files(tmp_path / "repo") and "hết hạn mức dài hạn" in out, out
++
++
++def test_rate_limited_provider_spills_over_instead_of_waiting(server, tmp_path):
++    reset(cohere=(429, {"message": "Too many requests, please wait before trying again."}))
++    out = auto_run(server, tmp_path, chain_env(server))
++    assert COUNTER["openrouter"] > 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
++    assert "⏳ cohere" not in out, out   # không đứng chờ 30s rồi mới sang provider kế
++
++
++def test_llm_order_env_reorders_and_unknown_names_are_ignored(server, tmp_path):
++    reset()
++    out = auto_run(server, tmp_path, chain_env(server, LLM_ORDER="gemini,bogus,cohere"))
++    assert COUNTER["gemini"] > 0 and COUNTER["cohere"] == 0 and "Gemini -> Cohere" in out and "bogus" in out, out
++
++
++def test_works_with_only_cohere_key_and_without_gemini(server, tmp_path):
++    reset()
++    out = auto_run(server, tmp_path, chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1=""))
++    assert COUNTER["cohere"] > 0 and COUNTER["gemini"] == 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
++
++
++def test_no_llm_key_at_all_exits_with_clear_message(server, tmp_path):
++    e = {**os.environ, **chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1="", COHERE_API_KEY1=""), "HF_TOKEN": "x", "DATA_REPO_DIR": str(tmp_path / "repo")}
++    r = subprocess.run([sys.executable, os.path.join(HERE, "make_data.py"), "auto", "--out_dir", str(tmp_path / "o")], env=e, capture_output=True, text=True, timeout=60)
++    assert r.returncode != 0 and "COHERE_API_KEY1" in (r.stdout + r.stderr)
++
++
++def test_restyle_goes_through_the_chain(server, tmp_path):
++    reset()
++    src = tmp_path / "src.jsonl"
++    src.write_text("\n".join(json.dumps({"messages": [{"role": "user", "content": f"Câu hỏi cũ số {i} là gì thế nhỉ"}, {"role": "assistant", "content": "Dạ em là siêu trợ lý."}]}, ensure_ascii=False) for i in range(25)), encoding="utf-8")
++    out = run(["restyle", "--source_file", str(src), "--files", "1", "--per_file", "10", "--batch", "12", "--tag", "50M", "--api_base", server, "--out_dir", str(tmp_path / "o"),
++               "--repo_dir", str(tmp_path / "repo")], chain_env(server), tmp_path / "repo")
++    assert COUNTER["cohere"] >= 1 and COUNTER["gemini"] == 0 and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), out
++    assert "Yui đáp lại" in open(tmp_path / "repo" / "Fine-tune" / "50M" / "1.txt", encoding="utf-8").read()
++
++
++def test_make_for_training_runs_with_only_a_non_gemini_key(server, tmp_path):
++    reset()
++    code = "import make_data; print('RESULT', make_data.make_for_training(49_900_000, '50M', 'x/y', 'dataset', 'finetune', 5))"
++    e = {**os.environ, **chain_env(server, GEMINI_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1=""), "DATA_REPO_DIR": str(tmp_path / "repo"), "HF_TOKEN": "x", "PYTHONPATH": HERE}
++    r = subprocess.run([sys.executable, "-c", code], env=e, capture_output=True, text=True, timeout=120, cwd=tmp_path)
++    assert "RESULT True" in r.stdout and "Fine-tune/50M/1.txt" in files(tmp_path / "repo"), r.stdout + r.stderr
++
++
++# ============================ chuỗi cào web: Tavily -> Exa -> Linkup -> Firecrawl ============================
++def scrape_env(server, **extra):
++    e = dict(WEB_SEARCH="tavily", TAVILY_API_KEY1="bad", EXA_API_KEY1="e1", LINKUP_API_KEY1="l1", FIRECRAWL_API_KEY1="f1",
++             EXA_BASE=server + "/exa", LINKUP_BASE=server + "/linkup", FIRECRAWL_BASE=server + "/fire",
++             GEMINI_API_KEY1="g1", COHERE_API_KEY1="", OPENROUTER_API_KEY1="", MISTRAL_API_KEY1="")
++    e.update(extra)
++    return chain_env(server, **e)
++
++
++def test_scrape_chain_tavily_dead_falls_to_exa(server, tmp_path):
++    reset()
++    COUNTER["tavily_bad"] = 0
++    out = auto_run(server, tmp_path, scrape_env(server))
++    assert COUNTER["tavily_bad"] >= 1 and COUNTER["exa"] >= 1 and COUNTER["linkup"] == 0 and COUNTER["firecrawl"] == 0, out
++    assert "nguồn: Exa" in out and "1 key Tavily, 1 key Exa, 1 key Linkup, 1 key Firecrawl" in out, out
++
++
++def test_scrape_chain_reaches_linkup_then_firecrawl(server, tmp_path):
++    reset(exa=(402, {"error": "no credits"}))
++    out = auto_run(server, tmp_path, scrape_env(server))
++    assert COUNTER["exa"] >= 1 and COUNTER["linkup"] >= 1 and COUNTER["firecrawl"] == 0 and "nguồn: Linkup" in out, out
++    reset(exa=(402, {"error": "no credits"}), linkup=(401, {"error": "bad key"}))
++    out2 = auto_run(server, tmp_path / "b", scrape_env(server))
++    assert COUNTER["firecrawl"] >= 1 and "nguồn: Firecrawl" in out2, out2
++    assert "Fine-tune/50M/1.txt" in files(tmp_path / "b" / "repo")
++
++
++def test_scrape_order_env_and_all_sources_down_falls_back_to_wikipedia(server, tmp_path):
++    reset()
++    out = auto_run(server, tmp_path, scrape_env(server, SCRAPE_ORDER="firecrawl,linkup"))
++    assert COUNTER["firecrawl"] >= 1 and COUNTER["exa"] == 0 and "nguồn: Firecrawl" in out, out
++    reset(exa=(402, {}), linkup=(401, {}), firecrawl=(402, {}))
++    out2 = auto_run(server, tmp_path / "c", scrape_env(server, WEB_SEARCH="both"))
++    assert "Wikipedia" in out2 and "Fine-tune/50M/1.txt" in files(tmp_path / "c" / "repo"), out2
++
++
++def test_firecrawl_markdown_is_cleaned_and_v2_shape_is_read():
++    import providers
++    fc = providers.Firecrawl(["k"])
++    items = fc._parse(json.dumps({"data": {"web": [{"title": "T", "markdown": "# Tiêu đề\n![a](http://x/y.png)\n[liên kết](http://x) nội dung **đậm**"}]}}))
++    assert items == [("T", "Tiêu đề liên kết nội dung đậm")]
++
++
++# ============================ router (không cần mạng) ============================
++def test_router_drops_whole_provider_on_quota_and_model_on_repeated_empty():
++    import providers as P
++
++    class Dummy(P.ChatProvider):
++        name = "dummy"
++        def __init__(self, behaviour):
++            super().__init__(["k"], "http://x", ["m1", "m2"]); self.behaviour = behaviour
++        def generate(self, model, system, prompt, temperature=1.0, max_tokens=4096):
++            raise self.behaviour
++
++    r = P.LLMRouter(["dummy"], {"dummy": Dummy(P.QuotaOut("hết"))})
++    with pytest.raises(P.ModelGone):
++        r.generate("dummy::m1", "s", "p")
++    assert "dummy" in r.dead
++    with pytest.raises(P.ModelGone):      # provider đã chết: loại ngay, không gọi lại
++        r.generate("dummy::m2", "s", "p")
++    r2 = P.LLMRouter(["dummy"], {"dummy": Dummy(P.Empty("rỗng"))})
++    for _ in range(2):
++        with pytest.raises(P.Empty):
++            r2.generate("dummy::m1", "s", "p")
++    with pytest.raises(P.ModelGone):      # lần thứ 3 rỗng liên tiếp -> bỏ model
++        r2.generate("dummy::m1", "s", "p")
++    assert not r2.can_search("dummy::m1")  # google_search chỉ có ở Gemini
+diff --git a/train_lm.py b/train_lm.py
+index 4a3d0bb..2aaf79b 100644
+--- a/train_lm.py
++++ b/train_lm.py
+@@ -329,7 +329,7 @@ def main(args):
+     n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
+     heads = cfg0.get("heads") or (4 if cfg0 else (args.heads or heads_for(d)))   # checkpoint cũ không ghi heads = 4; model mới tự chọn để mỗi head <= 128 chiều
+     custom = args.size not in PRESETS
+-    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key Gemini; không có thì bỏ qua)
++    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key của ít nhất 1 provider LLM: Cohere/OpenRouter/Mistral/Gemini; không có thì bỏ qua)
+         if os.path.exists(os.path.join(args.out, "data.pt")):
+             print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
+         else:
+@@ -483,9 +483,9 @@ if __name__ == "__main__":
+     ap.add_argument("--vocab", type=int, default=16000)
+     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
+     ap.add_argument("--size", default="small", help="small | medium | large, hoặc số tham số muốn có, vd 50M, 120M, 1.2B (tự chọn d/lớp/expert và tự tạo data hợp cỡ model)")
+-    ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key Gemini")
++    ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key LLM (Cohere/OpenRouter/Mistral/Gemini)")
+     ap.add_argument("--make_data_kinds", default="finetune,pretrain", help="loại data tạo trước khi train")
+-    ap.add_argument("--make_data_minutes", default="auto", help="tối đa bao nhiêu phút cho bước tạo data; auto = tự tính theo số tham số model và số key Gemini")
++    ap.add_argument("--make_data_minutes", default="auto", help="tối đa bao nhiêu phút cho bước tạo data; auto = tự tính theo số tham số model và số key LLM")
+     ap.add_argument("--d", type=int, default=0)
+     ap.add_argument("--layers", type=int, default=0)
+     ap.add_argument("--experts", type=int, default=0)
