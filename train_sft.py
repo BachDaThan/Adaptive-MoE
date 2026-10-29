@@ -285,6 +285,14 @@ def main(args):
     except Exception as ex:  # noqa: BLE001
         print(f"[sft] bỏ qua bước thử câu ({str(ex)[:80]})", flush=True)
 
+    card = []
+    try:
+        import model_card
+        model_card.write(args.out, model_card.sft_card(args.out_name or os.path.basename(os.path.normpath(args.out)), args.src or "không rõ", cfg,
+                         dict(files=files, n_train=len(train), n_val=len(val), best_val=best[0], best_epoch=best[1], base_step=base_step, before_val=r0[2])))
+        card = ["README.md"] if args.sft_dir else []   # sft_dir rỗng = kiểu cũ ở gốc repo: không đẩy README để khỏi đè README chung
+    except Exception as ex:  # noqa: BLE001
+        print(f"[sft] bỏ qua README.md ({str(ex)[:80]})", flush=True)
     if not args.no_push and not args.local:
         push = ["sft_best.pt", STATE]
         if args.sft_dir:   # thư mục fine-tune tự đủ bộ: config (đã đổi tên) + tokenizer + trọng số
@@ -293,7 +301,7 @@ def main(args):
             c["name"], c["base_model"] = args.out_name, args.src
             json.dump(c, open(cp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
             push = ["config.json", "tokenizer.json"] + push
-        hf_push(args, push, subdir=args.sft_dir)
+        hf_push(args, push + card, subdir=args.sft_dir)
 
 
 if __name__ == "__main__":

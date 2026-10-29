@@ -64,6 +64,17 @@ def hf_pull(args, files, subdir=None):
             print(f"[train] không tải được {fn} từ Hugging Face ({str(e)[:70]})", flush=True)
 
 
+def card_files(args, cfg, step, best):
+    """Viết README.md RIÊNG của model vào thư mục out; trả ['README.md'] để đẩy kèm khi model có thư mục riêng trên HF (models/<tên>/), nếu không thì [] (tránh ghi đè README chung ở gốc repo)."""
+    try:
+        import model_card
+        model_card.write(args.out, model_card.pretrain_card(cfg, step, args.steps, best, getattr(args, "data_repo", None) or args.hf_repo, getattr(args, "_tag", None), args.name))
+        return ["README.md"] if getattr(args, "hf_dir", "") else []
+    except Exception as e:  # noqa: BLE001
+        print(f"[train] bỏ qua README.md ({str(e)[:80]})", flush=True)
+        return []
+
+
 def hf_push(args, files, subdir=None):
     if not args.hf_repo:
         return
@@ -374,6 +385,7 @@ def main(args):
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
     hf_push(args, ["config.json", "tokenizer.json"] + (["data.pt"] if step == 0 or CTX.get("data_built") else []))
     if step >= args.steps:
+        hf_push(args, card_files(args, cfg, step, best))   # model đã train xong từ trước: bổ sung README.md nếu chưa có
         print(f"[train] last.pt đang ở bước {step} >= --steps {args.steps}, tức là đã train xong ({'val tốt nhất %.4f ở bước %d' % best}). "
               f"Muốn train tiếp thì tăng --steps (vd {2 * args.steps}); lịch learning rate sẽ co giãn theo --steps mới.", flush=True)
         return
@@ -387,7 +399,7 @@ def main(args):
 
     def finish():
         save_last()
-        hf_push(args, ["last.pt", "best.pt"])
+        hf_push(args, ["last.pt", "best.pt"] + card_files(args, cfg, step, best))
     CTX["on_exit"] = finish
     state = {"amp": amp}
     while step < args.steps:

@@ -16,6 +16,7 @@ v1 (f32, int8): như cũ, engine nào cũng đọc được. v2 (q4, q4all): sau
 giá trị = (nibble - 8) * hệ số. Ghi: toàn bộ hệ số fp16 của ma trận, rồi toàn bộ byte 4-bit. Router/LayerNorm luôn float32.
 q4 chỉ lượng tử expert (chiếm ~85% tham số) và giữ attention + embedding + head ở int8: nhỏ hơn int8 khoảng 1/3, chất lượng gần như int8.
 """
+import re
 import argparse, json, os, struct, unicodedata
 import numpy as np
 
@@ -242,6 +243,15 @@ def main():
     stats = {}
     n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats)
     print(f"đã ghi {dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}" + (f", tên model: {cfg['name']}" if cfg.get("name") else ""))
+    try:   # README riêng cho model này, nằm cạnh file .yui: <tên>.README.md (gom các bản q8/q4/... cùng tên)
+        import model_card
+        folder = os.path.dirname(os.path.abspath(dst))
+        base = re.sub(r"_(f32|int8|q8|q4all|q4)\.yui$", "", os.path.basename(dst))
+        if os.path.basename(dst) != base:
+            model_card.write(folder, model_card.yui_card(folder, base, cfg, a.out, ck), name=f"{base}.README.md")
+            print(f"đã ghi {base}.README.md cạnh file .yui")
+    except Exception as e:  # noqa: BLE001
+        print(f"bỏ qua README ({str(e)[:80]})")
     if stats:
         tot_e = sum(v[0] for v in stats.values()); tot_n = sum(v[1] for v in stats.values())
         print(f"sai số lượng tử hoá 4-bit (căn bậc hai tỉ lệ năng lượng): tổng {100 * (tot_e / max(tot_n, 1e-12)) ** 0.5:.2f}%  "
