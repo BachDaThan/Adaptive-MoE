@@ -239,6 +239,7 @@ class Publisher:
 # ============================ Gemini (REST) ============================
 class ModelGone(Exception): pass
 class Transient(Exception): pass
+class ModelBusy(Exception): pass   # model đang quá tải (HTTP 503...): thử model khác, quay lại sau
 class Empty(Exception): pass
 class QuotaOut(Exception): pass
 class SearchUnavailable(Exception): pass   # model/gói này không dùng được công cụ google_search
@@ -250,6 +251,7 @@ class Gemini:
         self.keys = [{"k": k, "cool": 0.0, "last": 0.0, "dead": False, "mcool": {}} for k in keys]
         self.base, self.gap, self.max_wait = base.rstrip("/"), 60.0 / max(rpm, 0.1), max_wait
         self.no_system, self.no_json, self.no_search = set(), set(), set()
+        self.busy = {}   # model -> thời điểm hết quá tải
 
     def _http(self, method, url, key, body=None):
         req = urllib.request.Request(url, method=method, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -302,6 +304,8 @@ class Gemini:
 
     def generate(self, model, system, prompt, temperature=1.0, max_tokens=8192, json_mode=True, search=False):
         trans = 0
+        if self.busy.get(model, 0.0) > time.time():
+            raise ModelBusy(model)
         if search and model in self.no_search:
             raise SearchUnavailable(model)
         for _ in range(12 + 3 * len(self.keys)):
@@ -343,10 +347,13 @@ class Gemini:
                     print(f"  ↻ 429: key ...{key['k'][-4:]} nghỉ {float(m.group(1)) + 1 if m else 30:.0f}s với {model}", flush=True)
                 continue
             if st in (500, 502, 503, 504, 599):
+                # 503 = model đang quá tải ở phía Google (không phải lỗi key): nghỉ có xáo trộn, thử key khác; 3 lần liền thì coi model đang bận -> đổi model
                 trans += 1
-                if trans > 4:
-                    raise Transient(f"HTTP {st}")
-                time.sleep(2 ** trans)
+                key["mcool"][model] = time.time() + min(60.0, 6.0 * 2 ** trans) * random.uniform(0.7, 1.3)
+                if trans >= 3:
+                    self.busy[model] = time.time() + 90.0 * random.uniform(0.8, 1.5)
+                    print(f"  ⏸ {model} đang quá tải (HTTP {st}) -> tạm đổi model ~90s", flush=True)
+                    raise ModelBusy(model)
                 continue
             if st == 400:
                 if any(s in low for s in ("system instruction", "systeminstruction", "developer instruction")) and model not in self.no_system:
@@ -449,13 +456,17 @@ class Wiki:
                 letters = sum(c.isalpha() for c in t)
                 if len(t) >= 500 and letters > 0.6 * len(t) * 0.8:
                     self.fails = 0
-                    return {"title": title, "text": t}
+                    return {"title": title, "text": t, "source": "Wikipedia"}
         except Exception as e:  # noqa: BLE001
             self.fails += 1
             if not self.warned:
                 self.warned = True
                 print(f"  ⚠ không lấy được Wikipedia ({str(e)[:80]}); sẽ thử nguồn khác", flush=True)
         return None
+
+
+QUERY_ANGLES = ["là gì", "cách làm", "mẹo hay", "ở Việt Nam", "giải thích đơn giản", "lịch sử", "ví dụ", "so sánh", "lưu ý", "câu hỏi thường gặp",
+                "nguyên nhân", "lợi ích", "sai lầm thường gặp", "cho người mới", "ngày nay", "ý nghĩa"]
 
 
 class Tavily:
@@ -482,7 +493,8 @@ class Tavily:
 
     def doc(self, topic):
         """Trả {'title','text'} từ các kết quả tìm kiếm của chủ đề, hoặc None."""
-        query = topic or "kiến thức đời sống thú vị"
+        base = topic or random.choice(["kiến thức đời sống", "mẹo vặt hữu ích", "sự thật thú vị", "kiến thức khoa học cơ bản", "văn hoá Việt Nam", "sức khoẻ đời thường"])
+        query = f"{base} {random.choice(QUERY_ANGLES)}".strip()   # thêm "góc nhìn" để mỗi lần tìm ra trang khác nhau, không lặp một truy vấn chung chung
         body = {"query": query, "search_depth": "basic", "max_results": 5, "include_answer": False}
         for _ in range(len(self.keys) * 2 + 1):
             alive = [k for k in self.keys if not k["dead"] and k["cool"] <= time.time()]
@@ -501,7 +513,7 @@ class Tavily:
                 text = "\n".join(parts)[:4000]
                 if len(text) >= 300:
                     self.fails = 0
-                    return {"title": query, "text": text}
+                    return {"title": base, "text": text, "source": "Tavily"}
                 return None
             if st in (401, 403, 432, 433):    # key sai / hết hạn mức gói -> bỏ key này
                 key["dead"] = True
@@ -902,7 +914,7 @@ def auto(args, build_parser):
     have_tokens = int(have_chars / cpt)
     est_file_chars = (have_chars / pre_files) if pre_files else int(env("PRETRAIN_PER_FILE", "150")) * 800
     plan = make_plan(params, have_pairs, have_tokens, int(est_file_chars / cpt))
-    cap = int(env("MAX_FILES_PER_RUN", "40"))
+    cap = int(env("MAX_FILES_PER_RUN", "100000" if DEADLINE != float("inf") else "40"))   # có giới hạn thời gian thì thời gian quyết định, không phải số file
     print(f"🧭 Model: {fmt_n(params)} tham số (từ {src}) -> thư mục cỡ '{tag}': Fine-tune/{tag}/ và data/{tag}/")
     if "finetune" in kinds:
         print(f"   Fine-tune: đang có {have_pairs} cặp -> mục tiêu {plan['ft_target']} -> cần tạo thêm {plan['ft_need']} cặp "
@@ -949,7 +961,45 @@ def auto(args, build_parser):
         run(build_parser().parse_args(argv))
 
 
+class RunLock:
+    """Khoá tệp: hai tiến trình make_data cùng thư mục/chế độ không chạy chồng nhau (tránh đặt số file trùng và đốt quota gấp đôi)."""
+
+    def __init__(self, path):
+        self.path, self.f = path, None
+
+    def acquire(self):
+        try:
+            import fcntl
+        except ImportError:   # Windows: bỏ qua khoá
+            return True
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        self.f = open(self.path, "w")
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            self.f.close(); self.f = None
+            return False
+
+    def release(self):
+        if self.f:
+            self.f.close(); self.f = None
+
+
 def run(args):
+    if args.mode in ("finetune", "pretrain", "restyle"):
+        lock = RunLock(os.path.join(args.out_dir, f".lock_{args.mode}_{(args.tag or 'x').replace('/', '_')}"))
+        if not lock.acquire():
+            print(f"⚠ đang có một tiến trình make_data {args.mode} khác chạy trong '{args.out_dir}'; bỏ qua lần chạy này để không chạy chồng.", flush=True)
+            return
+        try:
+            return _run(args)
+        finally:
+            lock.release()
+    return _run(args)
+
+
+def _run(args):
     random.seed(args.seed)
     if args.mode == "check":
         check(args, LocalRepo(args.repo_dir) if args.repo_dir else (None if args.source_file else HFRepo(args.repo, args.repo_type)))
@@ -996,28 +1046,51 @@ def run(args):
         webber = WebPicker(mode, Wiki(args.wiki_base), topics, tav)
         print(f"🌐 Tìm thông tin trên internet: nguồn '{args.web}' ({len(topics)} chủ đề, xen bài ngẫu nhiên)\n", flush=True)
 
-    done_files, buf, fails = 0, [], 0
+    done_files, buf, fails, busy_since, pending = 0, [], 0, None, None
     while done_files < args.files:
         if time.time() > DEADLINE:
             print(f"⏱ Hết thời gian cho phép ({args.max_minutes:g} phút); phần đã tạo vẫn được lưu.", flush=True)
             break
-        doc, topic, use_search = (webber.pick(pool[0], gem) if webber else (None, None, False))
+        now = time.time()
+        cur = next((m for m in pool if gem.busy.get(m, 0.0) <= now), None)   # model xếp hạng cao nhất đang không bận
+        if cur is None:
+            busy_since = busy_since or now
+            if now - busy_since > 20 * 60:
+                print("❌ mọi model đều quá tải hơn 20 phút, dừng (phần đã tạo vẫn được lưu)", flush=True)
+                break
+            wait = max(5.0, min(60.0, min(gem.busy.get(m, 0.0) for m in pool) - now))
+            print(f"  ⏳ mọi model đang quá tải, chờ {wait:.0f}s rồi thử lại...", flush=True)
+            time.sleep(wait)
+            continue
+        busy_since = None
+        fresh = pending is None
+        if fresh:   # chỉ lấy tài liệu MỚI khi lần trước đã dùng xong (thử lại sau lỗi thì dùng lại tài liệu cũ, không tốn lượt Tavily/Wikipedia)
+            pending = webber.pick(cur, gem) if webber else (None, None, False)
+        doc, topic, use_search = pending
+        if use_search and cur in gem.no_search:
+            pending = None
+            continue
         shots = random.sample(pairs, min(6, len(pairs))) if pairs else []
         if args.mode == "finetune":
             system, prompt = finetune_prompt(batch, shots, doc=doc, topic=topic, search=use_search)
         else:
             system, prompt = pretrain_prompt(batch, doc=doc, topic=topic, search=use_search)
-        if doc:
-            print(f"  📖 nguồn: Wikipedia «{doc['title']}»", flush=True)
-        elif use_search:
+        if doc and fresh:
+            print(f"  📖 nguồn: {doc.get('source', 'web')} «{doc['title']}» -> {cur}", flush=True)
+        elif doc:
+            print(f"  ↻ thử lại cùng tài liệu «{doc['title']}» -> {cur}", flush=True)
+        elif use_search and fresh:
             print(f"  🔎 Gemini tự tra Google: «{topic}»", flush=True)
         try:
-            raw = gem.generate(pool[0], system, prompt, temperature=args.temperature, json_mode=(args.mode == "finetune" and not use_search), search=use_search)
+            raw = gem.generate(cur, system, prompt, temperature=args.temperature, json_mode=(args.mode == "finetune" and not use_search), search=use_search)
         except SearchUnavailable:
+            pending = None
             continue   # model này không có google_search: lần sau WebPicker tự bỏ 'search' cho model đó
+        except ModelBusy:
+            continue   # đã ghi nhận bận: vòng sau tự chọn model kế (giữ nguyên tài liệu)
         except ModelGone as e:
-            print(f"  ⚠ bỏ model {pool[0]}: {e}", flush=True)
-            pool.pop(0)
+            print(f"  ⚠ bỏ model {cur}: {e}", flush=True)
+            pool.remove(cur)
             if not pool:
                 print("❌ hết model để thử")
                 break
@@ -1029,12 +1102,13 @@ def run(args):
             if fails >= 8:
                 print("❌ lỗi liên tục, dừng (phần đã tạo vẫn được lưu)")
                 break
-            time.sleep(3)
+            time.sleep(min(30, 3 * fails))
             continue
         except QuotaOut as e:
             print(f"⛔ {e}. Dừng; phần đã tạo vẫn được lưu.", flush=True)
             break
         fails = 0
+        pending = None   # dùng xong tài liệu này
         added = 0
         if args.mode == "finetune":
             convs, _ = load_convs({"x": json_slice(raw) if use_search else strip_fence(raw)}, max_chars=200)
@@ -1112,14 +1186,26 @@ def main():
     run(args)
 
 
-def make_for_training(params, tag, repo, repo_type="dataset", kinds="finetune,pretrain", minutes=30):
+def estimate_minutes(params, n_keys, rpm=8.0, per_call=20, lo=15, hi=240):
+    """Số phút cần để tạo xong phần fine-tune theo cỡ model: mục tiêu cặp = params/2000 (kẹp 2k..100k), mỗi lượt gọi Gemini ra ~per_call cặp,
+    thông lượng ~ n_keys x rpm x 0,7 lượt/phút (hao do 429/503), cộng 30% dự phòng. Kẹp [lo, hi] phút; thiếu thì lần chạy sau tự bù tiếp."""
+    pairs = min(100_000, max(2_000, params / 2000))
+    throughput = max(1, n_keys) * rpm * 0.7
+    return int(min(hi, max(lo, math.ceil(pairs / per_call / throughput * 1.3))))
+
+
+def make_for_training(params, tag, repo, repo_type="dataset", kinds="finetune,pretrain", minutes="auto", extra_env=None):
     """Gọi từ train_lm.py: tạo (phần còn thiếu của) data cho model `params` tham số TRƯỚC khi train. Không có key Gemini thì bỏ qua, train vẫn chạy.
     Chạy bằng tiến trình con (`make_data.py auto`) nên lỗi ở đây không làm hỏng lần train."""
     load_kaggle_secrets()
     if not collect_keys("GEMINI_API_KEY"):
         print("[data] chưa có key Gemini (GEMINI_API_KEY1, GEMINI_API_KEY2, ...) nên bỏ qua bước tự tạo data; train bằng data có sẵn.", flush=True)
         return False
-    e = dict(os.environ, MODEL_PARAMS=str(int(params)), MODEL_TAG=tag, HF_REPO=repo, HF_REPO_TYPE=repo_type, DATA_KINDS=kinds)
+    if minutes in (None, "", "auto"):
+        minutes = estimate_minutes(params, len(collect_keys("GEMINI_API_KEY")), float(env("GEMINI_RPM", "8")))
+        print(f"[data] tự tính thời gian tạo data theo cỡ model {fmt_n(params)} và {len(collect_keys('GEMINI_API_KEY'))} key: {minutes} phút", flush=True)
+    minutes = float(minutes)
+    e = dict(os.environ, MODEL_PARAMS=str(int(params)), MODEL_TAG=tag, HF_REPO=repo, HF_REPO_TYPE=repo_type, DATA_KINDS=kinds, **(extra_env or {}))
     print(f"[data] tạo data cho model {fmt_n(params)} tham số (thư mục cỡ {tag}) trên {repo}, tối đa {minutes:g} phút...", flush=True)
     rc = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "auto", "--max_minutes", str(minutes)], env=e).returncode
     if rc:

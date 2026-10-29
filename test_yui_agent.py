@@ -316,3 +316,103 @@ def test_tool_data_is_valid_loadable_and_consistent(tmp_path):
         replies = iter([c[1][1], c[3][1]])
         ans, trace = ya.Agent(lambda m: next(replies), tb).run([{"role": "user", "content": c[0][1]}])
         assert ans == c[3][1] and trace[0]["result"] == c[2][1][len("<result>"):-len("</result>")]
+
+
+# ---------------- Điểm cuối MCP (HTTP, URL riêng) ----------------
+import shutil as _sh
+import urllib.request as _ur
+
+
+@pytest.fixture()
+def endpoint(tmp_path):
+    p = prof(tmp_path, endpoint={"file": str(tmp_path / "eps.json")})
+    tb = ya.endpoint_toolbox(p)
+    store = ya.EndpointStore(str(tmp_path / "eps.json"))
+    srv = ya.EndpointServer(("127.0.0.1", 0), tb, store)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv, store, f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown(); srv.server_close()
+
+
+def post(url, obj, headers=None):
+    req = _ur.Request(url, data=json.dumps(obj).encode(), headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+    try:
+        with _ur.urlopen(req, timeout=10) as r:
+            return r.status, r.read().decode()
+    except Exception as e:  # noqa: BLE001
+        return getattr(e, "code", 0), ""
+
+
+def test_endpoint_client_roundtrip_status_and_multiple_urls(endpoint):
+    srv, store, base = endpoint
+    t1, t2 = store.new("a"), store.new("b")                                         # mỗi lần mở tạo địa chỉ mới, cả hai cùng hợp lệ
+    assert store.data[t1]["connected"] is False                                     # "Chưa kết nối"
+    cli = ya.McpHttp(f"{base}/mcp/{t1}")                                            # chính client MCP của yui_agent kết nối
+    assert [t["name"] for t in cli.list_tools()] == ["calc", "search", "time"]      # mặc định chỉ công cụ ít rủi ro
+    assert cli.call("calc", {"arg": "6*7"}) == "42"
+    assert store.data[t1]["connected"] is True and store.data[t1]["client"].startswith("yui-agent")   # "Đã kết nối"
+    assert store.data[t2]["connected"] is False
+    assert ya.McpHttp(f"{base}/mcp/{t2}").call("calc", {"arg": "1+1"}) == "2"
+
+
+def test_endpoint_rejects_bad_token_host_origin_size_and_revoked(endpoint):
+    srv, store, base = endpoint
+    tok = store.new()
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    assert post(f"{base}/mcp/{tok}", msg)[0] == 200
+    assert post(f"{base}/mcp/{'A' * 32}", msg)[0] == 404                            # sai token
+    assert post(f"{base}/mcp/{tok}", msg, {"Host": "evil.example"})[0] == 403         # DNS rebinding
+    assert post(f"{base}/mcp/{tok}", msg, {"Origin": "https://evil.example"})[0] == 403
+    assert post(f"{base}/mcp/{tok}", {"x": "y" * (2 * 1024 * 1024)})[0] in (413, 0)   # server từ chối ngay khi thấy Content-Length quá lớn (client có thể bị ngắt kết nối)
+    try:
+        _ur.urlopen(f"{base}/mcp/{tok}", timeout=5)
+    except Exception as e:  # noqa: BLE001
+        assert getattr(e, "code", 0) == 405                                          # GET không hỗ trợ
+    assert store.revoke(tok[:6]) == 1
+    assert post(f"{base}/mcp/{tok}", msg)[0] == 404                                  # thu hồi xong là hết hiệu lực
+
+
+def test_endpoint_does_not_expose_risky_tools_unless_configured(endpoint, tmp_path):
+    srv, store, base = endpoint
+    tok = store.new()
+    code, body = post(f"{base}/mcp/{tok}", {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "write", "arguments": {"arg": "x.txt|1"}}})
+    assert code == 200 and json.loads(body)["result"]["isError"]
+    assert not os.path.exists(os.path.join(str(tmp_path / "ws"), "x.txt"))
+    risky = ya.endpoint_toolbox(prof(tmp_path, endpoint={"tools": ["calc", "write"]}))
+    assert "write" in risky.names()                                                  # chỉ khi người dùng tự bật
+
+
+def test_endpoint_rate_limit(tmp_path):
+    p = prof(tmp_path)
+    srv = ya.EndpointServer(("127.0.0.1", 0), ya.endpoint_toolbox(p), ya.EndpointStore(str(tmp_path / "e.json")), rate_per_min=5)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        tok = srv.store.new()
+        base = f"http://127.0.0.1:{srv.server_address[1]}/mcp/{tok}"
+        codes = [post(base, {"jsonrpc": "2.0", "id": i, "method": "ping"})[0] for i in range(8)]
+        assert codes[:5] == [200] * 5 and 429 in codes[5:]
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_mcp_presets_resolve_and_project_config_has_no_third_party_server():
+    p = ya.Profile({"workspace": "/tmp/w", "mcp": {}})
+    spec = ya.resolve_mcp_spec({"preset": "filesystem"}, p)
+    assert spec["command"][-1] == "/tmp/w" and "needs" not in spec
+    with pytest.raises(KeyError):
+        ya.resolve_mcp_spec({"preset": "nope"}, p)
+    cfg = json.load(open(os.path.join(HERE, "agent.example.json"), encoding="utf-8"))
+    assert cfg["mcp"] == {} and "prompts.chat" not in json.dumps(cfg)
+
+
+@pytest.mark.skipif(_sh.which("npx") is None, reason="cần node/npx")
+def test_real_official_mcp_server_memory_via_preset(tmp_path):
+    p = prof(tmp_path, mcp={"mem": {"preset": "memory"}}, bind={"recall": {"mcp": "mem", "tool": "search_nodes", "args": {"query": "$arg"}}})
+    tb = ya.ToolBox(p)
+    try:
+        if "mcp:mem" in tb._failed:
+            pytest.skip("không chạy được server MCP thật (thiếu mạng?): " + tb._failed["mcp:mem"])
+        assert "recall" in tb.names()
+        assert tb.call("recall", "mèo").startswith("{") or "entities" in tb.call("recall", "mèo")
+    finally:
+        tb.close()

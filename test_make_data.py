@@ -10,7 +10,7 @@ sys.path.insert(0, HERE)
 from data_layout import size_tag, params_from_arch, pick_prefix  # noqa: E402
 
 COUNTER = {"n": 0, "search_calls": 0, "wiki_calls": 0, "tavily_ok": 0, "tavily_bad": 0}
-STATE = {"search_supported": True, "daily_block": None}
+STATE = {"search_supported": True, "daily_block": None, "overload": None}
 VI = "Hà Nội là thủ đô của nước Việt Nam, nơi có nhiều hồ nước và những con phố cổ rất đặc sắc, thu hút đông đảo du khách mỗi năm. "
 
 
@@ -49,6 +49,8 @@ class Fake(BaseHTTPRequestHandler):
             COUNTER["tavily_ok"] += 1
             return self._send(200, {"results": [{"title": f"KQ {i}", "content": VI * 2} for i in range(3)]})
         prompt = body["contents"][0]["parts"][0]["text"]
+        if STATE["overload"] and STATE["overload"] in self.path:
+            return self._send(503, {"error": {"message": "The model is overloaded. Please try again later."}})
         if STATE["daily_block"] and STATE["daily_block"] in self.path:
             COUNTER["blocked"] = COUNTER.get("blocked", 0) + 1
             return self._send(429, {"error": {"message": "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 250, GenerateRequestsPerDayPerProjectPerModel-FreeTier"}})
@@ -226,3 +228,32 @@ def test_auto_tools_kind_is_free_and_opt_in(server, tmp_path):
     assert fs == ["Fine-tune/50M/1.txt", "Fine-tune/50M/2.txt", "Fine-tune/50M/3.txt"] and COUNTER["n"] == calls_before, out   # không gọi Gemini
     again = run(["auto", "--api_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
     assert "đủ mục tiêu" in again and len(files(tmp_path / "repo")) == 3
+
+
+def test_overloaded_503_switches_model_reuses_document_and_labels_source(server, tmp_path):
+    STATE["overload"] = "gemini-3.0-flash"
+    try:
+        COUNTER.update(tavily_ok=0)
+        env = dict(GEMINI_API_KEYS="", GEMINI_API_KEY1="g1", GEMINI_API_KEY2="g2", TAVILY_API_KEY1="good", MODEL_PARAMS="50M", FT_PAIRS="10", FT_PER_FILE="10",
+                   DATA_KINDS="finetune", GEMINI_RPM="600", WEB_SEARCH="tavily")
+        out = run(["auto", "--api_base", server, "--wiki_base", server, "--tavily_base", server, "--out_dir", str(tmp_path / "o")], env, tmp_path / "repo")
+    finally:
+        STATE["overload"] = None
+    assert "quá tải" in out and "nguồn: Tavily" in out and "Wikipedia" not in out, out          # nhãn nguồn đúng, không còn ghi nhầm Wikipedia
+    assert "Fine-tune/50M/1.txt" in files(tmp_path / "repo")
+    assert out.count("nguồn: Tavily") == COUNTER["tavily_ok"]                                    # thử lại sau 503 dùng lại tài liệu cũ, không gọi Tavily thêm
+
+
+def test_second_make_data_process_is_locked_out(server, tmp_path):
+    import fcntl
+    od = tmp_path / "o"; od.mkdir()
+    f = open(od / ".lock_finetune_50M", "w"); fcntl.flock(f, fcntl.LOCK_EX)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "make_data.py"), "finetune", "--tag", "50M", "--files", "1", "--api_base", server, "--out_dir", str(od),
+                        "--repo_dir", str(tmp_path / "repo")], env={**os.environ, "GEMINI_API_KEY1": "g"}, capture_output=True, text=True, timeout=60)
+    assert "đang có một tiến trình make_data" in r.stdout and files(tmp_path / "repo") == [] if os.path.exists(tmp_path / "repo") else True
+
+
+def test_estimate_minutes_scales_with_model_size():
+    import make_data
+    a, b, c = (make_data.estimate_minutes(make_data.parse_count(x), 9) for x in ("50M", "1B", "10B"))
+    assert a <= b <= c and make_data.estimate_minutes(1e9, 1) >= make_data.estimate_minutes(1e9, 9)

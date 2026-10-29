@@ -71,8 +71,10 @@ def arch_for_params(target, vocab=16000, heads=4):
     """Chọn (d, layers, experts) cho Adaptive-MoE có số tham số gần `target` nhất, hình dáng cân đối (không quá cao/mỏng).
     d chia hết cho 2*heads, experts <= 256 (giới hạn của yui.cpp). Cùng target luôn ra cùng kết quả. Vd 50M -> d=256, 6 lớp, 16 expert (đúng preset small)."""
     best = None
-    for d in range(128, 2049, 64):
-        if d % (2 * heads):
+    for d in range(128, 4097, 64):
+        try:
+            heads_for(d)
+        except ValueError:
             continue
         for layers in range(4, 41):
             ratio = d / layers
@@ -91,3 +93,36 @@ def arch_for_params(target, vocab=16000, heads=4):
 def lr_for_params(n):
     """Tốc độ học gợi ý, khớp các preset của train_lm.py (50M: 1e-3, ~250M: 6e-4, ~440M: 4e-4) và giảm dần khi model to."""
     return float(min(1.5e-3, max(1.5e-4, 1e-3 * (5e7 / max(n, 1)) ** 0.3)))
+
+
+DEFAULT_DATA_REPO = "BachDaThan/TrainAI-web"
+
+
+def heads_for(d):
+    """Số head attention cho chiều ẩn d: 4 khi d <= 512 (giữ nguyên các preset cũ), model lớn hơn thì tăng sao cho mỗi head <= 128 chiều và d chia hết cho 2*head."""
+    if d <= 512:
+        return 4
+    for h in range(4, 65):
+        if d // h <= 128 and d % (2 * h) == 0:
+            return h
+    raise ValueError(f"không chọn được số head cho d={d}")
+
+
+def find_data_repo(candidates, prefix, repo_type="dataset", api=None):
+    """Repo đầu tiên (theo thứ tự ứng viên) có file N.txt trong `prefix`. Dữ liệu và checkpoint có thể nằm ở hai repo khác nhau
+    (vd data ở BachDaThan/TrainAI-web, model ở BachDaThan/TrainAI-1B). Trả (repo, danh sách file) hoặc (None, [])."""
+    if api is None:
+        from huggingface_hub import HfApi
+        api = HfApi()
+    seen = set()
+    for repo in candidates:
+        if not repo or repo in seen:
+            continue
+        seen.add(repo)
+        try:
+            names = api.list_repo_files(repo, repo_type=repo_type)
+        except Exception:  # noqa: BLE001
+            continue
+        if has_numbered(names, prefix):
+            return repo, names
+    return None, []

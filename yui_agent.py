@@ -22,6 +22,9 @@ DÙNG
   python yui_agent.py status [--config agent.json]
   python yui_agent.py chat --url http://127.0.0.1:11434 [--config agent.json]      # model chạy bằng:  ./yui --model m.yui --serve
   python yui_agent.py mcp-server [--config agent.json]                              # MCP server (stdio)
+  python yui_agent.py mcp-http --port 8765                                          # MCP server qua "Điểm cuối MCP" (URL riêng, mỗi lần mở tạo địa chỉ mới)
+  python yui_agent.py mcp-endpoints [list|revoke <đầu_token>|revoke-all]            # xem / thu hồi các địa chỉ đã tạo
+  python yui_agent.py mcp-presets                                                   # MCP có sẵn để bật bằng {"preset": "tên"}
   python yui_agent.py tool calc "2+3*4"                                             # thử một công cụ
 Cấu hình mẫu: agent.example.json. Key Tavily (tuỳ chọn, không bắt buộc): TAVILY_API_KEY1, TAVILY_API_KEY2, ... hoặc TAVILY_API_KEYS.
 """
@@ -30,7 +33,9 @@ import ast
 import datetime
 import difflib
 import html
+import hmac
 import http.client
+import http.server
 import ipaddress
 import json
 import math
@@ -38,6 +43,7 @@ import operator
 import os
 import queue
 import re
+import secrets
 import shutil
 import socket
 import ssl
@@ -92,6 +98,7 @@ class Profile:
         self.mcp = dict(cfg.get("mcp", {}))
         self.bind = dict(cfg.get("bind", {}))
         self.expose_all_mcp = bool(cfg.get("expose_all_mcp", False))
+        self.endpoint = dict(cfg.get("endpoint", {}))
         self.wiki_base = cfg.get("wiki_base", "https://vi.wikipedia.org")
         self.tavily_base = cfg.get("tavily_base", "https://api.tavily.com")
 
@@ -421,6 +428,30 @@ def tool_write(arg, prof):
 
 
 # ============================ MCP ============================
+# MCP "thiết lập sẵn": bật bằng  "mcp": {"memory": {"preset": "memory"}}  rồi gán vào tên công cụ chuẩn bằng "bind" (hoặc "expose_all_mcp": true cho model lớn).
+# Đây là server của bên thứ ba chạy NGOÀI sandbox của yui_agent: chỉ bật cái bạn tin. Tên gói đã kiểm tra tồn tại trên npm/PyPI;
+# chạy thật đã thử với "time" và "memory" (xem test_yui_agent.py, cần mạng + node/uv).
+MCP_PRESETS = {
+    "time": {"command": ["uvx", "mcp-server-time"], "needs": "uv (pip install uv)", "about": "giờ/múi giờ (get_current_time, convert_time)"},
+    "memory": {"command": ["npx", "-y", "@modelcontextprotocol/server-memory"], "needs": "node", "about": "bộ nhớ dạng đồ thị tri thức"},
+    "filesystem": {"command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "{workspace}"], "needs": "node", "about": "đọc/ghi file trong thư mục làm việc"},
+    "sequential-thinking": {"command": ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"], "needs": "node", "about": "chia nhỏ suy luận từng bước"},
+    "tavily": {"command": ["npx", "-y", "tavily-mcp@latest"], "needs": "node + TAVILY_API_KEY", "env_pass": ["TAVILY_API_KEY"], "about": "tìm web (Tavily)"},
+}
+
+
+def resolve_mcp_spec(spec, prof):
+    spec = dict(spec)
+    if "preset" in spec:
+        if spec["preset"] not in MCP_PRESETS:
+            raise KeyError(f"không có preset MCP '{spec['preset']}' (có: {', '.join(MCP_PRESETS)})")
+        base = dict(MCP_PRESETS[spec.pop("preset")])
+        base.pop("needs", None); base.pop("about", None)
+        base.update(spec)
+        spec = base
+    if "command" in spec:
+        spec["command"] = [c.replace("{workspace}", prof.workspace) for c in spec["command"]]
+    return spec
 class McpError(Exception):
     pass
 
@@ -437,8 +468,13 @@ def _jsonrpc_text(result):
 class McpStdio:
     """Client MCP qua stdio (JSON-RPC, mỗi dòng một thông điệp). Tiến trình con chạy với môi trường đã lọc."""
 
-    def __init__(self, cmd, env_pass=(), timeout=30):
-        env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "SYSTEMROOT", *env_pass) if k in os.environ}
+    # Biến môi trường được chuyển cho server MCP: chỉ những biến cần để chạy/ra mạng (đường dẫn, proxy, chứng chỉ, cache npm/uv). KHÔNG chuyển key/token của bạn
+    # trừ khi chính cấu hình của server đó ghi trong "env_pass" (vd ["TAVILY_API_KEY"]).
+    BASE_ENV = ("PATH", "HOME", "LANG", "SYSTEMROOT", "TMPDIR", "TEMP", "USERPROFILE", "APPDATA", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
+                "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_CACHE", "npm_config_cache", "UV_CACHE_DIR", "XDG_CACHE_HOME")
+
+    def __init__(self, cmd, env_pass=(), timeout=60):
+        env = {k: os.environ[k] for k in (*self.BASE_ENV, *env_pass) if k in os.environ}
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self.q, self.timeout, self.id = queue.Queue(), timeout, 0
         threading.Thread(target=self._reader, daemon=True).start()
@@ -579,11 +615,12 @@ class ToolBox:
     def _connect_mcp(self):
         for sname, spec in self.prof.mcp.items():
             try:
+                spec = resolve_mcp_spec(spec, self.prof)
                 cli = McpHttp(spec["url"], spec.get("headers")) if "url" in spec else McpStdio(spec["command"], spec.get("env_pass", ()))
                 self.mcp[sname] = cli
                 self.mcp_tools[sname] = {t["name"]: t for t in cli.list_tools()}
             except (McpError, OSError, KeyError, ValueError) as e:
-                self._failed[f"mcp:{sname}"] = str(e)[:120]
+                self._failed[f"mcp:{sname}"] = str(e)[:120] + (" (thiếu node/uv?)" if isinstance(e, FileNotFoundError) else "")
         for canon, b in self.prof.bind.items():   # gán công cụ MCP vào tên chuẩn mà model nhỏ đã học
             cli, tool = self.mcp.get(b.get("mcp")), b.get("tool")
             if cli is None or tool not in self.mcp_tools.get(b.get("mcp"), {}):
@@ -602,7 +639,7 @@ class ToolBox:
     def menu(self):
         return "Công cụ: " + "; ".join(DOCS.get(n, n) for n in self.names())
 
-    def call(self, name, arg):
+    def call(self, name, arg, who=""):
         """Chạy một công cụ qua chính sách. Luôn trả chuỗi ngắn đã làm sạch (lỗi cũng là chuỗi), không bao giờ ném lỗi ra cho model."""
         t0 = time.time()
         decision, out = "ok", ""
@@ -616,15 +653,15 @@ class ToolBox:
             except (ValueError, McpError, OSError, ZeroDivisionError, OverflowError, SyntaxError, json.JSONDecodeError, urllib.error.URLError, ssl.SSLError, http.client.HTTPException, TimeoutError) as e:
                 decision, out = "error", f"lỗi: {str(e)[:120]}"
         out = sanitize(out)[: self.prof.result_chars] or "(trống)"
-        self._audit(name, arg, decision, out, time.time() - t0)
+        self._audit(name, arg, decision, out, time.time() - t0, who)
         return out
 
-    def _audit(self, name, arg, decision, out, dt):
+    def _audit(self, name, arg, decision, out, dt, who=""):
         if not self.prof.audit:
             return
         try:
             with open(self.prof.audit, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": round(time.time(), 3), "tool": name, "arg": arg[:200], "decision": decision, "out_len": len(out), "ms": int(dt * 1000)}, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"ts": round(time.time(), 3), "tool": name, "arg": arg[:200], "decision": decision, "out_len": len(out), "ms": int(dt * 1000), **({"who": who} if who else {})}, ensure_ascii=False) + "\n")
         except OSError:
             pass
 
@@ -708,35 +745,217 @@ class OpenAICompat:
 
 
 # ============================ MCP server (đưa công cụ + sandbox của Yui cho ứng dụng khác) ============================
+def rpc_dispatch(toolbox, req, who=""):
+    """Xử lý một thông điệp JSON-RPC của MCP. Trả dict phản hồi, hoặc None nếu là thông báo (notification)."""
+    rid, method, params = req.get("id"), req.get("method", ""), req.get("params") or {}
+    if rid is None:
+        return None
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
+    if method == "initialize":
+        return ok({"protocolVersion": params.get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "yui-agent", "version": "1.0"}})
+    if method == "ping":
+        return ok({})
+    if method == "tools/list":
+        return ok({"tools": [{"name": n, "description": DOCS.get(n, n), "inputSchema": {"type": "object", "properties": {"arg": {"type": "string"}}, "required": ["arg"] if n != "time" else []}}
+                             for n in toolbox.names()]})
+    if method == "tools/call":
+        res = toolbox.call(params.get("name", ""), str((params.get("arguments") or {}).get("arg", "")), who)
+        return ok({"content": [{"type": "text", "text": res}], "isError": res.startswith(("lỗi", "bị chặn"))})
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"không hỗ trợ {method}"}}
+
+
 def serve_mcp(toolbox, inp=None, out=None):
     inp, out = inp or sys.stdin, out or sys.stdout
-
-    def reply(rid, result=None, error=None):
-        m = {"jsonrpc": "2.0", "id": rid}
-        m.update({"error": error} if error else {"result": result})
-        out.write(json.dumps(m, ensure_ascii=False) + "\n")
-        out.flush()
-
     for line in inp:
         try:
             req = json.loads(line)
         except ValueError:
             continue
-        rid, method, params = req.get("id"), req.get("method", ""), req.get("params") or {}
-        if rid is None:
-            continue   # thông báo (notification): không trả lời
-        if method == "initialize":
-            reply(rid, {"protocolVersion": params.get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "yui-agent", "version": "1.0"}})
-        elif method == "ping":
-            reply(rid, {})
-        elif method == "tools/list":
-            reply(rid, {"tools": [{"name": n, "description": DOCS.get(n, n), "inputSchema": {"type": "object", "properties": {"arg": {"type": "string"}}, "required": ["arg"] if n != "time" else []}}
-                                  for n in toolbox.names()]})
-        elif method == "tools/call":
-            res = toolbox.call(params.get("name", ""), str((params.get("arguments") or {}).get("arg", "")))
-            reply(rid, {"content": [{"type": "text", "text": res}], "isError": res.startswith(("lỗi", "bị chặn"))})
-        else:
-            reply(rid, error={"code": -32601, "message": f"không hỗ trợ {method}"})
+        resp = rpc_dispatch(toolbox, req, "stdio")
+        if resp is not None:
+            out.write(json.dumps(resp, ensure_ascii=False) + "\n")
+            out.flush()
+
+
+# ---- "Điểm cuối MCP": MCP server qua HTTP với URL riêng (mỗi lần mở tạo địa chỉ mới, địa chỉ cũ vẫn hợp lệ cho tới khi thu hồi) ----
+ENDPOINT_DEFAULT_TOOLS = ["calc", "time", "search"]   # chỉ công cụ ít rủi ro; write/read/fetch/py phải tự bật trong cấu hình "endpoint": {"tools": [...]}
+
+
+class EndpointStore:
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        self.data = {}
+        if os.path.exists(path):
+            try:
+                self.data = json.load(open(path, encoding="utf-8"))
+            except ValueError:
+                self.data = {}
+
+    def _save(self):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, self.path)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+
+    def new(self, label=""):
+        with self.lock:
+            tok = secrets.token_urlsafe(24)
+            self.data[tok] = {"created": int(time.time()), "connected": False, "last_seen": None, "client": None, "label": label}
+            self._save()
+            return tok
+
+    def find(self, tok):
+        with self.lock:
+            for t in self.data:   # so sánh thời gian không đổi
+                if hmac.compare_digest(t, tok):
+                    return t
+        return None
+
+    def touch(self, tok, client=None):
+        with self.lock:
+            if tok in self.data:
+                self.data[tok]["last_seen"] = int(time.time())
+                if client:
+                    self.data[tok].update(connected=True, client=client)
+                self._save()
+
+    def revoke(self, prefix):
+        with self.lock:
+            hits = [t for t in self.data if t.startswith(prefix)] if prefix else []
+            for t in hits:
+                del self.data[t]
+            if hits:
+                self._save()
+            return len(hits)
+
+    def revoke_all(self):
+        with self.lock:
+            n = len(self.data); self.data = {}; self._save()
+            return n
+
+
+class _EndpointHandler(http.server.BaseHTTPRequestHandler):
+    server_version = "yui-mcp/1.0"
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, obj=None, extra=None):
+        b = b"" if obj is None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        if code >= 400:
+            self.send_header("Connection", "close")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if b:
+            self.wfile.write(b)
+
+    def _token(self):
+        m = re.fullmatch(r"/mcp/([A-Za-z0-9_-]{16,128})", self.path.split("?")[0])
+        return self.server.store.find(m.group(1)) if m else None
+
+    def do_GET(self):   # không có luồng SSE do server khởi tạo
+        self._send(405, {"error": "chỉ hỗ trợ POST"}, {"Allow": "POST"})
+
+    def do_DELETE(self):
+        self._send(200 if self._token() else 404, None)
+
+    def do_POST(self):
+        srv = self.server
+        host = (self.headers.get("Host") or "").lower()
+        if host not in srv.allowed_hosts:   # chống DNS rebinding
+            return self._send(403, {"error": "Host không hợp lệ"})
+        origin = self.headers.get("Origin")
+        if origin and urllib.parse.urlsplit(origin).netloc.lower() not in srv.allowed_hosts:   # trình duyệt từ trang lạ
+            return self._send(403, {"error": "Origin không hợp lệ"})
+        tok = self._token()
+        if tok is None:
+            return self._send(404, {"error": "không có địa chỉ này"})   # sai/đã thu hồi: không tiết lộ gì thêm
+        now = time.time()
+        with srv.rl_lock:
+            q = srv.rl.setdefault(tok, [])
+            q[:] = [t for t in q if now - t < 60]
+            if len(q) >= srv.rate_per_min:
+                return self._send(429, {"error": "quá nhiều yêu cầu"}, {"Retry-After": "10"})
+            q.append(now)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = -1
+        if n < 0 or n > srv.max_body:
+            return self._send(413, {"error": "nội dung quá lớn"})
+        try:
+            req = json.loads(self.rfile.read(n).decode("utf-8"))
+        except ValueError:
+            return self._send(400, {"error": "JSON không hợp lệ"})
+        msgs = req if isinstance(req, list) else [req]
+        client = None
+        for m in msgs:
+            if isinstance(m, dict) and m.get("method") == "initialize":
+                ci = (m.get("params") or {}).get("clientInfo") or {}
+                client = f"{str(ci.get('name', '?'))[:40]} {str(ci.get('version', ''))[:20]}".strip()
+        was = srv.store.data.get(tok, {}).get("connected")
+        srv.store.touch(tok, client)
+        if client and not was:
+            print(f"✅ Đã kết nối: {client} (địa chỉ ...{tok[:6]})", flush=True)
+        out = [r for r in (rpc_dispatch(srv.toolbox, m, f"http:{tok[:6]}") for m in msgs if isinstance(m, dict)) if r is not None]
+        if not out:
+            return self._send(202, None)
+        extra = {"Mcp-Session-Id": secrets.token_hex(16)} if client else None
+        self._send(200, out if isinstance(req, list) else out[0], extra)
+
+
+class EndpointServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, toolbox, store, public_url=None, rate_per_min=120, max_body=1024 * 1024):
+        super().__init__(addr, _EndpointHandler)
+        self.toolbox, self.store, self.rate_per_min, self.max_body = toolbox, store, rate_per_min, max_body
+        self.rl, self.rl_lock = {}, threading.Lock()
+        port = self.server_address[1]
+        self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}", f"{addr[0]}:{port}"}
+        if public_url:
+            self.allowed_hosts.add(urllib.parse.urlsplit(public_url).netloc.lower())
+
+
+def endpoint_toolbox(prof, confirm_cb=None):
+    """Hộp công cụ riêng cho điểm cuối: chỉ những công cụ nêu trong cấu hình "endpoint"."""
+    ep = prof.endpoint
+    p2 = Profile({})
+    p2.__dict__.update(prof.__dict__)
+    p2.tools = [t for t in ep.get("tools", ENDPOINT_DEFAULT_TOOLS) if t in ALL_TOOLS]
+    p2.mcp, p2.bind = {}, {}   # điểm cuối không tự mở rộng sang MCP khác
+    return ToolBox(p2, confirm_cb)
+
+
+def run_endpoint(prof, host, port, public_url=None, reuse=False):
+    tb = endpoint_toolbox(prof)
+    store = EndpointStore(prof.endpoint.get("file", "mcp_endpoints.json"))
+    srv = EndpointServer((host, port), tb, store, public_url, rate_per_min=int(prof.endpoint.get("rate_per_min", 120)))
+    tok = next(iter(store.data), None) if (reuse and store.data) else store.new(label=time.strftime("%Y-%m-%d %H:%M"))
+    base = (public_url or f"http://{host}:{srv.server_address[1]}").rstrip("/")
+    risky = [t for t in tb.names() if t in ("write", "read", "fetch", "py")]
+    print("Điểm cuối MCP (mỗi lần mở tạo địa chỉ mới; các địa chỉ trước đó vẫn còn hiệu lực cho tới khi thu hồi):")
+    print(f"  URL: {base}/mcp/{tok}\n  Trạng thái: Chưa kết nối")
+    print(f"  Công cụ: {', '.join(tb.names())}" + (f"   ⚠ có công cụ rủi ro: {', '.join(risky)}" if risky else ""))
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print("  ⚠ Đang mở ra ngoài máy: dùng HTTPS (reverse proxy / tunnel) và coi URL này như mật khẩu.")
+    print(f"  Địa chỉ cũ còn hiệu lực: {len(store.data) - 1}. Thu hồi: python yui_agent.py mcp-endpoints revoke <đầu_token>")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+        tb.close()
 
 
 # ============================ dòng lệnh ============================
@@ -755,7 +974,11 @@ def status(prof, tb):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Công cụ + sandbox + MCP cho model Yui")
-    ap.add_argument("cmd", choices=["status", "chat", "mcp-server", "tool"])
+    ap.add_argument("cmd", choices=["status", "chat", "mcp-server", "mcp-http", "mcp-endpoints", "mcp-presets", "tool"])
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--public_url", default=None, help="địa chỉ công khai (vd https://xxx.trycloudflare.com) nếu dùng tunnel/reverse proxy")
+    ap.add_argument("--reuse", action="store_true", help="mcp-http: dùng lại địa chỉ cũ thay vì tạo mới")
     ap.add_argument("rest", nargs="*")
     ap.add_argument("--config", default=None)
     ap.add_argument("--url", default="http://127.0.0.1:11434")
@@ -769,6 +992,25 @@ def main(argv=None):
             return False
         return input(f"\n⚠ Model muốn chạy {name}: {arg[:100]!r}. Cho phép? [y/N] ").strip().lower() == "y"
 
+    if a.cmd == "mcp-presets":
+        for k, v in MCP_PRESETS.items():
+            print(f"{k:20s} {v['about']}  [cần: {v['needs']}]")
+        return
+    if a.cmd == "mcp-endpoints":
+        st = EndpointStore(prof.endpoint.get("file", "mcp_endpoints.json"))
+        sub = a.rest[0] if a.rest else "list"
+        if sub == "revoke":
+            print(f"đã thu hồi {st.revoke(a.rest[1] if len(a.rest) > 1 else '')} địa chỉ")
+        elif sub == "revoke-all":
+            print(f"đã thu hồi {st.revoke_all()} địa chỉ")
+        else:
+            for t, v in st.data.items():
+                print(f"...{t[:6]}…  tạo {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['created']))}  {'Đã kết nối: ' + str(v['client']) if v['connected'] else 'Chưa kết nối'}")
+            print(f"({len(st.data)} địa chỉ)")
+        return
+    if a.cmd == "mcp-http":
+        run_endpoint(prof, a.host, a.port, a.public_url, a.reuse)
+        return
     tb = ToolBox(prof, confirm_cb=ask)
     try:
         if a.cmd == "status":

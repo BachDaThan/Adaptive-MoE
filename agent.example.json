@@ -5,12 +5,35 @@
   "audit": "agent_audit.jsonl",
   "max_steps": 3,
   "result_chars": 300,
-  "net": { "allow": ["vi.wikipedia.org", "api.tavily.com"] },
-  "limits": { "cpu_s": 5, "mem_mb": 256, "wall_s": 10, "out_kb": 16, "file_kb": 64, "workspace_mb": 16, "fetch_kb": 256 },
-  "python": { "min_sandbox": "strong" },
-  "confirm": [],
-  "mcp": {
-    "prompts": { "url": "https://prompts.chat/api/mcp" }
+  "net": {
+    "allow": [
+      "vi.wikipedia.org",
+      "api.tavily.com"
+    ]
   },
-  "bind": {}
+  "limits": {
+    "cpu_s": 5,
+    "mem_mb": 256,
+    "wall_s": 10,
+    "out_kb": 16,
+    "file_kb": 64,
+    "workspace_mb": 16,
+    "fetch_kb": 256
+  },
+  "python": {
+    "min_sandbox": "strong"
+  },
+  "confirm": [],
+  "mcp": {},
+  "bind": {},
+  "endpoint": {
+    "file": "mcp_endpoints.json",
+    "tools": [
+      "calc",
+      "time",
+      "search"
+    ],
+    "rate_per_min": 120
+  },
+  "_ghi_chu": "mcp: bật server có sẵn bằng {\"memory\":{\"preset\":\"memory\"}} (xem: python yui_agent.py mcp-presets) hoặc nối URL: {\"ten\":{\"url\":\"https://...\"}}; rồi gán vào tên công cụ chuẩn bằng bind."
 }

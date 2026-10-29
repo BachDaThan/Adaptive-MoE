@@ -23,6 +23,7 @@ from adaptive_moe import set_k_cap
 from langcheck import add_dropout
 from train_lm import build_model, set_cap, hf_pull, hf_push, atomic_save
 from sft_format import load_convs, encode_pairs, parse_text
+import model_registry
 
 STATE = "sft_state.json"
 
@@ -50,7 +51,7 @@ def resolve_prefix(args):
     """Tự vào Fine-tune/<cỡ>/ theo cỡ model (tính từ config.json). Không có thư mục đó thì giữ cách cũ (gốc repo hoặc --sft_prefix)."""
     if args.sft_prefix or args.local or args.size_tag == "off":
         return
-    from data_layout import params_from_arch, size_tag, finetune_prefix, has_numbered
+    from data_layout import params_from_arch, size_tag, finetune_prefix, find_data_repo, DEFAULT_DATA_REPO
     tag = args.size_tag
     if tag == "auto":
         hf_pull(args, ["config.json"])
@@ -60,13 +61,13 @@ def resolve_prefix(args):
             return
         cfg = json.load(open(cp, encoding="utf-8"))
         tag = size_tag(params_from_arch(cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]))
-    from huggingface_hub import HfApi
     pre = finetune_prefix(tag)
-    if has_numbered(HfApi().list_repo_files(args.hf_repo, repo_type=args.hf_type), pre):
-        args.sft_prefix = pre
-        print(f"[sft] model cỡ {tag}: lấy data trong {pre}", flush=True)
+    repo, _ = find_data_repo([getattr(args, "data_repo", None), os.environ.get("HF_REPO"), DEFAULT_DATA_REPO, args.hf_repo], pre, args.hf_type)
+    if repo:
+        args.sft_prefix, args.data_repo = pre, repo
+        print(f"[sft] model cỡ {tag}: lấy data trong {repo}/{pre}", flush=True)
     else:
-        print(f"[sft] không có thư mục {pre} trên repo: dùng gốc repo như cũ", flush=True)
+        print(f"[sft] không có thư mục {pre} ở repo nào (đã thử data_repo, HF_REPO, {DEFAULT_DATA_REPO}, hf_repo): dùng gốc repo như cũ", flush=True)
 
 
 def discover(args):
@@ -79,10 +80,11 @@ def discover(args):
             data[n] = open(os.path.join(args.local, n), "rb").read()
     else:
         from huggingface_hub import HfApi, hf_hub_download
-        names = [n for n in HfApi().list_repo_files(args.hf_repo, repo_type=args.hf_type) if pat.match(n)]
+        repo = getattr(args, "data_repo", None) or args.hf_repo
+        names = [n for n in HfApi().list_repo_files(repo, repo_type=args.hf_type) if pat.match(n)]
         d = os.path.join(args.out, "sft_data")
         for n in sorted(names, key=lambda s: int(pat.match(s).group(1))):
-            p = hf_hub_download(repo_id=args.hf_repo, filename=n, repo_type=args.hf_type, local_dir=d, force_download=True)
+            p = hf_hub_download(repo_id=repo, filename=n, repo_type=args.hf_type, local_dir=d, force_download=True)
             data[n] = open(p, "rb").read()
     # file dữ liệu thêm (không đánh số), vd chat_chat.jsonl: cùng định dạng JSON hội thoại như N.txt
     for n in [x.strip() for x in args.extra.split(",") if x.strip()]:
@@ -91,7 +93,7 @@ def discover(args):
                 data[n] = open(os.path.join(args.local, n), "rb").read()
             else:
                 from huggingface_hub import hf_hub_download
-                data[n] = open(hf_hub_download(repo_id=args.hf_repo, filename=n, repo_type=args.hf_type,
+                data[n] = open(hf_hub_download(repo_id=getattr(args, "data_repo", None) or args.hf_repo, filename=n, repo_type=args.hf_type,
                                                local_dir=os.path.join(args.out, "sft_data"), force_download=True), "rb").read()
         except Exception as e:  # noqa: BLE001
             raise SystemExit(f"[sft] không lấy được file --extra '{n}': {str(e)[:100]}")
@@ -142,19 +144,23 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.out, exist_ok=True)
     check_token(args)
+    model_registry.setup_sft(args)   # chọn model gốc models/<src>/ và nơi đẩy kết quả models/<src>-sft/ (repo kiểu cũ: như trước)
 
     # 1. dữ liệu: quét + tải mọi file N.txt
     resolve_prefix(args)
     data = discover(args)
+    if args.identity == "on" and args.out_name:   # vài hội thoại để model biết tên mình
+        data["identity.jsonl"] = model_registry.identity_jsonl(args.out_name)
     if not data:
         raise SystemExit("[sft] không thấy file nào tên dạng 1.txt, 2.txt, ... (kiểm tra --hf_repo / --sft_prefix / --local)")
     files = {n: sha(b) for n, b in data.items()}
     print(f"[sft] tìm thấy {len(files)} file: {', '.join(files)}", flush=True)
 
     # 2. model gốc + tokenizer; bỏ qua nếu không có gì mới
-    wanted = ["config.json", "tokenizer.json", "best.pt", STATE, "sft_best.pt"]
+    wanted = ["config.json", "tokenizer.json", "best.pt"]
     if not args.local:
-        hf_pull(args, wanted)
+        hf_pull(args, wanted)                                           # model gốc (pretrain)
+        hf_pull(args, [STATE, "sft_best.pt"], subdir=args.sft_dir)      # tiến độ fine-tune trước đó (nếu có)
     base_name = "best.pt" if (args.base == "best" and os.path.exists(os.path.join(args.out, "best.pt"))) else "last.pt"
     if not os.path.exists(os.path.join(args.out, base_name)) and not args.local:
         hf_pull(args, ["last.pt"])
@@ -280,7 +286,14 @@ def main(args):
         print(f"[sft] bỏ qua bước thử câu ({str(ex)[:80]})", flush=True)
 
     if not args.no_push and not args.local:
-        hf_push(args, ["sft_best.pt", STATE])
+        push = ["sft_best.pt", STATE]
+        if args.sft_dir:   # thư mục fine-tune tự đủ bộ: config (đã đổi tên) + tokenizer + trọng số
+            cp = os.path.join(args.out, "config.json")
+            c = json.load(open(cp, encoding="utf-8"))
+            c["name"], c["base_model"] = args.out_name, args.src
+            json.dump(c, open(cp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            push = ["config.json", "tokenizer.json"] + push
+        hf_push(args, push, subdir=args.sft_dir)
 
 
 if __name__ == "__main__":
@@ -291,6 +304,11 @@ if __name__ == "__main__":
     ap.add_argument("--hf_public", action="store_true")
     ap.add_argument("--hf_squash", type=int, default=0)
     ap.add_argument("--sft_prefix", default="", help="thư mục chứa 1.txt, 2.txt... trong repo (vd 'sft/'); mặc định là gốc repo")
+    ap.add_argument("--src", default=None, help="model gốc trong models/ để fine-tune (mặc định: bản pretrain mới nhất)")
+    ap.add_argument("--name", default=None, help="tên model sau fine-tune (mặc định <src>-sft); được ghi vào config.json và dạy cho model")
+    ap.add_argument("--new_model", action="store_true", help="tạo thư mục fine-tune mới (<src>-sft2...) thay vì cập nhật bản cũ")
+    ap.add_argument("--identity", choices=["on", "off"], default="on", help="thêm vài hội thoại để model biết tên mình")
+    ap.add_argument("--data_repo", default=None, help="repo HF chứa Fine-tune/<cỡ>/ (mặc định tự tìm: HF_REPO, BachDaThan/TrainAI-web, --hf_repo)")
     ap.add_argument("--size_tag", default="auto", help="tên thư mục cỡ model trong Fine-tune/, vd 50M. auto = tính từ config.json; off = tắt, dùng --sft_prefix/gốc repo")
     ap.add_argument("--extra", default="", help="thêm file dữ liệu JSON hội thoại không đánh số, cách nhau dấu phẩy (vd chat_chat.jsonl,yui_chat.jsonl)")
     ap.add_argument("--local", default=None, help="đọc N.txt từ thư mục này thay vì Hugging Face")

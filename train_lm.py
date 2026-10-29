@@ -46,28 +46,33 @@ PRESETS = {  # d_ff = 2 * d như trong các thí nghiệm
 CTX = {}
 
 
-def hf_pull(args, files):
+def hf_pull(args, files, subdir=None):
+    """Tải file checkpoint từ repo HF. Model nằm trong models/<tên>/ (args.hf_dir) hoặc ở gốc repo (kiểu cũ, hf_dir = '')."""
     if not args.hf_repo:
         return
+    d = getattr(args, "hf_dir", "") if subdir is None else subdir
     from huggingface_hub import hf_hub_download
     for fn in files:
         if os.path.exists(os.path.join(args.out, fn)):
             continue
         try:
-            hf_hub_download(repo_id=args.hf_repo, filename=fn, repo_type=args.hf_type, local_dir=args.out)
-            print(f"[train] đã tải {fn} từ Hugging Face", flush=True)
+            p = hf_hub_download(repo_id=args.hf_repo, filename=d + fn, repo_type=args.hf_type, local_dir=args.out)
+            if d and os.path.abspath(p) != os.path.abspath(os.path.join(args.out, fn)):   # local_dir giữ cả đường dẫn thư mục: đưa về args.out/<tên file>
+                os.replace(p, os.path.join(args.out, fn))
+            print(f"[train] đã tải {d}{fn} từ Hugging Face", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[train] không tải được {fn} từ Hugging Face ({str(e)[:70]})", flush=True)
 
 
-def hf_push(args, files):
+def hf_push(args, files, subdir=None):
     if not args.hf_repo:
         return
+    d = getattr(args, "hf_dir", "") if subdir is None else subdir
     try:
         from huggingface_hub import HfApi, CommitOperationAdd
         api = HfApi()
         api.create_repo(repo_id=args.hf_repo, repo_type=args.hf_type, private=not args.hf_public, exist_ok=True)
-        ops = [CommitOperationAdd(path_in_repo=fn, path_or_fileobj=os.path.join(args.out, fn))
+        ops = [CommitOperationAdd(path_in_repo=d + fn, path_or_fileobj=os.path.join(args.out, fn))
                for fn in files if os.path.exists(os.path.join(args.out, fn))]
         if ops:   # một commit duy nhất cho mọi file, ít lượt ghi hơn việc upload từng file
             api.create_commit(repo_id=args.hf_repo, repo_type=args.hf_type, operations=ops, commit_message="checkpoint")
@@ -75,7 +80,7 @@ def hf_push(args, files):
             if args.hf_squash and CTX["pushes"] % args.hf_squash == 0:   # xoá lịch sử cũ để không phình dung lượng (không hoàn tác được)
                 api.super_squash_history(repo_id=args.hf_repo, repo_type=args.hf_type)
                 print("[train] đã gộp lịch sử repo Hugging Face", flush=True)
-        print(f"[train] đã đẩy {', '.join(files)} lên Hugging Face", flush=True)
+        print(f"[train] đã đẩy {', '.join(files)} lên Hugging Face ({d or 'gốc repo'})", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[train] LỖI đẩy lên Hugging Face: {str(e)[:100]}", flush=True)
 
@@ -162,15 +167,16 @@ def build_data(args):
     ups = parse_upsample(args.upsample)
     hf_files = dict(kv.split("=", 1) for kv in (args.hf_files or "").split(",") if "=" in kv)   # lang -> thư mục trên repo HF
     tag = getattr(args, "_tag", None)
-    if tag and args.hf_repo and args.auto_data == "on" and "gen" not in hf_files:   # tự vào data/<cỡ>/ nếu repo có
+    if tag and args.auto_data == "on" and "gen" not in hf_files:   # tự tìm data/<cỡ>/ ở repo data (có thể khác repo model)
         try:
-            from huggingface_hub import HfApi
-            from data_layout import data_prefix, has_numbered
-            if has_numbered(HfApi().list_repo_files(args.data_repo or args.hf_repo, repo_type=args.hf_type), data_prefix(tag)):
+            from data_layout import data_prefix, find_data_repo, DEFAULT_DATA_REPO
+            repo, _ = find_data_repo([args.data_repo, os.environ.get("HF_REPO"), DEFAULT_DATA_REPO, args.hf_repo], data_prefix(tag), args.hf_type)
+            if repo:
+                args.data_repo = repo
                 hf_files["gen"] = data_prefix(tag)
                 if "gen" not in langs:
                     langs.append("gen")
-                print(f"[train] model cỡ {tag}: tự nạp data train trong {data_prefix(tag)} (ngôn ngữ 'gen')", flush=True)
+                print(f"[train] model cỡ {tag}: tự nạp data train trong {repo}/{data_prefix(tag)} (ngôn ngữ 'gen')", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[train] không quét được data/<cỡ>/ ({str(e)[:70]})", flush=True)
     extra = {}   # --hf_extra "news=repo:config:truong:MB,..." -> {lang: (spec, MB)}
@@ -228,7 +234,7 @@ def build_data(args):
 
 # ---------------------------------------------------------------- model
 def build_model(cfg, device):
-    m = CtxLM(vocab=cfg["vocab"], d=cfg["d"], n_layers=cfg["layers"], n_experts=cfg["experts"], d_ff=2 * cfg["d"],
+    m = CtxLM(vocab=cfg["vocab"], d=cfg["d"], n_layers=cfg["layers"], n_heads=cfg.get("heads", 4), n_experts=cfg["experts"], d_ff=2 * cfg["d"],
               min_k=1, max_k=8, top_p=cfg["top_p"], n_shared=1, compute_coef=0.0).to(device)
     return m
 
@@ -298,11 +304,12 @@ def generate(args, device):
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.out, exist_ok=True)
+    from data_layout import params_from_arch, size_tag, parse_params, arch_for_params, lr_for_params, heads_for, DEFAULT_DATA_REPO
+    import model_registry
     if args.generate is not None:
+        model_registry.setup_generate(args)
         hf_pull(args, ["config.json", "tokenizer.json", "best.pt"])
         return generate(args, device)
-    hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
-    from data_layout import params_from_arch, size_tag, parse_params, arch_for_params, lr_for_params
     if args.size in PRESETS:
         P = PRESETS[args.size]
     else:   # --size 50M / 120M / 1.2B: tự chọn d, số lớp, số expert cho đúng số tham số
@@ -312,23 +319,26 @@ def main(args):
         print(f"[train] --size {args.size}: chọn d={d0}, {l0} lớp, {e0} expert = {params_from_arch(args.vocab, d0, l0, e0) / 1e6:.1f}M tham số, lr={P['lr']:.2e}", flush=True)
     d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
     lr = args.lr or P["lr"]
+    model_registry.setup_identity(args, size_tag(params_from_arch(args.vocab, d, layers, experts)))   # đặt tên model + chọn thư mục models/<tên>/ trên HF
+    hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
     cfg0 = {}
     if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
         cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
     args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
         cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
     n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
+    heads = cfg0.get("heads") or (4 if cfg0 else (args.heads or heads_for(d)))   # checkpoint cũ không ghi heads = 4; model mới tự chọn để mỗi head <= 128 chiều
     custom = args.size not in PRESETS
     if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key Gemini; không có thì bỏ qua)
         if os.path.exists(os.path.join(args.out, "data.pt")):
             print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
-        elif not (args.data_repo or args.hf_repo):
-            print("[train] cần --hf_repo để tạo data lên repo; bỏ qua bước tạo data", flush=True)
         else:
             import make_data
-            make_data.make_for_training(n_params, args._tag, args.data_repo or args.hf_repo, args.hf_type, args.make_data_kinds, args.make_data_minutes)
+            make_data.make_for_training(n_params, args._tag, args.data_repo or os.environ.get("HF_REPO") or DEFAULT_DATA_REPO, args.hf_type, args.make_data_kinds, args.make_data_minutes)
     train, vals, V, langs = build_data(args)
-    cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max)
+    cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max, heads=heads, params=n_params)
+    if args.name:
+        cfg["name"] = args.name
     json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     random.seed(args.seed); torch.manual_seed(args.seed)
     model = build_model(cfg, device)
@@ -458,6 +468,9 @@ if __name__ == "__main__":
     ap.add_argument("--min_chars", type=int, default=1000)
     ap.add_argument("--hf_dataset", default=None, help="nguồn web thêm, dùng cùng --langs vi,web; vd HuggingFaceFW/fineweb-2:vie_Latn:text")
     ap.add_argument("--hf_mb", type=float, default=300)
+    ap.add_argument("--name", default=None, help="tên model (không dấu), vd yui-1b-v1. Bỏ trống: tự đặt yui-<cỡ>-v<N> không trùng repo/tài khoản HF; model được lưu ở models/<tên>/ và ghi tên vào config.json")
+    ap.add_argument("--new_model", action="store_true", help="không tiếp tục bản yui-<cỡ>-vN mới nhất trong repo mà tạo bản mới")
+    ap.add_argument("--heads", type=int, default=0, help="số head attention (0 = tự chọn theo d; model đã có config.json giữ số head cũ)")
     ap.add_argument("--size_tag", default="auto", help="tên thư mục cỡ model, vd 50M (data/50M/). auto = tính từ cấu hình model")
     ap.add_argument("--auto_data", choices=["on", "off"], default="on", help="on: nếu repo có data/<cỡ>/N.txt thì tự nạp làm ngôn ngữ 'gen'")
     ap.add_argument("--data_repo", default=None, help="repo HF chứa data/<cỡ>/ và --hf_files (mặc định = --hf_repo)")
@@ -472,7 +485,7 @@ if __name__ == "__main__":
     ap.add_argument("--size", default="small", help="small | medium | large, hoặc số tham số muốn có, vd 50M, 120M, 1.2B (tự chọn d/lớp/expert và tự tạo data hợp cỡ model)")
     ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key Gemini")
     ap.add_argument("--make_data_kinds", default="finetune,pretrain", help="loại data tạo trước khi train")
-    ap.add_argument("--make_data_minutes", type=float, default=30, help="tối đa bao nhiêu phút cho bước tạo data")
+    ap.add_argument("--make_data_minutes", default="auto", help="tối đa bao nhiêu phút cho bước tạo data; auto = tự tính theo số tham số model và số key Gemini")
     ap.add_argument("--d", type=int, default=0)
     ap.add_argument("--layers", type=int, default=0)
     ap.add_argument("--experts", type=int, default=0)

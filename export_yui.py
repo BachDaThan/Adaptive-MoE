@@ -203,11 +203,27 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None):
     return os.path.getsize(dst)
 
 
+class LazySD:
+    """Đọc từng tensor khi cần (float32) thay vì đổi cả state_dict sang numpy một lượt: model lớn (1B-10B) không tràn RAM khi xuất."""
+
+    def __init__(self, m):
+        self.m = m
+
+    def __getitem__(self, k):
+        return self.m[k].detach().float().cpu().numpy()
+
+    def __contains__(self, k):
+        return k in self.m
+
+    def keys(self):
+        return self.m.keys()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="thư mục có config.json, tokenizer.json và checkpoint")
     ap.add_argument("--ckpt", default="auto", help="auto = sft_best.pt nếu có, không thì best.pt")
-    ap.add_argument("--dst", required=True)
+    ap.add_argument("--dst", default=None, help="file .yui đầu ra; bỏ trống = <tên model trong config.json>_<quant>.yui")
     ap.add_argument("--quant", choices=["f32", "int8", "q4", "q4all"], default="f32",
                     help="f32 | int8 | q4 (expert 4-bit, còn lại int8) | q4all (mọi ma trận 4-bit; nhỏ nhất nhưng chất lượng giảm nhiều nhất)")
     a = ap.parse_args()
@@ -216,11 +232,16 @@ def main():
     ck = a.ckpt
     if ck == "auto":
         ck = "sft_best.pt" if os.path.exists(os.path.join(a.out, "sft_best.pt")) else "best.pt"
-    obj = torch.load(os.path.join(a.out, ck), map_location="cpu")
-    sd = {k: v.float().numpy() for k, v in obj["model"].items()}
+    path = os.path.join(a.out, ck)
+    try:   # mmap: không nạp cả checkpoint (kể cả trạng thái optimizer) vào RAM
+        obj = torch.load(path, map_location="cpu", mmap=True)
+    except (TypeError, RuntimeError, ValueError):
+        obj = torch.load(path, map_location="cpu")
+    sd = LazySD(obj["model"])
+    dst = a.dst or f"{cfg.get('name') or 'model'}_{a.quant}.yui"
     stats = {}
-    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), a.dst, a.quant, stats)
-    print(f"đã ghi {a.dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}")
+    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats)
+    print(f"đã ghi {dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}" + (f", tên model: {cfg['name']}" if cfg.get("name") else ""))
     if stats:
         tot_e = sum(v[0] for v in stats.values()); tot_n = sum(v[1] for v in stats.values())
         print(f"sai số lượng tử hoá 4-bit (căn bậc hai tỉ lệ năng lượng): tổng {100 * (tot_e / max(tot_n, 1e-12)) ** 0.5:.2f}%  "
