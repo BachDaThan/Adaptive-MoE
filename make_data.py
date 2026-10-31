@@ -1000,6 +1000,8 @@ def make_plan(params, have_pairs, have_tokens, tokens_per_file):
 
 
 _TOOL_HAVE = 0   # số hội thoại công cụ đã có (count_existing điền)
+_NEW_HAVE = 0    # trong đó số hội thoại thuộc loại MỚI (py/recall/note/skill/mkskill): data v5 chỉ có calc/time/search nên cần bù riêng
+_NEW_TOOL_RE = re.compile(r"<tool>(py|recall|note|skill|mkskill|kb|graph) ")
 
 
 def count_existing(remote, tag):
@@ -1009,14 +1011,15 @@ def count_existing(remote, tag):
     ft = [n for n in names if re.fullmatch(re.escape(fp) + r"\d+\.txt", n)]
     pre = [n for n in names if re.fullmatch(re.escape(dp) + r"\d+\.txt", n)]
     pairs, chars, pre_files = 0, 0, 0
-    global _TOOL_HAVE
-    _TOOL_HAVE = 0
+    global _TOOL_HAVE, _NEW_HAVE
+    _TOOL_HAVE = _NEW_HAVE = 0
     for n in ft:
         try:
             for ln in remote.read(n).decode("utf-8", "ignore").splitlines():
                 if ln.strip().startswith(("{", "[")):
                     if "<tool>" in ln:
                         _TOOL_HAVE += 1
+                        _NEW_HAVE += bool(_NEW_TOOL_RE.search(ln))
                     else:
                         pairs += 1
         except Exception:  # noqa: BLE001
@@ -1063,13 +1066,18 @@ def auto(args, build_parser):
     for kind in kinds:
         if kind == "tools":
             want = int(parse_count(env("TOOL_PAIRS"))) if env("TOOL_PAIRS") else max(500, plan["ft_target"] // 10)
+            import tool_data_x
+            mix = {k: float(v) for k, v in (kv.split("=") for kv in env("TOOL_MIX", tool_data_x.DEFAULT_MIX).split(","))}   # calc/time/search + py/recall/note/skill/mkskill/chain
+            new_share = sum(v for k, v in mix.items() if k in tool_data_x.EXTRA_KINDS) / (sum(mix.values()) or 1)
             need = max(0, want - _TOOL_HAVE)
+            if new_share > 0:   # data cũ chỉ có calc/time/search vẫn phải được bù thêm các loại mới (py, recall, note, skill, chuỗi nhiều bước)
+                need = max(need, int(max(0, int(want * new_share) - _NEW_HAVE) / new_share))
             if need <= 0:
-                print(f"\n✅ tools: đã có {_TOOL_HAVE} hội thoại dùng công cụ, đủ mục tiêu {want}.")
+                print(f"\n✅ tools: đã có {_TOOL_HAVE} hội thoại dùng công cụ ({_NEW_HAVE} thuộc loại py/recall/note/skill), đủ mục tiêu {want}.")
                 continue
-            print(f"\n▶ tools: tạo {need} hội thoại dạy dùng công cụ (calc/time/search, không gọi Gemini)...", flush=True)
+            print(f"\n▶ tools: tạo {need} hội thoại dạy dùng công cụ (calc/time/search/py/recall/note/skill + chuỗi nhiều bước, không gọi Gemini)...", flush=True)
             import tool_data
-            convs = tool_data.make(need, random.randrange(10**6), tool_data.load_facts(env("TOOL_FACTS")), [], int(env("TOOL_RESULT_CHARS", "300")), {"calc": 3, "time": 1, "search": 3})
+            convs = tool_data.make(need, random.randrange(10**6), tool_data.load_facts(env("TOOL_FACTS")), [], int(env("TOOL_RESULT_CHARS", "300")), mix, int(int(env("CTX", "0")) * 2.4) or None)
             pub = Publisher(remote, args.out_dir, finetune_prefix(tag), upload=True)
             per = plan["ft_per_file"]
             for i in range(0, len(convs), per):

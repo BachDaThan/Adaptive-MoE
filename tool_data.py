@@ -13,8 +13,8 @@ và hội thoại thường KHÔNG dùng công cụ (--direct file hội thoại
   --facts facts.jsonl : mỗi dòng {"q":"câu hỏi","query":"từ khoá","snippet":"đoạn ngắn tra được","answer":"câu trả lời ngắn"}
   --direct Fine-tune/50M/1.txt : (tuỳ chọn) hội thoại thường trộn vào làm mẫu "không cần công cụ"
 LƯU Ý khi train: (1) ngữ cảnh --L phải đủ chứa hội thoại (calc/time ~50 token, search ~100-180 token) -> dùng --L 256 trở lên; đặt result_chars của
-yui_agent nhỏ tương ứng (vd 120 cho L=128). (2) train_sft.py gộp xuống dòng thành dấu cách nên đối số của công cụ chỉ được ở MỘT dòng: dữ liệu này
-chỉ dạy calc/time/search; công cụ py/fetch/write dành cho model lớn hơn hoặc để người dùng tự gọi.
+yui_agent nhỏ tương ứng (vd 120 cho L=128). (2) train_sft.py gộp xuống dòng thành dấu cách nên đối số của công cụ chỉ được ở MỘT dòng.
+Dạy: calc/time/search + py (mini-sandbox, tính chính xác), recall/note (RAG lịch sử chat), skill/mkskill, và CHUỖI nhiều bước (xem tool_data_x.py). Dùng --ctx <L> để lọc theo ngữ cảnh.
 """
 import argparse, json, os, random, re, sys
 
@@ -124,10 +124,12 @@ def load_direct(path):
     return pairs
 
 
-def make(n, seed, facts, direct, max_snip, mix):
+def make(n, seed, facts, direct, max_snip, mix, ctx_chars=None):
+    """ctx_chars: bỏ hội thoại dài quá ngân sách ngữ cảnh (≈ số token --L × 2,4 ký tự); mix có thể thêm py/recall/note/skill/mkskill/chain (xem tool_data_x.py)."""
+    import tool_data_x as tx
     rng = random.Random(seed)
-    kinds = ["calc", "time", "search"] + (["direct"] if direct else [])
-    w = [mix[k] for k in kinds]
+    kinds = ["calc", "time", "search"] + (["direct"] if direct else []) + [k for k in tx.EXTRA_KINDS if mix.get(k, 0) > 0]
+    w = [mix.get(k, 0) for k in kinds]
     out, seen = [], set()
     while len(out) < n:
         k = rng.choices(kinds, w)[0]
@@ -137,8 +139,14 @@ def make(n, seed, facts, direct, max_snip, mix):
             conv = gen_time(rng)
         elif k == "search":
             conv = gen_search(rng, facts, max_snip)
-        else:
+        elif k == "direct":
             conv = [m for u, a in rng.choice(direct) for m in (("user", u), ("assistant", a))]
+        else:
+            conv = tx.make_one(k, rng, max_snip, ctx_chars)
+            if conv is None:
+                continue
+        if ctx_chars and sum(len(t) + 8 for _, t in conv) > ctx_chars:
+            continue
         key = json.dumps(conv, ensure_ascii=False)
         if key in seen and k != "time":
             continue
@@ -154,7 +162,9 @@ def main():
     ap.add_argument("--facts", default=None)
     ap.add_argument("--direct", default=None)
     ap.add_argument("--result_chars", type=int, default=300, help="độ dài tối đa kết quả công cụ (khớp result_chars của yui_agent)")
-    ap.add_argument("--mix", default="calc=3,time=1,search=3,direct=3", help="tỉ lệ các loại")
+    import tool_data_x
+    ap.add_argument("--mix", default=tool_data_x.DEFAULT_MIX, help="tỉ lệ các loại (calc,time,search,direct,py,recall,note,skill,mkskill,chain; 0 = tắt)")
+    ap.add_argument("--ctx", type=int, default=0, help="số token ngữ cảnh --L của model: bỏ hội thoại dài hơn ≈ ctx × 2,4 ký tự (0 = không lọc)")
     ap.add_argument("--out_dir", default="tool_out")
     ap.add_argument("--tag", default=None, help="cỡ model (vd 50M): up vào Fine-tune/<tag>/ theo số kế tiếp")
     ap.add_argument("--repo", default=os.environ.get("HF_REPO", "BachDaThan/TrainAI-web"))
@@ -163,7 +173,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     a = ap.parse_args()
     mix = {k: float(v) for k, v in (kv.split("=") for kv in a.mix.split(","))}
-    convs = make(a.n, a.seed, load_facts(a.facts), load_direct(a.direct), a.result_chars, mix)
+    convs = make(a.n, a.seed, load_facts(a.facts), load_direct(a.direct), a.result_chars, mix, int(a.ctx * 2.4) if a.ctx else None)
     chunks = ["\n".join(json.dumps({"messages": [{"role": r, "content": t} for r, t in c]}, ensure_ascii=False) for c in convs[i:i + a.per_file]) + "\n"
               for i in range(0, len(convs), a.per_file)]
     if a.tag:

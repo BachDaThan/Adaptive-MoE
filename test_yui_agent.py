@@ -223,10 +223,12 @@ def test_python_sandbox_isolation(tmp_path):
 
 def test_py_tool_disabled_when_sandbox_too_weak(tmp_path, monkeypatch):
     monkeypatch.setitem(ya._SANDBOX, "tier", "weak")
-    tb = ya.ToolBox(ya.Profile({"workspace": str(tmp_path / "ws")}))
+    tb = ya.ToolBox(ya.Profile({"workspace": str(tmp_path / "ws"), "python": {"engine": "real"}}))
     assert "py" not in tb.names() and "py" in tb._failed
     ok, msg = ya.run_python("print(1)", ya.Profile({}))
     assert not ok and "tắt" in msg
+    tb2 = ya.ToolBox(ya.Profile({"workspace": str(tmp_path / "ws")}))   # mặc định engine mini: vẫn có py dù sandbox hệ thống yếu
+    assert "py" in tb2.names() and tb2.call("py", "print(2**64)") == "18446744073709551616"
 
 
 # ---------------- MCP ----------------

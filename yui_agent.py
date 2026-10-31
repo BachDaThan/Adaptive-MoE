@@ -61,12 +61,18 @@ try:
 except ImportError:  # Windows
     resource = None
 
+try:   # mini-sandbox tự chế (chạy mọi nơi, không cần bubblewrap)
+    import yui_sandbox as _sbx
+except ImportError:
+    _sbx = None
+
 # ============================ cấu hình / profile ============================
 BASE_LIMITS = dict(cpu_s=5, mem_mb=256, wall_s=10, out_kb=16, file_kb=64, workspace_mb=16, fetch_kb=256, procs=64)
-ALL_TOOLS = ["calc", "time", "search", "fetch", "read", "write", "py"]
+MEM_TOOLS = ["recall", "note", "graph", "skill", "mkskill", "kb"]   # chỉ có khi cấu hình "memory": {"dir": ...} (xem yui_vault.py / yui_rag.py / yui_skills.py)
+ALL_TOOLS = ["calc", "time", "search", "fetch", "read", "write", "py"] + MEM_TOOLS
 PRESETS = {
     "minimal": dict(tools=["calc", "time"], net=[], py_min="off", confirm=[]),
-    "standard": dict(tools=ALL_TOOLS, net=["vi.wikipedia.org", "api.tavily.com"], py_min="strong", confirm=[]),
+    "standard": dict(tools=ALL_TOOLS, net=["vi.wikipedia.org", "en.wikipedia.org", "api.tavily.com", "api.exa.ai", "api.linkup.so", "api.firecrawl.dev", "api.search.brave.com", "www.googleapis.com", "html.duckduckgo.com", "search.brave.com", "www.bing.com", "www.google.com"], py_min="strong", confirm=[]),
     "open": dict(tools=ALL_TOOLS, net=["*"], py_min="medium", confirm=["py", "fetch"]),
 }
 RANK = {"off": 4, "strong": 3, "medium": 2, "weak": 1}
@@ -89,8 +95,18 @@ class Profile:
             if k in lim:
                 lim[k] = v
         self.limits = {k: max(1, int(v * self.scale)) for k, v in lim.items()}
-        self.py_min = (cfg.get("python") or {}).get("min_sandbox", base["py_min"])
+        pycfg = cfg.get("python") or {}
+        self.py_min = pycfg.get("min_sandbox", base["py_min"])
+        self.py_engine = pycfg.get("engine", "mini")   # mini = sandbox tự chế (mặc định, chạy mọi nơi) | real = Python thật trong bubblewrap | auto = mini, không hỗ trợ thì thử real
+        self.py_exact = bool(pycfg.get("exact_div", False))   # True: a/b của hai số nguyên ra phân số chính xác thay vì số thực
+        self.condense_mcp = bool(cfg.get("condense_mcp", True))   # rút gọn JSON của MCP cho model nhỏ
+        self.web = dict(cfg.get("web") or {})                  # {"keys": {"tavily": [...]}, "searxng": [https://...], "order": [...], "budget_s": 25, "cache_s": 600}
+        self.memory = dict(cfg.get("memory") or {})            # {"dir": đường dẫn gốc, "bot_name": "Yui", "key_env": "YUI_KEY"}
+        self.orch = dict(cfg.get("orchestrator") or {})        # trần + dọn dẹp của yui_orch.Orchestrator
+        self.tool_chars = {"skill": 700, "kb": 500, **dict(cfg.get("tool_chars") or {})}   # giới hạn độ dài kết quả riêng cho từng công cụ
         self.workspace = os.path.abspath(cfg.get("workspace", "agent_workspace"))
+        if self.memory.get("dir"):   # có kho người dùng: file model tạo ra nằm trong <kho>/files
+            self.workspace = os.path.join(os.path.abspath(os.path.expanduser(self.memory["dir"])), "files")
         self.confirm = set(cfg.get("confirm", base["confirm"]))
         self.audit = cfg.get("audit")
         self.max_steps = int(cfg.get("max_steps", 3))
@@ -199,6 +215,25 @@ def run_python(code, prof):
         return p.returncode == 0, text if p.returncode == 0 else f"lỗi (mã {p.returncode}): {text[-400:]}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _mini_limits(prof):
+    lim = prof.limits
+    return {"wall_s": lim["wall_s"], "mem_mb": lim["mem_mb"], "out_kb": lim["out_kb"], "steps": int(3_000_000 * prof.scale)}
+
+
+def real_py_ok(prof):
+    return prof.py_min != "off" and RANK[sandbox_tier()] >= RANK[prof.py_min]
+
+
+def run_py(code, prof, cancel=None):
+    """Công cụ py: mini-sandbox tự chế (mặc định) hoặc Python thật trong bubblewrap (engine real/auto). Trả (ok, văn bản)."""
+    eng = prof.py_engine
+    if eng in ("mini", "auto") and _sbx is not None:
+        ok, out = _sbx.run(code, _mini_limits(prof), prof.py_exact, cancel=cancel)
+        if ok or eng != "auto" or not real_py_ok(prof) or not ("không hỗ trợ" in out or "không được import" in out):
+            return ok, out
+    return run_python(code, prof)
 
 
 # ============================ công cụ ============================
@@ -360,36 +395,10 @@ def _tavily_keys():
     return list(dict.fromkeys(out))
 
 
-def tool_search(q, prof):
-    """Tavily nếu có key (xoay vòng), không thì Wikipedia tiếng Việt. Trả đoạn ngắn nhất đủ ý."""
-    q = q.strip()[:200]
-    if not q:
-        raise ValueError("thiếu từ khoá")
-    for key in _tavily_keys():
-        try:
-            st, _, data = safe_http("POST", prof.tavily_base.rstrip("/") + "/search", prof, body=json.dumps({"query": q, "max_results": 3, "search_depth": "basic"}),
-                                    headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"}, max_kb=128)
-        except ValueError:
-            break
-        if st == 200:
-            res = json.loads(data.decode("utf-8", "replace")).get("results", [])
-            txt = " ".join(str(r.get("content", "")) for r in res[:2]).strip()
-            if txt:
-                return txt
-            break
-        if st in (401, 403, 432, 433, 429):
-            continue   # key hỏng/hết hạn mức -> thử key kế
-        break
-    url = prof.wiki_base.rstrip("/") + "/w/api.php?" + urllib.parse.urlencode({
-        "action": "query", "format": "json", "formatversion": "2", "generator": "search", "gsrsearch": q, "gsrlimit": 1,
-        "prop": "extracts", "exintro": 1, "explaintext": 1, "exchars": max(200, prof.result_chars * 2)})
-    st, _, data = safe_http("GET", url, prof, max_kb=128)
-    if st != 200:
-        raise ValueError(f"HTTP {st}")
-    pages = json.loads(data.decode("utf-8", "replace")).get("query", {}).get("pages", [])
-    if not pages or not pages[0].get("extract"):
-        return "không tìm thấy"
-    return pages[0]["extract"]
+def tool_search(q, prof, kb=None):
+    """Tìm web nhiều tầng (yui_web.py): key Tavily/Exa/Linkup/Firecrawl xoay vòng -> DuckDuckGo -> SearXNG công cộng -> Wikipedia -> kho cá nhân. Luôn trả lời, không câm."""
+    from yui_web import WebSearch
+    return WebSearch(prof, kb).search(q)
 
 
 def _safe_path(prof, rel):
@@ -581,7 +590,9 @@ def _subst(obj, arg):
 
 
 # ============================ hộp công cụ ============================
-DOCS = {"calc": "calc biểu_thức", "time": "time", "search": "search từ_khoá", "fetch": "fetch https://...", "read": "read tệp", "write": "write tệp|nội_dung", "py": "py mã_python"}
+DOCS = {"calc": "calc biểu_thức", "time": "time", "search": "search từ_khoá", "fetch": "fetch https://...", "read": "read tệp", "write": "write tệp|nội_dung",
+        "py": "py mã_python (một dòng, dùng print)", "recall": "recall từ_khoá (tìm lại lịch sử chat/ghi chú)", "note": "note tiêu_đề|nội_dung",
+        "graph": "graph từ (từ liên quan)", "kb": "kb [tên] (tài liệu đã nạp)", "skill": "skill [tên] (xem/nạp skill)", "mkskill": "mkskill tên|mô_tả|bước1; bước2"}
 
 
 class ToolBox:
@@ -589,11 +600,15 @@ class ToolBox:
         self.prof, self.confirm_cb, self.mcp, self.mcp_tools = prof, confirm_cb, {}, {}
         self.tools = {}
         self._failed = {}
-        py_ok = prof.py_min != "off" and RANK[sandbox_tier()] >= RANK[prof.py_min]
+        mini_ok = prof.py_engine in ("mini", "auto") and _sbx is not None and prof.py_min != "off"
+        py_ok = mini_ok or (prof.py_engine in ("real", "auto") and real_py_ok(prof))
+        self.ws = self.rag = self.skills = self.kbm = None
+        self.cancel = None   # threading.Event do bộ điều phối/tác vụ nền gắn vào: set() thì công cụ đang chạy (py) bị dừng
+        self._last_sync = 0.0
         local = {
             "calc": lambda a: safe_calc(a),
             "time": lambda a: tool_time(a),
-            "search": lambda a: tool_search(a, prof),
+            "search": lambda a: tool_search(a, prof, self.rag),
             "fetch": lambda a: tool_fetch(a, prof),
             "read": lambda a: tool_read(a, prof),
             "write": lambda a: tool_write(a, prof),
@@ -603,14 +618,67 @@ class ToolBox:
             if name == "py" and not py_ok:
                 self._failed["py"] = f"tắt: sandbox {sandbox_tier()} < {prof.py_min}"
                 continue
-            self.tools[name] = local[name]
+            if name in local:
+                self.tools[name] = local[name]
+        self._init_memory()
         self._connect_mcp()
 
     def _py(self, code):
-        ok, out = run_python(code, self.prof)
+        ok, out = run_py(code, self.prof, self.cancel)
         if not ok:
             raise ValueError(out)
         return out
+
+    # ---- kho người dùng: RAG + ghi chú + skill (chỉ khi cấu hình "memory") ----
+    def _init_memory(self):
+        if not self.prof.memory.get("dir"):
+            return
+        try:
+            from yui_vault import Workspace, load_key
+            from yui_rag import RAG
+            from yui_skills import SkillStore
+            m = self.prof.memory
+            self.ws = Workspace(m["dir"], load_key(m.get("key"), m.get("key_env", "YUI_KEY")))
+            self.rag = RAG(self.ws, m.get("bot_name", "Yui"))
+            self.rag.sync()
+            self._last_sync = time.time()
+            self.skills = SkillStore(self.ws)
+            from yui_kb import KB
+            self.kbm = KB(self.ws, self.rag)
+        except (ImportError, ValueError, OSError) as e:
+            self._failed["memory"] = str(e)[:140]
+            return
+        mem = {"recall": self._recall, "note": self._note, "graph": lambda a: self.rag.graphify.related(a) if self.prof.memory.get("graph", True) else self.rag.related(a), "skill": self._skill, "mkskill": self._mkskill, "kb": self._kb}
+        for name in self.prof.tools:
+            if name in mem:
+                self.tools[name] = mem[name]
+
+    def _recall(self, q):
+        if time.time() - self._last_sync > 20:   # chép thêm file chat vào thư mục lúc đang chạy cũng được nạp
+            self.rag.sync()
+            self._last_sync = time.time()
+        chars = self.prof.tool_chars.get("recall", self.prof.result_chars)
+        if self.prof.memory.get("graph", True):   # graphify: recall gọn + sạch cũ/trùng cho model nhỏ (tắt: "memory": {"graph": false})
+            return self.rag.graphify.recall(q, chars=chars)
+        return self.rag.recall(q, chars=chars)
+
+    def _note(self, a):
+        title, sep, text = a.partition("|")
+        if not sep:
+            raise ValueError("cú pháp: note tiêu_đề|nội_dung")
+        return "đã ghi chú: " + self.rag.add_note(title, text)
+
+    def _skill(self, a):
+        return self.skills.load(a, self.prof.tool_chars["skill"]) if a.strip() else self.skills.listing(self.prof.tool_chars["skill"])
+
+    def _kb(self, a):
+        return self.kbm.summary(a, self.prof.tool_chars["kb"]) if a.strip() else self.kbm.listing(self.prof.tool_chars["kb"])
+
+    def _mkskill(self, a):
+        parts = a.split("|", 2)
+        if len(parts) < 3:
+            raise ValueError("cú pháp: mkskill tên|mô_tả|bước 1; bước 2")
+        return "đã tạo skill " + self.skills.create(parts[0], parts[1], parts[2])
 
     def _connect_mcp(self):
         for sname, spec in self.prof.mcp.items():
@@ -627,11 +695,18 @@ class ToolBox:
                 self._failed[f"bind:{canon}"] = "server/tool MCP không có"
                 continue
             tpl = b.get("args", {"arg": "$arg"})
-            self.tools[canon] = (lambda a, cli=cli, tool=tool, tpl=tpl: cli.call(tool, _subst(tpl, a)))
+            self.tools[canon] = (lambda a, cli=cli, tool=tool, tpl=tpl, canon=canon: self._cm(cli.call(tool, _subst(tpl, a)), canon))
         if self.prof.expose_all_mcp:   # cho model lớn: server.tool với đối số JSON
             for sname, tl in self.mcp_tools.items():
                 for tname in tl:
-                    self.tools[f"{sname}.{tname}"] = (lambda a, c=self.mcp[sname], t=tname: c.call(t, json.loads(a) if a.strip().startswith("{") else {"arg": a}))
+                    self.tools[f"{sname}.{tname}"] = (lambda a, c=self.mcp[sname], t=tname, n=f"{sname}.{tname}": self._cm(c.call(t, json.loads(a) if a.strip().startswith("{") else {"arg": a}), n))
+
+    def _cm(self, text, name):
+        """Kết quả MCP thường là JSON dài nhiều trường rác: rút gọn thành vài dòng chữ vừa giới hạn của công cụ để model nhỏ không tràn ngữ cảnh."""
+        if not self.prof.condense_mcp:
+            return text
+        from yui_condense import condense
+        return condense(text, self.prof.tool_chars.get(name, self.prof.result_chars))
 
     def names(self):
         return sorted(self.tools)
@@ -652,7 +727,7 @@ class ToolBox:
                 out = str(self.tools[name](arg))
             except (ValueError, McpError, OSError, ZeroDivisionError, OverflowError, SyntaxError, json.JSONDecodeError, urllib.error.URLError, ssl.SSLError, http.client.HTTPException, TimeoutError) as e:
                 decision, out = "error", f"lỗi: {str(e)[:120]}"
-        out = sanitize(out)[: self.prof.result_chars] or "(trống)"
+        out = sanitize(out)[: self.prof.tool_chars.get(name, self.prof.result_chars)] or "(trống)"
         self._audit(name, arg, decision, out, time.time() - t0, who)
         return out
 
@@ -661,13 +736,15 @@ class ToolBox:
             return
         try:
             with open(self.prof.audit, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"ts": round(time.time(), 3), "tool": name, "arg": arg[:200], "decision": decision, "out_len": len(out), "ms": int(dt * 1000), **({"who": who} if who else {})}, ensure_ascii=False) + "\n")
+                f.write(json.dumps({"ts": round(time.time(), 3), "tool": name, "arg": (f"({len(arg)} ký tự)" if name in MEM_TOOLS else arg[:200]), "decision": decision, "out_len": len(out), "ms": int(dt * 1000), **({"who": who} if who else {})}, ensure_ascii=False) + "\n")
         except OSError:
             pass
 
     def close(self):
         for c in self.mcp.values():
             c.close()
+        if self.rag is not None and getattr(self.rag, "_g", None) is not None:
+            self.rag._g.flush()   # ghi đồ thị sự kiện (nếu có thay đổi chưa lưu)
 
 
 # ============================ khung chạy agent ============================
@@ -942,7 +1019,7 @@ def run_endpoint(prof, host, port, public_url=None, reuse=False):
     srv = EndpointServer((host, port), tb, store, public_url, rate_per_min=int(prof.endpoint.get("rate_per_min", 120)))
     tok = next(iter(store.data), None) if (reuse and store.data) else store.new(label=time.strftime("%Y-%m-%d %H:%M"))
     base = (public_url or f"http://{host}:{srv.server_address[1]}").rstrip("/")
-    risky = [t for t in tb.names() if t in ("write", "read", "fetch", "py")]
+    risky = [t for t in tb.names() if t in ("write", "read", "fetch", "py", "recall", "note", "skill", "mkskill", "graph")]
     print("Điểm cuối MCP (mỗi lần mở tạo địa chỉ mới; các địa chỉ trước đó vẫn còn hiệu lực cho tới khi thu hồi):")
     print(f"  URL: {base}/mcp/{tok}\n  Trạng thái: Chưa kết nối")
     print(f"  Công cụ: {', '.join(tb.names())}" + (f"   ⚠ có công cụ rủi ro: {', '.join(risky)}" if risky else ""))
@@ -963,18 +1040,56 @@ def status(prof, tb):
     tier = sandbox_tier()
     print(f"Sandbox: {tier}" + ("" if tier == "strong" else "  (cài bậc 'strong': apt install bubblewrap; công cụ py cần bậc " + prof.py_min + ")"))
     print(f"Profile: {prof.preset}, scale {prof.scale}, giới hạn {prof.limits}")
+    print(f"Công cụ py: engine={prof.py_engine}" + (" (mini-sandbox tự chế, chạy mọi nơi)" if prof.py_engine != "real" and _sbx else "") + (f"; Python thật cần sandbox {prof.py_min}, hiện {tier}" if prof.py_engine != "mini" else ""))
+    if tb.rag is not None:
+        st = tb.rag.stats()
+        print(f"Kho người dùng: {tb.ws.root} | mã hoá: {'có' if st['encrypted'] else 'không'} | {st['files']} file, {st['chunks']} đoạn, đồ thị {st['graph_nodes']} nút | skill: {len(tb.skills.list())}")
     print(f"Mạng cho phép: {prof.net_allow or 'không'}" + (" (cho phép IP nội bộ: CHỈ để thử)" if prof.allow_private else ""))
     print(f"Công cụ model được dùng: {', '.join(tb.names()) or 'không'}")
     for k, v in tb._failed.items():
         print(f"  ⚠ {k}: {v}")
-    print(f"Tavily: {len(_tavily_keys())} key" + ("" if _tavily_keys() else " (không có -> search dùng Wikipedia)"))
+    import yui_web
+    kc = {p: len(yui_web.keys_for(p, (prof.web.get("keys") or {}).get(p))) for p in yui_web.PROVIDERS}
+    print("Tìm web: key " + ", ".join(f"{p} {n}" for p, n in kc.items()) + f" | SearXNG {len(yui_web.WebSearch(prof).searx_urls())} instance | DuckDuckGo, Wikipedia, kho cá nhân luôn là tầng dự phòng")
     for s, tl in tb.mcp_tools.items():
         print(f"MCP {s}: {len(tl)} công cụ ({', '.join(list(tl)[:6])})")
 
 
+def mem_cli(prof, tb, rest):
+    """python yui_agent.py mem status|sync|kb [force]|search <từ khoá>|related <từ>|seal|skills|errors|runs  (cần \"memory\" trong cấu hình)"""
+    if tb.rag is None:
+        print("chưa cấu hình kho: thêm vào agent.json  \"memory\": {\"dir\": \"/đường/dẫn/chat-yui\"}", *[f"{k}: {v}" for k, v in tb._failed.items() if k == "memory"])
+        return
+    sub, arg = (rest[0] if rest else "status"), " ".join(rest[1:])
+    if sub == "sync":
+        print(f"đã nạp {tb.rag.sync()} file thay đổi;", tb.rag.stats())
+    elif sub == "search":
+        print(tb.rag.recall(arg, 600, 6))
+    elif sub == "related":
+        print(tb.rag.related(arg))
+    elif sub == "kb":
+        from yui_kb import text_bar
+        r = tb.kbm.ingest(on_progress=text_bar(), force=arg.strip() == "force")
+        print(f"{r['files']} file mới/đổi, bỏ qua {r['skipped']}, lỗi {len(r['errors'])}: {r['chars_in']} → sạch {r['chars_clean']} → tóm tắt {r['chars_summary']} ký tự trong {r['seconds']}s", *r["errors"][:5], sep="\n  ")
+    elif sub == "seal":
+        print(f"đã mã hoá {tb.ws.seal()} file (bản gốc đã xoá); chạy lại 'mem sync' để dựng lại chỉ mục")
+    elif sub == "skills":
+        for s in tb.skills.list():
+            print(f"{s['name']}: {s['desc']}")
+    elif sub == "errors":
+        for e in tb.ws.recent_errors(20):
+            print(e["at"], e["where"], e["msg"][:100])
+    elif sub == "runs":
+        from yui_orch import pending_runs
+        for r in pending_runs(tb.ws):
+            print(*r)
+    else:
+        print(tb.rag.stats(), "| lỗi gần đây:", len(tb.ws.recent_errors(100)))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Công cụ + sandbox + MCP cho model Yui")
-    ap.add_argument("cmd", choices=["status", "chat", "mcp-server", "mcp-http", "mcp-endpoints", "mcp-presets", "tool"])
+    ap.add_argument("cmd", choices=["status", "chat", "mcp-server", "mcp-http", "mcp-endpoints", "mcp-presets", "tool", "mem"])
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--public_url", default=None, help="địa chỉ công khai (vd https://xxx.trycloudflare.com) nếu dùng tunnel/reverse proxy")
@@ -1019,17 +1134,27 @@ def main(argv=None):
             print(tb.call(a.rest[0], " ".join(a.rest[1:])))
         elif a.cmd == "mcp-server":
             serve_mcp(tb)
+        elif a.cmd == "mem":
+            mem_cli(prof, tb, a.rest)
         else:
             llm, agent, hist = OpenAICompat(a.url, a.model, a.api_key), None, []
             agent = Agent(llm, tb)
+            orch = None
+            if tb.rag is not None:   # có kho người dùng: nhiều bước + sổ tiến độ + tóm tắt + tự lưu chat
+                from yui_orch import Orchestrator
+                orch = Orchestrator(llm, tb, tb.ws, tb.rag, **prof.orch)
             print(tb.menu() + "\n(Ctrl+C để thoát)")
             while True:
                 q = input("bạn> ").strip()
                 if not q:
                     continue
-                ans, trace = agent.run(hist + [{"role": "user", "content": q}])
+                if orch:
+                    ans, info = orch.ask(q, hist)
+                    trace = info["steps"]
+                else:
+                    ans, trace = agent.run(hist + [{"role": "user", "content": q}])
                 for t in trace:
-                    print(f"  🔧 {t['tool']}({t['arg'][:60]}) -> {t['result'][:80]}")
+                    print(f"  🔧 {t['tool']}({t['arg'][:60]}) -> {t.get('result', t.get('res', ''))[:80]}")
                 print("yui>", ans)
                 hist += [{"role": "user", "content": q}, {"role": "assistant", "content": ans}]
                 hist = hist[-6:]

@@ -21,7 +21,9 @@
     "fetch_kb": 256
   },
   "python": {
-    "min_sandbox": "strong"
+    "engine": "mini",
+    "min_sandbox": "strong",
+    "exact_div": false
   },
   "confirm": [],
   "mcp": {},
@@ -35,5 +37,60 @@
     ],
     "rate_per_min": 120
   },
-  "_ghi_chu": "mcp: bật server có sẵn bằng {\"memory\":{\"preset\":\"memory\"}} (xem: python yui_agent.py mcp-presets) hoặc nối URL: {\"ten\":{\"url\":\"https://...\"}}; rồi gán vào tên công cụ chuẩn bằng bind."
+  "_ghi_chu": "mcp: bật server có sẵn bằng {\"memory\":{\"preset\":\"memory\"}} (xem: python yui_agent.py mcp-presets) hoặc nối URL: {\"ten\":{\"url\":\"https://...\"}}; rồi gán vào tên công cụ chuẩn bằng bind.",
+  "memory": {
+    "dir": "/duong/dan/toi/chat-yui",
+    "bot_name": "Yui",
+    "key_env": "YUI_KEY"
+  },
+  "orchestrator": {
+    "max_steps": 5,
+    "max_seconds": 90,
+    "max_repeat": 2,
+    "ctx_chars": 700,
+    "summarize_from": 3,
+    "keep_runs": "failed",
+    "keep_days": 14,
+    "auto_remember": true
+  },
+  "tool_chars": {
+    "skill": 700
+  },
+  "_ghi_chu_kho": "memory.dir: thư mục gốc của bạn (chat/ notes/ skills/ files/ tự tạo). Chép file lịch sử chat vào chat/, skill vào skills/. Mã hoá: đặt biến môi trường YUI_KEY (mất khoá = mất dữ liệu). Bỏ khối memory nếu không dùng. python.engine: mini (sandbox tự chế, chạy mọi nơi) | real (bubblewrap) | auto.",
+  "web": {
+    "order": [
+      "tavily",
+      "exa",
+      "linkup",
+      "firecrawl",
+      "braveapi",
+      "gcse",
+      "ddg",
+      "brave",
+      "bing",
+      "searxng",
+      "wikipedia",
+      "kb"
+    ],
+    "google": false,
+    "min_interval_s": 4,
+    "daily_cap": 150,
+    "cache_s": 600,
+    "budget_s": 25,
+    "searxng": [
+      "https://searx.example.org (thay bằng instance công cộng còn sống: xem searx.space)"
+    ],
+    "keys": {
+      "tavily": [],
+      "exa": [],
+      "linkup": [],
+      "firecrawl": [],
+      "braveapi": [],
+      "gcse": [
+        "API_KEY:CX"
+      ]
+    }
+  },
+  "condense_mcp": true,
+  "_ghi_chu_web": "Tìm web 4 tầng, luôn có đáp án: (1) key Tavily/Exa/Linkup/Firecrawl/Brave API/Google CSE xoay vòng + nghỉ khi hết hạn mức; (2) DuckDuckGo/Brave/Bing đọc HTML bằng IP của bạn (không key, có giữ nhịp; Google tắt mặc định: đặt web.google=true) - các trang này cấm truy vấn tự động trong điều khoản và có thể chặn/đổi giao diện; (3) SearXNG công cộng bạn liệt kê; (4) Wikipedia + kho cá nhân. Key cũng đọc từ biến môi trường: TAVILY_API_KEY1.., EXA_API_KEY1.., LINKUP_.., FIRECRAWL_.., BRAVE_SEARCH_API_KEY1.., GOOGLE_CSE_API_KEY1=khoá:cx; YUI_SEARXNG=url1,url2"
 }
