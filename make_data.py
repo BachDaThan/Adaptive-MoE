@@ -136,6 +136,133 @@ TOPICS = [
     "mạng xã hội, meme", "quần áo, làm đẹp", "giao thông, đi lại", "nhà cửa, dọn dẹp", "tâm trạng, cảm xúc", "chuyện học lập trình",
 ]
 
+# ============================ v6.2: MỞ RỘNG ĐỘ ĐA DẠNG (chủ đề, tình huống, giọng user, số lượt, ví dụ mẫu, lọc gần trùng) ============================
+TOPICS += [
+    "nấu ăn món miền Trung", "quán cà phê, trà sữa", "xe máy, xe buýt", "thuê trọ, ký túc xá", "xin việc, phỏng vấn", "học tiếng Anh",
+    "toán và logic vui", "vật lý đời thường", "hoá học trong bếp", "cơ thể người", "vũ trụ, hành tinh", "khủng long và động vật",
+    "cây cối, làm vườn", "biển, núi, rừng", "bão lũ, thiên tai", "truyện cổ tích, truyền thuyết", "ca dao, tục ngữ",
+    "chữ viết, ngữ pháp, chính tả", "từ lóng Gen Z", "thơ, văn học", "vẽ vời, hội hoạ", "chụp ảnh bằng điện thoại", "TikTok, YouTube, streamer",
+    "podcast, sách nói", "bóng đá", "cầu lông, chạy bộ, gym", "ngủ nướng, thức khuya", "áp lực thi cử", "crush, tình yêu", "bạn cùng phòng",
+    "ba mẹ, ông bà", "anh chị em", "sinh nhật, quà tặng", "đám cưới, họp lớp", "Trung thu, 20/10, 8/3", "nông thôn, đồng quê",
+    "Sài Gòn, Hà Nội, Đà Nẵng", "ẩm thực đường phố", "đồ uống, pha chế", "bánh kẹo, tráng miệng", "ăn chay", "răng miệng, mắt",
+    "tập thể dục tại nhà", "thiền, thư giãn", "pin điện thoại, sạc", "wifi, mạng chậm", "mật khẩu, an toàn mạng", "lừa đảo online",
+    "AI và chatbot là gì", "Excel, văn phòng", "Python cho người mới", "web, HTML cơ bản", "game mobile", "game nhập vai, cốt truyện game",
+    "minecraft, roblox", "cờ vua, board game", "anime, manga, light novel", "phim Hàn, phim Việt", "V-pop, rap Việt, lofi", "đàn guitar, nhạc cụ",
+    "du lịch bụi", "đi biển, leo núi", "săn sale, mua sắm online", "quản lý chi tiêu", "hợp đồng thuê nhà, thuế cơ bản", "rác thải, môi trường",
+    "xe điện", "robot, drone", "lịch sử thế giới", "địa lý thế giới", "văn hoá các nước", "thuyết trình", "viết CV, email xin việc",
+    "quản lý thời gian", "thói quen tốt", "vượt qua lười biếng", "cô đơn, nhớ nhà", "ngại giao tiếp, tự tin", "đố vui, câu đố mẹo",
+    "truyện ma nhẹ nhàng", "cung hoàng đạo (vui là chính)", "nuôi chó mèo, cá cảnh", "sắp xếp nhà cửa", "giặt giũ, nấu cơm một mình",
+    "mùa mưa, mùa nóng", "Tết xa nhà",
+]
+TOPICS = list(dict.fromkeys(TOPICS))
+SITUATIONS += [
+    "người dùng hỏi tiếp câu vừa rồi (có ngữ cảnh, Yui nhớ ý vừa nói)", "người dùng sửa Yui vì Yui nói sai, Yui nhận lỗi tự nhiên",
+    "người dùng nhờ so sánh hai thứ rồi chọn giúp", "người dùng nhờ hướng dẫn từng bước một việc cụ thể",
+    "người dùng kể chuyện khá dài rồi hỏi ý kiến", "người dùng hỏi thứ Yui không thể biết (giờ hiện tại, tin mới): Yui nói thật là không biết",
+    "người dùng nhờ gợi ý đặt tên, viết caption, viết lời chúc ngắn", "người dùng hỏi mẹo vặt đời sống", "người dùng hỏi phép tính, số liệu nhỏ",
+    "người dùng chỉ nhắn một từ hoặc emoji, Yui hỏi lại nhẹ nhàng", "người dùng nhắn hoàn toàn không dấu",
+    "người dùng nói đang buồn ngủ, đói hoặc chán, Yui đáp tinh tế", "người dùng hỏi Yui có cảm xúc, có nhớ không (trả lời thật thà)",
+    "người dùng khoe điều mới học, Yui hỏi thêm", "người dùng nhờ Yui đóng vai nhỏ (kể chuyện, hỏi đáp vui)",
+    "người dùng gặp sự cố công nghệ nhỏ và hỏi cách xử lý", "người dùng dán một đoạn ngắn và nhờ tóm tắt",
+    "người dùng hỏi nghĩa của từ, thành ngữ, từ lóng", "người dùng đổi chủ đề đột ngột", "người dùng xin lỗi hoặc cảm ơn, Yui đáp tự nhiên",
+    "người dùng nhờ động viên trước kỳ thi hoặc buổi phỏng vấn", "người dùng hỏi chuyện của Yui (một ngày của Yui, Yui thích gì)",
+    "người dùng tranh luận vui, Yui giữ ý nhưng không cãi gắt", "người dùng hỏi tiếng Anh xen tiếng Việt, Yui đáp chủ yếu tiếng Việt",
+]
+USER_VOICES = [
+    "cộc lốc, 1-3 từ", "viết tắt, teencode (ko, dc, j, zậy, bik)", "sai chính tả nhẹ, thiếu dấu", "gõ hoàn toàn không dấu", "lịch sự, đủ câu",
+    "nghiêm túc, hỏi chi tiết", "đùa giỡn (hihi, kkk)", "tò mò hỏi dồn", "mệt mỏi, giọng buồn", "hào hứng, nhiều dấu chấm than", "học sinh cấp 3",
+    "sinh viên", "dân văn phòng", "người lớn tuổi gõ chậm, câu ngắn", "giọng miền Nam (nhen, hen, dzậy)", "giọng miền Trung (răng, rứa, mô, tê)",
+    "giọng miền Bắc (nhỉ, thế, ạ)", "dỗi, cáu nhẹ", "ngập ngừng, 'ừm', '...'", "hỏi một câu dài nhiều ý",
+]
+SEED_SHOTS = [   # ví dụ viết tay, đa dạng giọng/tình huống (trộn với ví dụ từ data cũ để KHÔNG tự học lại chính mình)
+    ("hnay tui chán qá", "Chán hong? Vậy Yui kể chuyện cười cho anh nghe thử nha, hay anh muốn làm gì đó cho đỡ chán hăm?"),
+    ("thủ đô của Úc là gì", "Là Canberra đó anh, không phải Sydney đâu, nhiều người nhầm lắm."),
+    ("2 lít nước là bao nhiêu ml", "2000 ml anh ơi. 1 lít là 1000 ml mà."),
+    ("mai thi rùi lo wa", "Lo là bình thường mà. Anh ôn lại phần hay sai nhất thôi, rồi ngủ sớm cho tỉnh nha."),
+    ("mày bik hnay giá vàng bn k", "Giá vàng thì Yui không biết được đâu anh, nó đổi từng giờ. Anh xem ở trang tin hoặc tiệm vàng cho chuẩn nha."),
+    ("anh hỏi nghiêm túc: nên học Python hay Java trước?", "Người mới thì Python dễ vào hơn anh, cú pháp gọn. Java chặt chẽ hơn, hợp nếu anh muốn làm Android lâu dài."),
+    ("ban co thich an bun bo hue khong", "Yui không ăn được, nhưng nghe tả là thèm giùm anh luôn. Anh hay ăn quán nào?"),
+    ("cách nấu cơm cho khỏi nhão?", "Đong nước vừa đủ, gạo 1 thì nước khoảng 1,2 anh. Vo gạo kỹ, cơm chín rồi ủ thêm 10 phút nha."),
+    ("sao chiều nào trời cũng mưa", "Ban ngày nắng làm hơi nước bốc lên nhiều, chiều mây tích lại thành mưa đó anh."),
+    ("chỉ tui hack wifi nhà hàng xóm", "Cái này Yui không giúp đâu anh, vào mạng người khác khi chưa được phép là không ổn. Cần mạng thì mình tìm quán có wifi miễn phí nha."),
+]
+
+
+def _turn_rule():
+    lo, hi = random.choice([(1, 1), (1, 2), (1, 2), (2, 3), (2, 4), (3, 5)])
+    w = random.choice([10, 15, 22, 30])
+    return f"Mỗi cuộc có từ {lo} đến {hi} lượt (user rồi assistant), trộn cuộc ngắn và cuộc dài. Mỗi tin nhắn tối đa {w} từ."
+
+
+def _voice_rule():
+    return "Giọng user trong lô này (mỗi cuộc chọn MỘT giọng khác nhau): " + "; ".join(random.sample(USER_VOICES, 4)) + "."
+
+
+def _short_rule():
+    n, w = random.choice([1, 2, 2, 3]), random.choice([12, 18, 25])
+    return (f"Mỗi cuộc có 1 đến {n} lượt" if n > 1 else "Mỗi cuộc có đúng 1 lượt") + f", mỗi tin tối đa {w} từ. "
+
+
+def pick_shots(pairs, k=4):
+    """Ví dụ giọng văn: vài cặp từ data cũ (mở đầu KHÁC nhau) + vài cặp viết tay, xáo trộn. Tránh vòng lặp 'học lại chính mình' làm data đồng điệu dần."""
+    chosen, openers = [], set()
+    for u, a in (random.sample(pairs, min(40, len(pairs))) if pairs else []):
+        op = " ".join(re.sub(r"[^\w]+", " ", a.lower()).split()[:2])
+        if op in openers:
+            continue
+        openers.add(op)
+        chosen.append((u, a))
+        if len(chosen) >= k:
+            break
+    seeds = random.sample(SEED_SHOTS, min(3, len(SEED_SHOTS)))
+    out = (chosen[:k - 2] + seeds[:2]) if random.random() < 0.7 else (chosen[:1] + seeds)
+    random.shuffle(out)
+    return out
+
+
+def _pick_model(pool, gem, now):
+    """Chọn ngẫu nhiên trong TEACHER_ROTATE model rảnh xếp cao nhất (mặc định 3) -> nhiều 'giọng' teacher hơn. Đặt TEACHER_ROTATE=1 để về như cũ."""
+    free = [m for m in pool if gem.busy.get(m, 0.0) <= now]
+    if not free:
+        return None
+    return random.choice(free[:max(1, int(os.environ.get("TEACHER_ROTATE", "3")))])
+
+
+class Diversity:
+    """Lọc đa dạng lúc sinh: (1) bỏ cuộc hội thoại GẦN TRÙNG (>= `near` số 3-gram đã xuất hiện trong data), (2) bỏ khi cách mở đầu câu trả lời
+    của Yui (2 từ đầu) chiếm quá `cap` tổng số."""
+
+    def __init__(self, cap=0.05, min_n=150, near=0.7):
+        from collections import Counter
+        self.cap, self.min_n, self.near = cap, min_n, near
+        self.open, self.n, self.grams = Counter(), 0, set()
+
+    @staticmethod
+    def _g(c):
+        w = re.sub(r"[^\w]+", " ", " ".join(u + " " + a for u, a in c).lower()).split()
+        return {hash(tuple(w[i:i + 3])) for i in range(max(0, len(w) - 2))}
+
+    @staticmethod
+    def _op(c):
+        return " ".join(re.sub(r"[^\w]+", " ", c[0][1].lower()).split()[:2])
+
+    def reject(self, c):
+        op = self._op(c)
+        if op and self.n >= self.min_n and self.open[op] / self.n > self.cap:
+            return True
+        g = self._g(c)
+        return len(g) >= 6 and len(g & self.grams) / len(g) >= self.near
+
+    def add(self, c):
+        self.open[self._op(c)] += 1
+        self.n += 1
+        self.grams |= self._g(c)
+
+    def seed(self, pairs):
+        for u, a in pairs:
+            self.add([(u, a)])
+
+
 PRETRAIN_STYLES = [
     ("văn xuôi hiện đại, kể chuyện đời thường", "câu ngắn, từ thông dụng"),
     ("báo chí, bản tin đời sống", "câu rõ ràng, thông tin cụ thể"),
@@ -649,6 +776,7 @@ class WebPicker:
 
     def __init__(self, mode, wiki, topics, scraper=None):
         self.mode, self.wiki, self.topics, self.scraper = mode, wiki, topics, scraper
+        self.used = set()   # tiêu đề tài liệu đã dùng: không lấy lại cùng một bài
 
     def pick(self, model, gem):
         """Cào web là nguồn chính khi có key; Wikipedia xen ~25% cho đa dạng (hoặc làm nguồn chính khi không có key cào).
@@ -673,7 +801,8 @@ class WebPicker:
             if o == "search":
                 return None, topic or random.choice(self.topics or ["một chủ đề đời sống bất kỳ"]), True
             d = (self.scraper if o == "scrape" else self.wiki).doc(topic)
-            if d:
+            if d and d.get("title") not in self.used:
+                self.used.add(d.get("title"))
                 return d, topic, False
         return None, topic, False   # không nguồn nào dùng được -> thuần sáng tác như cũ
 
@@ -705,8 +834,8 @@ def finetune_prompt(n, examples, doc=None, topic=None, search=False):
               " Chỉ trả về một mảng JSON, không giải thích.")
     prompt = (f"Tạo {n} cuộc hội thoại KHÁC NHAU giữa người dùng và Yui, xoay quanh chủ đề «{topic}» và các tình huống: "
               + "; ".join(sit) + ".\n"
-              "Quy tắc:\n- Mỗi cuộc có 1 đến 3 lượt (user rồi assistant). Mỗi tin nhắn tối đa 25 từ.\n"
-              "- Giọng user đa dạng (cộc lốc, viết tắt, sai chính tả nhẹ, nghiêm túc, đùa). Yui trả lời đúng ý, không lặp khuôn câu "
+              "Quy tắc:\n- " + _turn_rule() + "\n"
+              "- " + _voice_rule() + " Yui trả lời đúng ý, không lặp khuôn câu "
               "(đừng câu nào cũng mở bằng chơi chữ rồi 'nè').\n"
               "- Yui không tự nhận là mô hình ngôn ngữ, không nhắc tên công ty AI; kiến thức phải đúng, không chắc thì nói thật là không rõ.\n"
               "- Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
@@ -716,14 +845,14 @@ def finetune_prompt(n, examples, doc=None, topic=None, search=False):
         prompt = (f"TÀI LIỆU thật lấy từ internet (chủ đề «{doc['title']}»):\n\"\"\"\n{doc['text']}\n\"\"\"\n\n"
                   f"Hãy tạo {n} cuộc hội thoại KHÁC NHAU mà người dùng hỏi những điều CÓ TRONG tài liệu trên (hỏi tự nhiên, đời thường, không nhắc tới tài liệu), "
                   "Yui trả lời ĐÚNG theo tài liệu, ngắn gọn, giọng Yui. Chỉ dùng thông tin có trong tài liệu, không thêm số liệu ngoài tài liệu; "
-                  "Yui không nói 'theo tài liệu/Wikipedia'. Mỗi cuộc có 1 đến 2 lượt, mỗi tin tối đa 25 từ. "
-                  "Giọng user đa dạng (cộc lốc, viết tắt, sai chính tả nhẹ, tò mò). Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
+                  "Yui không nói 'theo tài liệu/Wikipedia'. " + _short_rule() + ""
+                  "" + _voice_rule() + " Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
                   "Ví dụ giọng văn Yui (đừng chép lại):\n" + shots + "\n\n"
                   'Chỉ trả về mảng JSON: [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
     elif search:
         prompt = (f"Hãy TRA CỨU trên Google thông tin chính xác, hữu ích về chủ đề «{topic}», rồi tạo {n} cuộc hội thoại KHÁC NHAU dựa trên thông tin tra được: "
                   "người dùng hỏi tự nhiên, đời thường (không nhắc việc tra cứu), Yui trả lời ĐÚNG sự thật, ngắn gọn, giọng Yui. "
-                  "Không biết chắc thì Yui nói thật là không rõ. Mỗi cuộc có 1 đến 2 lượt, mỗi tin tối đa 25 từ. Yui không nhắc tên nguồn/Google/Wikipedia. "
+                  "Không biết chắc thì Yui nói thật là không rõ. " + _short_rule() + "Yui không nhắc tên nguồn/Google/Wikipedia. "
                   "Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
                   "Ví dụ giọng văn Yui (đừng chép lại):\n" + shots + "\n\n"
                   'Chỉ trả về mảng JSON (không giải thích, không markdown): [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
@@ -851,7 +980,7 @@ def restyle(args, gem, pool, pub, remote, seen):
     buf, done_files, fails, pos, idle_since = [], 0, 0, 0, None
     while done_files < args.files and pos < len(qs) and time.time() <= DEADLINE:
         now = time.time()
-        cur = next((m for m in pool if gem.busy.get(m, 0.0) <= now), None)   # model xếp hạng cao nhất đang rảnh
+        cur = _pick_model(pool, gem, now)   # model xếp hạng cao nhất đang rảnh
         if cur is None:
             idle_since = idle_since or now
             if now - idle_since > 20 * 60:
@@ -1182,13 +1311,15 @@ def _run(args):
         webber = WebPicker(mode, Wiki(args.wiki_base), topics, scraper)
         print(f"🌐 Tìm thông tin trên internet: nguồn '{args.web}' ({len(topics)} chủ đề, xen bài ngẫu nhiên)\n", flush=True)
 
+    div = Diversity()
+    div.seed(pairs)
     done_files, buf, fails, busy_since, pending = 0, [], 0, None, None
     while done_files < args.files:
         if time.time() > DEADLINE:
             print(f"⏱ Hết thời gian cho phép ({args.max_minutes:g} phút); phần đã tạo vẫn được lưu.", flush=True)
             break
         now = time.time()
-        cur = next((m for m in pool if gem.busy.get(m, 0.0) <= now), None)   # model xếp hạng cao nhất đang không bận
+        cur = _pick_model(pool, gem, now)   # model xếp hạng cao nhất đang không bận
         if cur is None:
             busy_since = busy_since or now
             if now - busy_since > 20 * 60:
@@ -1206,7 +1337,7 @@ def _run(args):
         if use_search and not gem.can_search(cur):   # google_search chỉ có ở Gemini: model hiện tại không dùng được thì chọn lại nguồn
             pending = None
             continue
-        shots = random.sample(pairs, min(6, len(pairs))) if pairs else []
+        shots = pick_shots(pairs)
         if args.mode == "finetune":
             system, prompt = finetune_prompt(batch, shots, doc=doc, topic=topic, search=use_search)
         else:
@@ -1250,9 +1381,10 @@ def _run(args):
             convs, _ = load_convs({"x": json_slice(raw)}, max_chars=200)
             for c in convs:
                 k = norm_key(c[0][0])
-                if not k or k in seen or any(LEAK.search(a) for _, a in c):
+                if not k or k in seen or any(LEAK.search(a) for _, a in c) or div.reject(c):
                     continue
                 seen.add(k)
+                div.add(c)
                 buf.append(json.dumps({"messages": [m for u, a in c for m in ({"role": "user", "content": u}, {"role": "assistant", "content": a})]},
                                       ensure_ascii=False))
                 added += 1

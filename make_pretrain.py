@@ -71,6 +71,25 @@ TREE = {
     "kể chuyện và sáng tác": ["truyện ngắn đời thường", "truyện cổ tích và truyền thuyết kể lại", "tuỳ bút về nơi chốn", "ký ức tuổi thơ", "truyện khoa học viễn tưởng nhẹ nhàng",
                               "truyện trinh thám nhỏ", "thư gửi người thân", "nhật ký hành trình"],
 }
+# ============================ v6.2: thêm lĩnh vực / hình thức / giọng văn để đa dạng hơn ============================
+TREE.update({
+    "lịch sử và địa lý thế giới": ["văn minh cổ đại", "thời trung cổ và phục hưng", "cách mạng công nghiệp", "hai cuộc chiến tranh thế giới", "các châu lục và khí hậu",
+                                   "các con sông, sa mạc, dãy núi lớn", "các thành phố lớn trên thế giới", "đường tơ lụa và giao thương"],
+    "toán học và logic": ["số và phép tính trong đời sống", "hình học quanh ta", "xác suất và may rủi", "thống kê đọc hiểu báo chí", "lịch sử các phát minh toán học",
+                          "đố mẹo và tư duy logic", "thuật toán nghĩ như thế nào"],
+    "pháp luật và quyền lợi đời thường": ["hợp đồng thuê nhà và đi làm (nguyên tắc chung)", "quyền người tiêu dùng", "an toàn giao thông", "quyền riêng tư dữ liệu cá nhân",
+                                          "bản quyền và sử dụng nội dung", "thủ tục hành chính thường gặp (nguyên tắc chung)"],
+    "y học và cơ thể (chi tiết hơn)": ["hệ tiêu hoá và hấp thu", "tim mạch và huyết áp", "hệ miễn dịch và vắc xin", "giấc ngủ và nhịp sinh học", "mắt, tai và các giác quan",
+                                       "da, tóc, móng", "dinh dưỡng theo độ tuổi"],
+    "kinh doanh và quản lý": ["bán hàng nhỏ lẻ", "chăm sóc khách hàng", "quản lý dự án đơn giản", "kế toán căn bản", "thương hiệu và quảng cáo", "chuỗi cung ứng", "văn hoá doanh nghiệp"],
+    "ngôn ngữ và tiếng Anh cho người Việt": ["lỗi tiếng Anh người Việt hay mắc", "từ vựng theo chủ đề", "phát âm và trọng âm", "ngữ pháp dễ hiểu", "tiếng Việt vùng miền", "từ vay mượn trong tiếng Việt"],
+    "lập trình và phần mềm (giải thích bằng văn xuôi)": ["biến, vòng lặp, hàm", "cấu trúc dữ liệu thông dụng", "gỡ lỗi từ đầu", "git và làm việc nhóm", "cơ sở dữ liệu cơ bản",
+                                                         "web chạy như thế nào", "kiểm thử phần mềm"],
+    "tôn giáo, tín ngưỡng và triết học (mô tả trung lập)": ["Phật giáo và đời sống Việt", "tín ngưỡng thờ cúng tổ tiên", "Nho giáo và gia đình", "Kitô giáo ở Việt Nam", "triết học Hy Lạp cổ đại", "các lễ hội tôn giáo"],
+    "thể thao và rèn luyện": ["bóng đá và chiến thuật cơ bản", "chạy bộ cho người mới", "bơi lội", "cầu lông và bóng bàn", "cờ vua và thể thao trí tuệ", "chấn thương thường gặp và phòng tránh"],
+    "tin tức đời sống (kiểu bản tin)": ["giá cả và chợ", "giao thông đô thị", "thời tiết bất thường", "giáo dục và tuyển sinh", "sự kiện văn hoá địa phương", "công nghệ mới đến tay người dùng"],
+})
+
 FORMS = [
     ("bài giảng kiểu sách giáo khoa: giải thích khái niệm từ cơ bản đến sâu, có ví dụ cụ thể, tổng kết cuối bài", "expository"),
     ("bài báo chuyên đề (feature) có bối cảnh, diễn biến, nhân vật và phân tích", "expository"),
@@ -84,6 +103,33 @@ FORMS = [
     ("bài viết trải nghiệm cá nhân (ngôi thứ nhất) pha kiến thức, giọng tự nhiên, chân thực", "personal"),
 ]
 AUDIENCES = ["học sinh cấp 2", "học sinh cấp 3", "sinh viên năm đầu", "người đi làm bận rộn", "người lớn tuổi mới làm quen chủ đề", "bạn đọc phổ thông tò mò", "người trong nghề muốn hiểu sâu hơn"]
+FORMS += [
+    ("bài phỏng vấn / trò chuyện hai người, viết thành văn bản liền mạch có lời dẫn", "dialogue"),
+    ("bài đăng diễn đàn hỏi đáp: một người nêu vấn đề, vài người trả lời với kinh nghiệm khác nhau (văn xuôi, không đánh số)", "dialogue"),
+    ("bài đánh giá sản phẩm / dịch vụ / địa điểm từ trải nghiệm thật, có ưu nhược điểm", "personal"),
+    ("bản tin ngắn đời sống - xã hội kiểu báo mạng, câu ngắn, thông tin dồn lên đầu", "expository"),
+    ("bài phát biểu / diễn văn ngắn truyền cảm hứng", "expository"),
+    ("thư tay / email dài gửi người thân hoặc đồng nghiệp, vừa kể chuyện vừa trao đổi", "personal"),
+    ("câu chuyện kể từ góc nhìn một nhân vật nhỏ trong đời thường", "story"),
+    ("bài giải thích bằng phép so sánh và ẩn dụ, đi từ hình ảnh quen thuộc tới khái niệm", "expository"),
+    ("tổng hợp các câu hỏi thường gặp (FAQ) viết thành văn xuôi, mỗi ý có lý giải", "expository"),
+    ("nhật ký học tập / dự án: ghi lại quá trình thử, lỗi và bài học", "personal"),
+    ("bài kể về mẹo và phong tục của ông bà, kèm giải thích dễ hiểu", "expository"),
+    ("kịch bản hội thoại hai người trong một tình huống đời thường, có dẫn truyện", "dialogue"),
+]
+AUDIENCES += ["thanh thiếu niên mê game và mạng xã hội", "người nội trợ", "người làm nông", "người mới lên thành phố", "phụ huynh có con nhỏ", "người đã về hưu"]
+OPENINGS = ["mở đầu bằng một cảnh cụ thể", "mở đầu bằng một câu hỏi", "mở đầu bằng một con số hoặc sự thật bất ngờ", "mở đầu bằng một câu nói quen thuộc rồi phản biện",
+            "mở đầu bằng một kỷ niệm ngắn", "vào thẳng vấn đề, không dạo đầu", "mở đầu bằng một so sánh đời thường"]
+VOICES = ["giọng điềm đạm, chính xác", "giọng ấm áp, gần gũi", "giọng hóm hỉnh nhẹ", "giọng trang trọng, học thuật vừa phải", "giọng kể chuyện chậm rãi",
+          "giọng thẳng thắn, ngắn gọn", "giọng nhẹ nhàng, tâm tình"]
+REGIONS = ["từ vựng miền Bắc", "từ vựng miền Trung", "từ vựng miền Nam", "từ vựng trung tính, phổ thông", "từ vựng trung tính, phổ thông"]
+
+
+def style_hint():
+    return (f" Phong cách: {random.choice(OPENINGS)}; {random.choice(VOICES)}; {random.choice(REGIONS)}. "
+            "Tránh cụm sáo rỗng như 'trong cuộc sống hiện đại ngày nay', 'không thể phủ nhận'; câu dài ngắn đan xen.")
+
+
 ANGLES = ["nguồn gốc và lịch sử", "cơ chế hoạt động bên trong", "những hiểu lầm phổ biến", "ví dụ thực tế ở Việt Nam", "so sánh với cách làm/nơi khác",
           "tác động đến đời sống", "câu chuyện đằng sau", "những câu hỏi còn bỏ ngỏ", "bài học rút ra"]
 
@@ -213,7 +259,7 @@ RULES = ("Yêu cầu: tiếng Việt chuẩn, có dấu đầy đủ, đúng ch�
 
 
 def seed_prompt(words, domain, sub, form, aud, angle, search=False):
-    p = (f"Viết MỘT bài hoàn chỉnh về «{sub}» (lĩnh vực: {domain}).\nHình thức: {form}.\nĐối tượng bạn đọc: {aud}.\nGóc tiếp cận chính: {angle}.\n" + RULES.format(w=words))
+    p = (f"Viết MỘT bài hoàn chỉnh về «{sub}» (lĩnh vực: {domain}).\nHình thức: {form}.\nĐối tượng bạn đọc: {aud}.\nGóc tiếp cận chính: {angle}.\n" + RULES.format(w=words) + style_hint())
     if search:
         p = f"Hãy tra cứu thông tin chính xác về «{sub}» rồi viết dựa trên đó.\n" + p
     return SYSTEM, p
@@ -223,7 +269,7 @@ def rewrite_prompt(words, doc, form, aud):
     p = (f"TÀI LIỆU thật (chủ đề «{doc['title']}»):\n\"\"\"\n{doc['text'][:6000]}\n\"\"\"\n\n"
          f"Dựa trên thông tin trong tài liệu, viết MỘT bài MỚI hoàn toàn bằng lời văn của bạn (không chép nguyên câu, không chép quá 8 từ liên tiếp, "
          f"có thể sắp xếp lại ý, bổ sung giải thích và ví dụ không mâu thuẫn tài liệu, không thêm số liệu ngoài tài liệu).\n"
-         f"Hình thức: {form}.\nĐối tượng bạn đọc: {aud}.\n" + RULES.format(w=words))
+         f"Hình thức: {form}.\nĐối tượng bạn đọc: {aud}.\n" + RULES.format(w=words) + style_hint())
     return SYSTEM, p
 
 
@@ -242,14 +288,18 @@ class Balancer:
     """Chọn lĩnh vực ít được dùng nhất (có ngẫu nhiên) để dữ liệu phủ đều."""
 
     def __init__(self, tree):
-        self.tree, self.used = tree, Counter()
+        self.tree, self.used, self.used_sub = tree, Counter(), Counter()
 
     def pick(self):
         doms = list(self.tree)
         weights = [1.0 / (1 + self.used[d]) for d in doms]
         d = random.choices(doms, weights)[0]
         self.used[d] += 1
-        return d, random.choice(self.tree[d])
+        subs = self.tree[d]
+        sw = [1.0 / (1 + self.used_sub[(d, x)]) for x in subs]   # cân bằng cả chủ đề con, không chỉ lĩnh vực
+        sub = random.choices(subs, sw)[0]
+        self.used_sub[(d, sub)] += 1
+        return d, sub
 
 
 def parse_scores(raw, n):
@@ -328,6 +378,7 @@ def run(a):
     st = dict(files=0, docs=0, chars=0, rej=Counter(), fails=0, busy_since=None, streak=0)
     buf, buf_chars, pending_judge, pending = [], 0, [], None
     stop_chars = need * cpt
+    cur_w = a.words
 
     def flush(force=False):
         nonlocal buf, buf_chars
@@ -373,7 +424,7 @@ def run(a):
                 print(f"⏱ Hết thời gian cho phép ({a.max_minutes:g} phút); phần đã tạo vẫn được lưu.", flush=True)
                 break
             now = time.time()
-            cur = next((m for m in pool if gem.busy.get(m, 0.0) <= now), None)
+            cur = md._pick_model(pool, gem, now)
             if cur is None:
                 st["busy_since"] = st["busy_since"] or now
                 if now - st["busy_since"] > 20 * 60:
@@ -388,6 +439,7 @@ def run(a):
             if pending is None:   # chọn đề bài MỚI (thử lại sau lỗi thì giữ nguyên đề)
                 form, kind = random.choice(FORMS)
                 aud = random.choice(AUDIENCES)
+                cur_w = max(350, int(a.words * random.uniform(0.5, 1.4)))   # độ dài mỗi bài khác nhau
                 doc, use_search, domain, sub = None, False, None, None
                 if webber and random.random() >= a.synth:
                     doc, topic, use_search = webber.pick(cur, gem)
@@ -398,15 +450,15 @@ def run(a):
                     pending = ("seed", None, domain, sub, form, aud, use_search)
             mode, doc, domain, sub, form, aud, use_search = pending
             if mode == "rewrite":
-                system, prompt = rewrite_prompt(a.words, doc, form, aud)
+                system, prompt = rewrite_prompt(cur_w, doc, form, aud)
                 print(f"  📖 viết lại «{doc['title']}» ({doc.get('source', 'web')}) -> {cur}", flush=True)
             else:
                 if use_search and not gem.can_search(cur):
                     use_search = False
-                system, prompt = seed_prompt(a.words, domain, sub, form, aud, random.choice(ANGLES), search=use_search)
+                system, prompt = seed_prompt(cur_w, domain, sub, form, aud, random.choice(ANGLES), search=use_search)
                 print(f"  ✍ sáng tác «{sub}» ({domain}) -> {cur}", flush=True)
             try:
-                raw = gem.generate(cur, system, prompt, temperature=a.temperature, max_tokens=min(8192, int(a.words * 5)), json_mode=False, search=use_search)
+                raw = gem.generate(cur, system, prompt, temperature=a.temperature, max_tokens=min(8192, int(cur_w * 5)), json_mode=False, search=use_search)
             except SearchUnavailable:
                 pending = (mode, doc, domain, sub, form, aud, False)
                 continue
@@ -431,7 +483,7 @@ def run(a):
                 print(f"⛔ {e}. Dừng; phần đã tạo vẫn được lưu.", flush=True)
                 break
             st["fails"], pending = 0, None
-            text, why = clean_doc(raw, a.words, doc)
+            text, why = clean_doc(raw, cur_w, doc)
             if text is None or dedup.is_dup(text):
                 why = why or "trùng/gần giống"
                 st["rej"][why] += 1; st["streak"] += 1
