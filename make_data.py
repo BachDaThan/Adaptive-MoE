@@ -232,10 +232,10 @@ class Diversity:
     """Lọc đa dạng lúc sinh: (1) bỏ cuộc hội thoại GẦN TRÙNG (>= `near` số 3-gram đã xuất hiện trong data), (2) bỏ khi cách mở đầu câu trả lời
     của Yui (2 từ đầu) chiếm quá `cap` tổng số."""
 
-    def __init__(self, cap=0.05, min_n=150, near=0.7):
+    def __init__(self, cap=0.05, min_n=150, near=0.7, cap1=0.08):
         from collections import Counter
-        self.cap, self.min_n, self.near = cap, min_n, near
-        self.open, self.n, self.grams = Counter(), 0, set()
+        self.cap, self.min_n, self.near, self.cap1 = cap, min_n, near, cap1
+        self.open, self.first, self.n, self.grams = Counter(), Counter(), 0, set()
 
     @staticmethod
     def _g(c):
@@ -250,11 +250,16 @@ class Diversity:
         op = self._op(c)
         if op and self.n >= self.min_n and self.open[op] / self.n > self.cap:
             return True
+        fw = op.split(" ")[0] if op else ""
+        if fw and self.n >= self.min_n and self.first[fw] / self.n > self.cap1:   # gộp mọi biến thể: «có chứ», «có á», «có nè»...
+            return True
         g = self._g(c)
         return len(g) >= 6 and len(g & self.grams) / len(g) >= self.near
 
     def add(self, c):
-        self.open[self._op(c)] += 1
+        op = self._op(c)
+        self.open[op] += 1
+        self.first[op.split(' ')[0] if op else ''] += 1
         self.n += 1
         self.grams |= self._g(c)
 
