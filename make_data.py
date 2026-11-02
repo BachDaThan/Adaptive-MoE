@@ -201,7 +201,7 @@ def _voice_rule():
 def _vary_rule():
     """Đặt đầu prompt: ép TRỘN kiểu câu hỏi và cách Yui mở lời (data cũ: 'có' mở đầu ~16% câu trả lời, 'làm sao' ~7% câu hỏi)."""
     qs = random.sample(["ai", "cái gì", "ở đâu", "khi nào", "tại sao", "bao nhiêu", "nên chọn cái nào", "so sánh", "nhờ làm giúp", "xin gợi ý", "kể chuyện / tâm sự", "câu lệnh ngắn", "hỏi về Yui"], 5)
-    return ("LƯU Ý ĐA DẠNG: trộn nhiều kiểu câu hỏi (" + ", ".join(qs) + "); tối đa 1 cuộc trong lô bắt đầu bằng «làm sao» hoặc «sao». "
+    return ("LƯU Ý ĐA DẠNG: trộn nhiều kiểu câu hỏi (" + ", ".join(qs) + "); tối đa 1 cuộc trong lô bắt đầu bằng «làm sao» hoặc «sao»; tối đa 1/5 số câu hỏi là dạng «... có ... không?» (yes/no), còn lại là câu hỏi mở (vì sao, như thế nào, gợi ý, kể, nhờ làm...). "
             "Yui KHÔNG mở đầu quá 1/5 số cuộc bằng «có», «đúng», «cần», «không», «hong»: còn lại vào thẳng nội dung, hoặc mở bằng cách khác (kể, hỏi lại, nhận xét, ví dụ...).")
 
 
@@ -235,13 +235,16 @@ def _pick_model(pool, gem, now):
     return random.choice(free[:max(1, int(os.environ.get("TEACHER_ROTATE", "3")))])
 
 
+_YN = re.compile(r"\bcó\b.*\b(không|hông|hong|hem|hôn|ko|chưa|k)\b\W*$")   # câu hỏi yes/no dạng «X có Y không?»
+
+
 class Diversity:
     """Lọc đa dạng lúc sinh: (1) bỏ cuộc hội thoại GẦN TRÙNG (>= `near` số 3-gram đã xuất hiện trong data), (2) bỏ khi cách mở đầu câu trả lời
     của Yui (2 từ đầu) chiếm quá `cap` tổng số."""
 
-    def __init__(self, cap=0.05, min_n=150, near=0.7, cap1=0.08, capq=0.05):
+    def __init__(self, cap=0.05, min_n=150, near=0.7, cap1=0.08, capq=0.05, capyn=0.15):
         from collections import Counter
-        self.cap, self.min_n, self.near, self.cap1, self.capq = cap, min_n, near, cap1, capq
+        self.cap, self.min_n, self.near, self.cap1, self.capq, self.capyn, self.yn = cap, min_n, near, cap1, capq, capyn, 0
         self.open, self.first, self.qopen, self.n, self.grams = Counter(), Counter(), Counter(), 0, set()
 
     @staticmethod
@@ -257,6 +260,8 @@ class Diversity:
         op = self._op(c)
         if op and self.n >= self.min_n and self.open[op] / self.n > self.cap:
             return True
+        if self.n >= self.min_n and _YN.search(c[0][0].lower()) and self.yn / self.n > self.capyn:   # quá nhiều câu «X có Y không?»
+            return True
         qo = " ".join(re.sub(r"[^\w]+", " ", c[0][0].lower()).split()[:2])
         if qo and self.n >= self.min_n and self.qopen[qo] / self.n > self.capq:   # câu hỏi cũng không được rập khuôn («làm sao...» quá nhiều)
             return True
@@ -267,6 +272,7 @@ class Diversity:
         return len(g) >= 6 and len(g & self.grams) / len(g) >= self.near
 
     def add(self, c):
+        self.yn += bool(_YN.search(c[0][0].lower()))
         op = self._op(c)
         self.qopen[" ".join(re.sub(r"[^\w]+", " ", c[0][0].lower()).split()[:2])] += 1
         self.open[op] += 1
