@@ -198,6 +198,13 @@ def _voice_rule():
     return "Giọng user trong lô này (mỗi cuộc chọn MỘT giọng khác nhau): " + "; ".join(random.sample(USER_VOICES, 4)) + "."
 
 
+def _vary_rule():
+    """Đặt đầu prompt: ép TRỘN kiểu câu hỏi và cách Yui mở lời (data cũ: 'có' mở đầu ~16% câu trả lời, 'làm sao' ~7% câu hỏi)."""
+    qs = random.sample(["ai", "cái gì", "ở đâu", "khi nào", "tại sao", "bao nhiêu", "nên chọn cái nào", "so sánh", "nhờ làm giúp", "xin gợi ý", "kể chuyện / tâm sự", "câu lệnh ngắn", "hỏi về Yui"], 5)
+    return ("LƯU Ý ĐA DẠNG: trộn nhiều kiểu câu hỏi (" + ", ".join(qs) + "); tối đa 1 cuộc trong lô bắt đầu bằng «làm sao» hoặc «sao». "
+            "Yui KHÔNG mở đầu quá 1/5 số cuộc bằng «có», «đúng», «cần», «không», «hong»: còn lại vào thẳng nội dung, hoặc mở bằng cách khác (kể, hỏi lại, nhận xét, ví dụ...).")
+
+
 def _short_rule():
     n, w = random.choice([1, 2, 2, 3]), random.choice([12, 18, 25])
     return (f"Mỗi cuộc có 1 đến {n} lượt" if n > 1 else "Mỗi cuộc có đúng 1 lượt") + f", mỗi tin tối đa {w} từ. "
@@ -232,10 +239,10 @@ class Diversity:
     """Lọc đa dạng lúc sinh: (1) bỏ cuộc hội thoại GẦN TRÙNG (>= `near` số 3-gram đã xuất hiện trong data), (2) bỏ khi cách mở đầu câu trả lời
     của Yui (2 từ đầu) chiếm quá `cap` tổng số."""
 
-    def __init__(self, cap=0.05, min_n=150, near=0.7, cap1=0.08):
+    def __init__(self, cap=0.05, min_n=150, near=0.7, cap1=0.08, capq=0.05):
         from collections import Counter
-        self.cap, self.min_n, self.near, self.cap1 = cap, min_n, near, cap1
-        self.open, self.first, self.n, self.grams = Counter(), Counter(), 0, set()
+        self.cap, self.min_n, self.near, self.cap1, self.capq = cap, min_n, near, cap1, capq
+        self.open, self.first, self.qopen, self.n, self.grams = Counter(), Counter(), Counter(), 0, set()
 
     @staticmethod
     def _g(c):
@@ -250,6 +257,9 @@ class Diversity:
         op = self._op(c)
         if op and self.n >= self.min_n and self.open[op] / self.n > self.cap:
             return True
+        qo = " ".join(re.sub(r"[^\w]+", " ", c[0][0].lower()).split()[:2])
+        if qo and self.n >= self.min_n and self.qopen[qo] / self.n > self.capq:   # câu hỏi cũng không được rập khuôn («làm sao...» quá nhiều)
+            return True
         fw = op.split(" ")[0] if op else ""
         if fw and self.n >= self.min_n and self.first[fw] / self.n > self.cap1:   # gộp mọi biến thể: «có chứ», «có á», «có nè»...
             return True
@@ -258,6 +268,7 @@ class Diversity:
 
     def add(self, c):
         op = self._op(c)
+        self.qopen[" ".join(re.sub(r"[^\w]+", " ", c[0][0].lower()).split()[:2])] += 1
         self.open[op] += 1
         self.first[op.split(' ')[0] if op else ''] += 1
         self.n += 1
@@ -861,7 +872,7 @@ def finetune_prompt(n, examples, doc=None, topic=None, search=False):
                   "Không nội dung 18+, bạo lực, chính trị, không thông tin cá nhân thật.\n"
                   "Ví dụ giọng văn Yui (đừng chép lại):\n" + shots + "\n\n"
                   'Chỉ trả về mảng JSON (không giải thích, không markdown): [{"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}, ...]')
-    return system, prompt
+    return system, _vary_rule() + "\n" + prompt
 
 
 def pretrain_prompt(n, doc=None, topic=None, search=False):

@@ -16,6 +16,8 @@ ap.add_argument("--local", default=None)
 ap.add_argument("--apply", action="store_true")
 ap.add_argument("--cap", type=float, default=0.05, help="một kiểu mở đầu (2 từ đầu câu trả lời) tối đa ngần này của tổng")
 ap.add_argument("--cap1", type=float, default=0.06, help="một TỪ mở đầu (vd «có») tối đa ngần này của tổng, gộp mọi biến thể: có chứ / có á / có nè...")
+ap.add_argument("--capq", type=float, default=0.04, help="một kiểu mở đầu CÂU HỎI (2 từ đầu, vd «làm sao») tối đa ngần này của tổng")
+ap.add_argument("--show", default=None, help="in 8 hội thoại mẫu có câu trả lời bắt đầu bằng từ này (vd --show có) rồi thoát, để xem tận mắt")
 ap.add_argument("--near", type=float, default=0.7, help="bỏ nếu >= ngần này số 3-gram đã có ở các hội thoại giữ trước đó")
 a = ap.parse_args()
 
@@ -48,12 +50,18 @@ for f, lines in files.items():
                 if m[i].get("role") == "user" and m[i + 1].get("role") == "assistant"]
         rows.append((f, ln, conv or None, "<tool>" in ln))
 total = sum(1 for r in rows if r[2])
+if a.show:
+    import random
+    hit = [r[2] for r in rows if r[2] and not r[3] and W(r[2][0][1])[:1] == [a.show.lower()]]
+    print(f"{len(hit)} hội thoại có câu trả lời bắt đầu bằng «{a.show}». Mẫu ngẫu nhiên:")
+    for c in random.sample(hit, min(8, len(hit))): print("  Hỏi:", c[0][0][:110], "\n  Đáp:", c[0][1][:110], "\n")
+    sys.exit(0)
 print(f"Đọc {len(files)} file, {total} hội thoại.")
-maxop = max(20, int(a.cap * total)); maxfw = max(30, int(a.cap1 * total))
+maxop = max(20, int(a.cap * total)); maxfw = max(30, int(a.cap1 * total)); maxq = max(30, int(a.capq * total))
 print("Câu HỎI hay bắt đầu bằng:", ", ".join(f"«{o}» {n}" for o, n in Counter(' '.join(W(r[2][0][0])[:2]) for r in rows if r[2]).most_common(6)))
 print("Câu TRẢ LỜI hay bắt đầu bằng từ:", ", ".join(f"«{o}» {n}" for o, n in Counter(' '.join(W(r[2][0][1])[:1]) for r in rows if r[2] and not r[3]).most_common(6)))
 
-seen_exact, seen_g, opn, opn1 = set(), set(), Counter(), Counter()
+seen_exact, seen_g, opn, opn1, opnq = set(), set(), Counter(), Counter(), Counter()
 why = Counter(); keep = {}
 for f, ln, conv, is_tool in rows:
     ok = True
@@ -62,10 +70,12 @@ for f, ln, conv, is_tool in rows:
         if k in seen_exact: ok = False; why["trùng y hệt"] += 1
         elif not is_tool:
             op = " ".join(W(conv[0][1])[:2]); fw = " ".join(W(conv[0][1])[:1]); g = grams(conv)
-            if fw and opn1[fw] >= maxfw: ok = False; why["từ mở đầu bị lặp quá nhiều"] += 1
+            qo = " ".join(W(conv[0][0])[:2])
+            if qo and opnq[qo] >= maxq: ok = False; why["câu hỏi mở đầu bị lặp quá nhiều"] += 1
+            elif fw and opn1[fw] >= maxfw: ok = False; why["từ mở đầu bị lặp quá nhiều"] += 1
             elif op and opn[op] >= maxop: ok = False; why["mở đầu bị lặp quá nhiều"] += 1
             elif len(g) >= 6 and len(g & seen_g) / len(g) >= a.near: ok = False; why["gần trùng"] += 1
-            else: opn[op] += 1; opn1[fw] += 1; seen_g |= g
+            else: opn[op] += 1; opn1[fw] += 1; opnq[qo] += 1; seen_g |= g
         if ok: seen_exact.add(k)
     if ok: keep.setdefault(f, []).append(ln)
 
