@@ -228,11 +228,13 @@ def pick_shots(pairs, k=4):
 
 
 def _pick_model(pool, gem, now):
-    """Chọn ngẫu nhiên trong TEACHER_ROTATE model rảnh xếp cao nhất (mặc định 3) -> nhiều 'giọng' teacher hơn. Đặt TEACHER_ROTATE=1 để về như cũ."""
+    """Chọn ngẫu nhiên trong TEACHER_ROTATE model rảnh xếp cao nhất CỦA CÙNG provider đứng đầu (mặc định 3) -> nhiều 'giọng' teacher hơn. Đặt TEACHER_ROTATE=1 để về như cũ."""
     free = [m for m in pool if gem.busy.get(m, 0.0) <= now]
     if not free:
         return None
-    return random.choice(free[:max(1, int(os.environ.get("TEACHER_ROTATE", "3")))])
+    top = free[0].split("::", 1)[0]   # chỉ xoay giọng TRONG provider đứng đầu còn rảnh; không nhảy sang provider kế khi provider đầu vẫn dùng được
+    same = [m for m in free if m.split("::", 1)[0] == top]
+    return random.choice(same[:max(1, int(os.environ.get("TEACHER_ROTATE", "3")))])
 
 
 _YN = re.compile(r"\bcó\b.*\b(không|hông|hong|hem|hôn|ko|chưa|k)\b\W*$")   # câu hỏi yes/no dạng «X có Y không?»
