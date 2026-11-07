@@ -158,7 +158,7 @@ def clean_doc(raw, words, src=None):
         return None, "quá ít đoạn"
     text = "\n".join(lines)
     n = len(text.split())
-    if n < 0.55 * words or n > 2.4 * words:
+    if n < 0.45 * words or n > 2.4 * words:
         return None, ("quá ngắn" if n < words else "quá dài")
     if not text.rstrip().endswith(END_OK):   # bị cắt giữa chừng: lùi về câu cuối trọn vẹn nếu còn >= 85%
         cut = max(text.rfind(c) for c in ".!?…")
@@ -177,11 +177,52 @@ def clean_doc(raw, words, src=None):
         return None, "lặp câu"
     w = md.norm_key(text).split()
     if len(w) > 40:
-        grams = Counter(" ".join(w[i:i + 4]) for i in range(len(w) - 3))
-        if grams.most_common(1)[0][1] > max(4, len(w) // 150):
+        # v6.3: ngưỡng cũ (max(4, n/150)) quá gắt: tiếng Việt có nhiều cụm 4 từ phổ biến ("là một trong những", "không chỉ ... mà còn"),
+        # và tên chủ đề lặp tự nhiên trong bài dài -> loại oan ~55% bài. Giờ chỉ loại khi LẶP THẬT SỰ (cụm 4 từ rất nhiều lần, hoặc cụm 8 từ lặp lại).
+        g4 = Counter(" ".join(w[i:i + 4]) for i in range(len(w) - 3))
+        g8 = Counter(" ".join(w[i:i + 8]) for i in range(len(w) - 7))
+        if g4.most_common(1)[0][1] > max(REP4_MIN, len(w) // REP4_DIV) or g8.most_common(1)[0][1] > REP8_MAX:
             return None, "lặp cụm từ"
-    if src and md.too_close(text, src, n=10):
+    if src:
+        text, why = strip_copied(text, src)
+        if text is None:
+            return None, why
+        if len(text.split()) < 0.4 * words:
+            return None, "quá ngắn"
+    return text, None
+
+
+REP4_MIN = int(os.environ.get("REP4_MIN", "10"))     # 1 cụm 4 từ lặp quá ngần này lần (và quá len/REP4_DIV) mới bị loại
+REP4_DIV = int(os.environ.get("REP4_DIV", "60"))
+REP8_MAX = int(os.environ.get("REP8_MAX", "3"))      # 1 cụm 8 từ lặp quá ngần này lần = vòng lặp
+COPY_N = int(os.environ.get("COPY_N", "10"))         # chép >= ngần này từ liên tiếp từ nguồn = câu chép
+COPY_MAX_FRAC = float(os.environ.get("COPY_MAX_FRAC", "0.15"))   # quá ngần này tỉ lệ câu bị chép -> bỏ cả bài
+
+
+def strip_copied(text, src):
+    """v6.3: thay vì bỏ cả bài khi có MỘT câu chép nguồn, bỏ riêng các câu chép; chỉ loại cả bài nếu chép nhiều (> COPY_MAX_FRAC câu)
+    hoặc bỏ xong bài còn quá ngắn. -> (text đã gọt | None, lý do)."""
+    srcn = " ".join(md.norm_key(src["text"]).split())
+    out_lines, total, bad = [], 0, 0
+    for ln in text.split("\n"):
+        keep = []
+        for sent in re.split(r"(?<=[.!?…])\s+", ln):
+            if not sent.strip():
+                continue
+            total += 1
+            sw = md.norm_key(sent).split()
+            if len(sw) >= COPY_N and any(" ".join(sw[i:i + COPY_N]) in srcn for i in range(len(sw) - COPY_N + 1)):
+                bad += 1
+            else:
+                keep.append(sent)
+        if keep:
+            out_lines.append(" ".join(keep))
+    if total and bad / total > COPY_MAX_FRAC:
         return None, "chép nguyên văn nguồn"
+    if bad:
+        if len(out_lines) < 4:
+            return None, "chép nguyên văn nguồn"
+        text = "\n".join(out_lines)
     return text, None
 
 
@@ -253,7 +294,7 @@ def load_existing(remote, prefix, limit):
 SYSTEM = ("Bạn là tác giả sách và biên tập viên tiếng Việt giàu kinh nghiệm, viết văn bản sạch, chính xác, tự nhiên để làm dữ liệu học cho mô hình ngôn ngữ. "
           "Chỉ trả về nội dung bài viết: không lời dẫn, không tiêu đề, không markdown, không gạch đầu dòng, không đánh số.")
 RULES = ("Yêu cầu: tiếng Việt chuẩn, có dấu đầy đủ, đúng chính tả và ngữ pháp; khoảng {w} từ, chia 6 đến 12 đoạn, các đoạn cách nhau bằng một dòng trống; "
-         "mạch lạc có mở bài, phát triển ý, kết; mỗi đoạn mang thông tin hoặc ý mới, không lặp ý, không câu sáo rỗng; "
+         "mạch lạc có mở bài, phát triển ý, kết; mỗi đoạn mang thông tin hoặc ý mới, không lặp ý, không lặp lại cùng một cụm từ nhiều lần (dùng đại từ / từ đồng nghĩa thay cho việc nhắc lại tên chủ đề), không câu sáo rỗng; "
          "chỉ nêu số liệu, năm tháng, tên người khi chắc chắn đúng, nếu không chắc thì diễn đạt chung hơn; "
          "không nhắc tới AI, mô hình ngôn ngữ, 'tài liệu', Wikipedia hay nguồn; không chào hỏi người đọc; viết trọn vẹn đến hết bài.")
 
@@ -267,7 +308,7 @@ def seed_prompt(words, domain, sub, form, aud, angle, search=False):
 
 def rewrite_prompt(words, doc, form, aud):
     p = (f"TÀI LIỆU thật (chủ đề «{doc['title']}»):\n\"\"\"\n{doc['text'][:6000]}\n\"\"\"\n\n"
-         f"Dựa trên thông tin trong tài liệu, viết MỘT bài MỚI hoàn toàn bằng lời văn của bạn (không chép nguyên câu, không chép quá 8 từ liên tiếp, "
+         f"Dựa trên thông tin trong tài liệu, viết MỘT bài MỚI hoàn toàn bằng lời văn của bạn (TUYỆT ĐỐI không chép nguyên câu, không chép quá 5 từ liên tiếp (đổi cấu trúc câu, dùng từ đồng nghĩa), "
          f"có thể sắp xếp lại ý, bổ sung giải thích và ví dụ không mâu thuẫn tài liệu, không thêm số liệu ngoài tài liệu).\n"
          f"Hình thức: {form}.\nĐối tượng bạn đọc: {aud}.\n" + RULES.format(w=words) + style_hint())
     return SYSTEM, p

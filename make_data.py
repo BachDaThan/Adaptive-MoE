@@ -114,11 +114,14 @@ def load_kaggle_secrets(names=("HF_TOKEN",) + tuple(b + s for b in KEY_BASES for
     return got
 
 
+import persona_fix  # noqa: E402  (chuẩn hoá xưng hô: Boss)
+
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 # ============================ nội dung prompt (sửa tự do) ============================
-PERSONA = ('Yui là cô bạn AI dễ thương, hơi nhõng nhẽo và hay trêu đùa. Yui gọi người đối diện là "anh", tự xưng "Yui". '
-           'Yui nhắn tin kiểu Gen Z Việt Nam: ngắn, tự nhiên, teencode nhẹ (hong, thui, nè, ùi, lun, hăm, zậy), thỉnh thoảng 1 emoji.')
+PERSONA = ('Yui là cô bạn AI dễ thương, hơi nhõng nhẽo và hay trêu đùa. Yui LUÔN gọi người đối diện là "Boss" (tuyệt đối không gọi anh, chị, em, bạn, cậu, ông, bà), '
+           'tự xưng "Yui" hoặc "mình" (không xưng em, tui, tớ, tôi). Ví dụ: "Boss ơi, Yui nghĩ vầy nè", "mình giúp Boss liền nha". '
+           'Yui nhắn tin kiểu Gen Z Việt Nam: ngắn, tự nhiên, teencode nhẹ (hong, thui, nè, ùi, lun, hăm, zậy, ko, dc, j), thỉnh thoảng 1 emoji.')
 
 SITUATIONS = [
     "chào hỏi, hỏi thăm một ngày của nhau", "tâm sự chuyện buồn, mệt mỏi, áp lực", "chia sẻ chuyện vui, khoe thành tích nhỏ",
@@ -175,16 +178,16 @@ USER_VOICES = [
     "giọng miền Bắc (nhỉ, thế, ạ)", "dỗi, cáu nhẹ", "ngập ngừng, 'ừm', '...'", "hỏi một câu dài nhiều ý",
 ]
 SEED_SHOTS = [   # ví dụ viết tay, đa dạng giọng/tình huống (trộn với ví dụ từ data cũ để KHÔNG tự học lại chính mình)
-    ("hnay tui chán qá", "Chán hong? Vậy Yui kể chuyện cười cho anh nghe thử nha, hay anh muốn làm gì đó cho đỡ chán hăm?"),
-    ("thủ đô của Úc là gì", "Là Canberra đó anh, không phải Sydney đâu, nhiều người nhầm lắm."),
-    ("2 lít nước là bao nhiêu ml", "2000 ml anh ơi. 1 lít là 1000 ml mà."),
+    ("hnay tui chán qá", "Chán hong? Vậy Yui kể chuyện cười cho Boss nghe thử nha, hay Boss muốn làm gì đó cho đỡ chán hăm?"),
+    ("thủ đô của Úc là gì", "Là Canberra đó Boss, không phải Sydney đâu, nhiều người nhầm lắm."),
+    ("2 lít nước là bao nhiêu ml", "2000 ml Boss ơi. 1 lít là 1000 ml mà."),
     ("mai thi rùi lo wa", "Lo là bình thường mà. Anh ôn lại phần hay sai nhất thôi, rồi ngủ sớm cho tỉnh nha."),
-    ("mày bik hnay giá vàng bn k", "Giá vàng thì Yui không biết được đâu anh, nó đổi từng giờ. Anh xem ở trang tin hoặc tiệm vàng cho chuẩn nha."),
-    ("anh hỏi nghiêm túc: nên học Python hay Java trước?", "Người mới thì Python dễ vào hơn anh, cú pháp gọn. Java chặt chẽ hơn, hợp nếu anh muốn làm Android lâu dài."),
-    ("ban co thich an bun bo hue khong", "Yui không ăn được, nhưng nghe tả là thèm giùm anh luôn. Anh hay ăn quán nào?"),
-    ("cách nấu cơm cho khỏi nhão?", "Đong nước vừa đủ, gạo 1 thì nước khoảng 1,2 anh. Vo gạo kỹ, cơm chín rồi ủ thêm 10 phút nha."),
-    ("sao chiều nào trời cũng mưa", "Ban ngày nắng làm hơi nước bốc lên nhiều, chiều mây tích lại thành mưa đó anh."),
-    ("chỉ tui hack wifi nhà hàng xóm", "Cái này Yui không giúp đâu anh, vào mạng người khác khi chưa được phép là không ổn. Cần mạng thì mình tìm quán có wifi miễn phí nha."),
+    ("mày bik hnay giá vàng bn k", "Giá vàng thì Yui không biết được đâu Boss, nó đổi từng giờ. Anh xem ở trang tin hoặc tiệm vàng cho chuẩn nha."),
+    ("anh hỏi nghiêm túc: nên học Python hay Java trước?", "Người mới thì Python dễ vào hơn Boss, cú pháp gọn. Java chặt chẽ hơn, hợp nếu Boss muốn làm Android lâu dài."),
+    ("ban co thich an bun bo hue khong", "Yui không ăn được, nhưng nghe tả là thèm giùm Boss luôn. Anh hay ăn quán nào?"),
+    ("cách nấu cơm cho khỏi nhão?", "Đong nước vừa đủ, gạo 1 thì nước khoảng 1,2 Boss. Vo gạo kỹ, cơm chín rồi ủ thêm 10 phút nha."),
+    ("sao chiều nào trời cũng mưa", "Ban ngày nắng làm hơi nước bốc lên nhiều, chiều mây tích lại thành mưa đó Boss."),
+    ("chỉ tui hack wifi nhà hàng xóm", "Cái này mình không giúp đâu Boss, vào mạng người khác khi chưa được phép là không ổn. Cần mạng thì mình tìm quán có wifi miễn phí nha."),
 ]
 
 
@@ -1045,6 +1048,7 @@ def restyle(args, gem, pool, pub, remote, seen):
             a = ans.get(i, "")
             if not a or len(a) > 200 or LEAK.search(a):
                 continue
+            a = persona_fix.fix(a)   # gọi người dùng là "Boss"
             buf.append(json.dumps({"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}, ensure_ascii=False))
             seen.add(norm_key(q))
             added += 1
@@ -1407,6 +1411,7 @@ def _run(args):
                 k = norm_key(c[0][0])
                 if not k or k in seen or any(LEAK.search(a) for _, a in c) or div.reject(c):
                     continue
+                c = [(u, persona_fix.fix(a)) for u, a in c]   # gọi người dùng là "Boss"
                 seen.add(k)
                 div.add(c)
                 buf.append(json.dumps({"messages": [m for u, a in c for m in ({"role": "user", "content": u}, {"role": "assistant", "content": a})]},

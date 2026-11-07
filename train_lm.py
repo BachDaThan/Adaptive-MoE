@@ -34,7 +34,7 @@ import torch
 import torch.nn.functional as F
 from adaptive_moe import set_k_cap, gather_aux_loss
 from elastic_ctx import CtxLM, batch
-from langcheck import read_wiki, read_file, split_docs, train_bpe, encode_docs, add_dropout
+from langcheck import read_wiki, read_file, split_docs, train_bpe, train_bpe_vi, encode_docs, add_dropout
 
 PRESETS = {  # d_ff = 2 * d như trong các thí nghiệm
     "small": dict(d=256, layers=6, experts=16, lr=1e-3),
@@ -103,7 +103,7 @@ def atomic_save(obj, path):
 
 
 # ---------------------------------------------------------------- dữ liệu
-def read_hf(spec, mb, seed, min_chars):
+def read_hf(spec, mb, seed, min_chars, qfilter=None):
     """spec = 'ten/dataset:config:truong_van_ban', vd HuggingFaceFW/fineweb-2:vie_Latn:text (đọc streaming, không tải cả bộ)."""
     from datasets import load_dataset
     name, config, field = (spec.split(":") + ["text"])[:3]
@@ -113,11 +113,13 @@ def read_hf(spec, mb, seed, min_chars):
         t = (ex.get(field) or "").strip()
         if len(t) < min_chars:
             continue
+        if qfilter is not None and not qfilter(t):   # lọc chất lượng (vi_filter.py): bỏ rác SEO / cá độ / danh sách link / lặp...
+            continue
         docs.append(t)
         size += len(t.encode("utf-8"))
         if size >= mb * 1_000_000:
             break
-    print(f"[train] {spec}: {len(docs)} bài, {size / 1e6:.0f} MB", flush=True)
+    print(f"[train] {spec}: {len(docs)} bài, {size / 1e6:.0f} MB" + (f" | lọc chất lượng: {qfilter.report()}" if hasattr(qfilter, "report") else ""), flush=True)
     return docs
 
 
@@ -196,18 +198,32 @@ def build_data(args):
             name, v = kv.split("=", 1)
             parts = v.split(":")
             extra[name.strip()] = (":".join(parts[:3]), float(parts[3]) if len(parts) > 3 else args.hf_mb)
+    import unicodedata
+    qf = None
+    if getattr(args, "quality_filter", "on") == "on":
+        try:
+            from vi_filter import Counter2
+            qf = Counter2()
+        except Exception as e:  # noqa: BLE001
+            print(f"[train] không nạp được vi_filter ({str(e)[:60]}), bỏ qua lọc chất lượng", flush=True)
     for lang in langs:
         if lang == "web" and args.hf_dataset:
-            docs = read_hf(args.hf_dataset, args.hf_mb, args.seed, args.min_chars)
+            docs = read_hf(args.hf_dataset, args.hf_mb, args.seed, args.min_chars, qf)
         elif lang in hf_files:
             docs = read_hf_files(args, hf_files[lang], args.mb)
         elif lang in extra:
-            docs = read_hf(extra[lang][0], extra[lang][1], args.seed, args.min_chars)
+            docs = read_hf(extra[lang][0], extra[lang][1], args.seed, args.min_chars, qf)
         elif lang in files:
             docs = read_file(files[lang], args.mb)
         else:
             docs = read_wiki(lang, args.mb, args.seed, args.min_chars)
+        docs = [unicodedata.normalize("NFC", d) for d in docs]   # chữ có dấu luôn cùng một kiểu mã (tránh 'ế' = 'e'+'^'+'´')
         tr_docs[lang], va_docs[lang] = split_docs(docs, args.val_frac, args.seed)
+        if getattr(args, "teen_aug", 0) > 0 and lang in ("web", "gen", "vi"):   # thêm ít văn bản kiểu nhắn tin (teencode / không dấu), CHỈ vào train
+            import teencode
+            aug = teencode.augment_docs(tr_docs[lang], int(len(tr_docs[lang]) * args.teen_aug), seed=args.seed)
+            tr_docs[lang] = tr_docs[lang] + aug
+            print(f"[train] {lang}: thêm {len(aug)} đoạn teencode/không dấu (--teen_aug {args.teen_aug})", flush=True)
         print(f"[train] {lang}: {len(tr_docs[lang])} bài train, {len(va_docs[lang])} bài val", flush=True)
         if lang in ups and ups[lang] > 1:
             tr_docs[lang] = tr_docs[lang] * ups[lang]
@@ -219,13 +235,19 @@ def build_data(args):
         from tokenizers import Tokenizer
         tok = Tokenizer.from_file(tok_path)
         print(f"[train] dùng lại tokenizer có sẵn ({tok.get_vocab_size()} token), không train BPE mới", flush=True)
+        if getattr(args, "vi_tokenizer", False):
+            print("[train] ℹ️ --vi_tokenizer bị bỏ qua: model này đã có tokenizer (đổi tokenizer = phải train lại từ đầu, đặt NEW_MODEL=True để làm model mới)", flush=True)
     else:
         if os.path.exists(os.path.join(args.out, "last.pt")):
             raise SystemExit("[train] DỪNG: sắp train tokenizer mới nhưng --out đã có last.pt (train với tokenizer khác, id token sẽ lệch, "
                              "resume là hỏng model). Dùng --out mới, hoặc xoá last.pt/best.pt nếu muốn train lại từ đầu.")
         sample = [d for l in langs for d in sample_docs(tr_docs[l], int(args.bpe_mb * 1e6 / len(langs)))]
         print(f"[train] train BPE trên {len(sample)} bài mẫu (--bpe_mb {args.bpe_mb})", flush=True)
-        tok = train_bpe(sample, args.vocab)
+        if getattr(args, "vi_tokenizer", False):
+            tok = train_bpe_vi(sample, args.vocab, seed=args.seed)
+            print("[train] tokenizer tiếng Việt 'sâu': NFC + teencode/không dấu + từ khoá Boss/Yui", flush=True)
+        else:
+            tok = train_bpe(sample, args.vocab)
         del sample
         tok.save(tok_path)
     ids = {l: encode_chunked(tok, tr_docs[l]) for l in langs}
@@ -493,6 +515,9 @@ if __name__ == "__main__":
     ap.add_argument("--bpe_mb", type=float, default=150, help="chỉ lấy tối đa ngần này MB văn bản để train BPE (chống hết RAM)")
     ap.add_argument("--new_tokenizer", action="store_true", help="ép train tokenizer mới (chỉ dùng khi --out mới, không có last.pt)")
     ap.add_argument("--vocab", type=int, default=16000)
+    ap.add_argument("--vi_tokenizer", action="store_true", help="train tokenizer tiếng Việt sâu (NFC + teencode/không dấu + từ khoá Boss/Yui); chỉ có tác dụng khi tạo tokenizer MỚI. Nên dùng --vocab 32000")
+    ap.add_argument("--teen_aug", type=float, default=0.0, help="thêm ngần này tỉ lệ đoạn teencode/không dấu vào dữ liệu train (vd 0.02 = 2%%)")
+    ap.add_argument("--quality_filter", choices=["on", "off"], default="on", help="lọc chất lượng web tiếng Việt (vi_filter.py) khi đọc --hf_dataset / --hf_extra")
     ap.add_argument("--balance", action="store_true", help="cắt cho mọi ngôn ngữ cùng số token train")
     ap.add_argument("--size", default="small", help="small | medium | large, hoặc số tham số muốn có, vd 50M, 120M, 1.2B (tự chọn d/lớp/expert và tự tạo data hợp cỡ model)")
     ap.add_argument("--make_data", choices=["auto", "on", "off"], default="auto", help="tự tạo data (make_data.py auto) trước khi train: auto = khi --size là số tham số và có key LLM (Cohere/OpenRouter/Mistral/Gemini)")

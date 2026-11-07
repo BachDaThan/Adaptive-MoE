@@ -18,7 +18,7 @@ from yui_vault import slug  # noqa: E402
 
 EXTRA_KINDS = ["py", "recall", "note", "skill", "mkskill", "chain"]
 SIT = ["", "", "", "ê ", "cho mik hỏi ", "bạn ơi ", "xin hỏi ", "giúp mik: "]
-OK_A = ["{r} nha", "ra {r} á", "kết quả là {r} đó", "{r} nè bạn", "được {r} nha", "là {r} đó"]
+OK_A = ["{r} nha", "ra {r} á", "kết quả là {r} đó", "{r} nè Boss", "được {r} nha", "là {r} đó"]
 
 
 def py(code):
@@ -122,7 +122,7 @@ def _fact(rng):
     k = rng.randrange(7)
     if k == 0:
         n, y = _pick(rng, NAMES), rng.randint(1, 12)
-        return f"mèo nhà mik tên là {n}, nó {y} tuổi", "tên mèo", _pick(rng, ["mèo nhà mik tên gì ta", "mik từng kể tên con mèo chưa nhỉ", "bạn còn nhớ mèo của mik tên gì không"]), f"mèo của bạn tên {n}, {y} tuổi đó", None
+        return f"mèo nhà mik tên là {n}, nó {y} tuổi", "tên mèo", _pick(rng, ["mèo nhà mik tên gì ta", "mik từng kể tên con mèo chưa nhỉ", "bạn còn nhớ mèo của mik tên gì không"]), f"mèo của Boss tên {n}, {y} tuổi đó", None
     if k == 1:
         v = rng.randint(2, 40) * 500000; return f"tháng này mik tiết kiệm được {money(v)} đồng", "tiết kiệm", _pick(rng, ["tháng trước mik tiết kiệm được bao nhiêu nhỉ", "mik từng nói tiết kiệm bao nhiêu vậy"]), f"bạn tiết kiệm được {money(v)} đồng đó", v
     if k == 2:

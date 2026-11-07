@@ -24,10 +24,10 @@ from yui_agent import safe_calc, _DOW  # noqa: E402
 
 FACTS = [
     ("thủ đô của Nhật Bản là gì", "thủ đô Nhật Bản", "Tokyo là thủ đô của Nhật Bản.", "thủ đô của Nhật Bản là Tokyo á"),
-    ("thủ đô nước Pháp là thành phố nào", "thủ đô Pháp", "Paris là thủ đô của Pháp.", "là Paris đó bạn"),
+    ("thủ đô nước Pháp là thành phố nào", "thủ đô Pháp", "Paris là thủ đô của Pháp.", "là Paris đó Boss"),
     ("thủ đô của Hàn Quốc", "thủ đô Hàn Quốc", "Seoul là thủ đô của Hàn Quốc.", "Seoul nha"),
     ("thủ đô Thái Lan là gì vậy", "thủ đô Thái Lan", "Bangkok là thủ đô của Thái Lan.", "là Bangkok nè"),
-    ("thủ đô nước Anh", "thủ đô Anh", "London là thủ đô của Vương quốc Anh.", "London đó bạn"),
+    ("thủ đô nước Anh", "thủ đô Anh", "London là thủ đô của Vương quốc Anh.", "London đó Boss"),
     ("thủ đô của Đức là gì", "thủ đô Đức", "Berlin là thủ đô của nước Đức.", "Berlin nha"),
     ("núi cao nhất thế giới là núi nào", "núi cao nhất thế giới", "Everest cao khoảng 8.849 mét, là đỉnh núi cao nhất thế giới so với mực nước biển.", "là Everest, cao khoảng 8.849 m á"),
     ("hành tinh lớn nhất hệ mặt trời", "hành tinh lớn nhất hệ Mặt Trời", "Sao Mộc là hành tinh lớn nhất trong Hệ Mặt Trời.", "là Sao Mộc đó"),
@@ -80,7 +80,7 @@ def gen_calc(rng):
         a, c = rng.randint(2, 12), rng.randint(2, 5); ex, say = f"{a}**{c}", f"{a} mũ {c}"
     r = safe_calc(ex)
     q = rng.choice(SIT_USER) + rng.choice([f"{say} bằng mấy?", f"tính {say} giúp mik", f"{say} ra bao nhiêu vậy", f"{say} = ?", f"giúp mik tính: {say}"])
-    ans = rng.choice([f"{say} = {r} nha", f"ra {r} á", f"kết quả là {r} đó", f"{r} nè bạn", f"được {r} nha"])
+    ans = rng.choice([f"{say} = {r} nha", f"ra {r} á", f"kết quả là {r} đó", f"{r} nè Boss", f"được {r} nha"])
     return [("user", q), ("assistant", f"<tool>calc {ex}</tool>"), ("user", f"<result>{r}</result>"), ("assistant", ans)]
 
 
@@ -92,7 +92,7 @@ def gen_time(rng):
     if kind == "hour":
         q, a = rng.choice(["mấy giờ rồi", "bây giờ là mấy giờ", "giờ này là mấy giờ vậy"]), rng.choice([f"bây giờ là {d:%H:%M} nha", f"{d:%H:%M} rồi đó", f"đang {d:%H:%M} nè"])
     elif kind == "dow":
-        q, a = rng.choice(["hôm nay thứ mấy", "nay là thứ mấy vậy", "hôm nay là thứ mấy nhỉ"]), rng.choice([f"hôm nay là {_DOW[d.weekday()]} nha", f"{_DOW[d.weekday()]} đó bạn"])
+        q, a = rng.choice(["hôm nay thứ mấy", "nay là thứ mấy vậy", "hôm nay là thứ mấy nhỉ"]), rng.choice([f"hôm nay là {_DOW[d.weekday()]} nha", f"{_DOW[d.weekday()]} đó Boss"])
     else:
         q, a = rng.choice(["hôm nay ngày mấy", "nay là ngày bao nhiêu", "hôm nay ngày bao nhiêu vậy"]), rng.choice([f"hôm nay là ngày {d:%d/%m/%Y} nha", f"ngày {d:%d/%m/%Y} đó"])
     return [("user", rng.choice(SIT_USER) + q + rng.choice(["?", "", " nhỉ?"])), ("assistant", "<tool>time</tool>"), ("user", f"<result>{res}</result>"), ("assistant", a)]

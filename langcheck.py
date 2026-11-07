@@ -77,6 +77,18 @@ def train_bpe(texts, vocab):
     return tok
 
 
+def train_bpe_vi(texts, vocab, teen_ratio=0.04, seed=0):
+    """Tokenizer tiếng Việt 'sâu': cùng định dạng ByteLevel BPE (yui.cpp / export_yui.py đọc được y nguyên, KHÔNG dùng normalizer),
+    nhưng mẫu train được (1) chuẩn NFC (chữ có dấu luôn một kiểu mã), (2) trộn ~teen_ratio văn bản teencode / không dấu,
+    (3) thêm câu chứa từ khoá nhân vật (Boss, Yui, zậy, hnay, ko, dc...) để chúng gộp thành token riêng thay vì nhiều mảnh byte."""
+    import unicodedata
+    import teencode
+    texts = [unicodedata.normalize("NFC", t) for t in texts]
+    n_teen = int(len(texts) * teen_ratio)
+    extra = teencode.augment_docs(texts, n_teen, seed=seed) + teencode.boost_docs()
+    return train_bpe(texts + extra, vocab)
+
+
 def encode_docs(tok, docs):
     eos = tok.token_to_id("<eos>")
     ids = []

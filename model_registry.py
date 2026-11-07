@@ -152,10 +152,10 @@ def identity_jsonl(name, persona="Yui"):
     import json
     rows = []
     for q in IDENTITY_NAME_Q:
-        for a in (f"mik là {name} nha", f"bản này tên {name} đó", f"{name} nè bạn"):
+        for a in (f"mình là {name} nha Boss", f"bản này tên {name} đó", f"{name} nè Boss"):
             rows.append([q, a])
     for q in IDENTITY_PERSONA_Q:
-        for a in (f"mik là {persona} nè, đang chạy bản {name}", f"{persona} đây! bản của mik là {name} đó"):
+        for a in (f"{persona} nè Boss, đang chạy bản {name}", f"{persona} đây! bản của mình là {name} đó Boss"):
             rows.append([q, a])
     return ("\n".join(json.dumps({"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}, ensure_ascii=False) for q, a in rows) + "\n").encode("utf-8")
 
