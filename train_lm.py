@@ -383,6 +383,11 @@ def main(args):
     npar = sum(p.numel() for p in model.parameters())
     opt = None
     bytes_per = 16
+    gpu_total = torch.cuda.get_device_properties(0).total_memory if device == "cuda" else 0
+    if gpu_total and args.opt == "adamw" and npar * 16 > 0.80 * gpu_total:
+        # v6.3: AdamW thường cần ~16 byte/tham số (trọng số 4 + gradient 4 + 2 state 8). 1B tham số = 16 GB > T4 (14.5 GB) -> OOM ngay bước đầu.
+        print(f"[train] ⚠️ AdamW thường cần ~{npar * 16 / 1e9:.1f} GB, GPU chỉ có {gpu_total / 1e9:.1f} GB -> tự chuyển sang AdamW 8-bit (~10 byte/tham số)", flush=True)
+        args.opt = "adamw8bit"
     if args.opt == "adamw8bit":
         try:
             import bitsandbytes as bnb
@@ -394,6 +399,9 @@ def main(args):
         opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=args.wd)
     print(f"[train] {npar / 1e6:.1f}M tham số; trọng số + gradient + optimizer khoảng {npar * bytes_per / 1e9:.1f} GB "
           f"(chưa tính activation); device {device}", flush=True)
+    if gpu_total and npar * bytes_per > 0.92 * gpu_total:
+        raise SystemExit(f"[train] ❌ Model {npar / 1e6:.0f}M cần ~{npar * bytes_per / 1e9:.1f} GB chỉ cho trọng số+gradient+optimizer, GPU có {gpu_total / 1e9:.1f} GB -> chắc chắn OOM. "
+                 f"Hãy giảm cỡ (vd --size 600M; lưu ý thư mục data/Fine-tune đổi theo cỡ) hoặc giảm số expert, hoặc dùng GPU lớn hơn.")
     amp = args.amp and device == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
     step, best, bad = 0, (1e9, 0), 0
