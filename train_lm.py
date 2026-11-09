@@ -357,6 +357,25 @@ def main(args):
     cfg0 = {}
     if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
         cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
+    # --- FIX resume: kiến trúc phải theo CHECKPOINT đang có, không theo preset --size (preset có thể đã đổi) ---
+    _ckp = os.path.join(args.out, "last.pt")
+    if not os.path.exists(_ckp):
+        _ckp = os.path.join(args.out, "best.pt")
+    if os.path.exists(_ckp):
+        try:
+            _sd = torch.load(_ckp, map_location="cpu", mmap=True, weights_only=False)["model"]
+            _d = _sd["emb.weight"].shape[1]
+            _L = 1 + max(int(k.split(".")[1]) for k in _sd if k.startswith("blocks."))
+            _E = 1 + max(int(k.split("moe.experts.")[1].split(".")[0]) for k in _sd if k.startswith("blocks.0.moe.experts."))
+            if (_d, _L, _E) != (d, layers, experts):
+                print(f"[train] ⚠ checkpoint là d={_d}, {_L} lớp, {_E} expert (preset --size {args.size} đòi d={d}, {layers} lớp, {experts} expert) -> theo checkpoint để tiếp tục", flush=True)
+            d, layers, experts = _d, _L, _E
+            cfg0.update(d=d, layers=layers, experts=experts, vocab=_sd["emb.weight"].shape[0])
+            if not args.lr:
+                lr = lr_for_params(params_from_arch(cfg0["vocab"], d, layers, experts))
+            del _sd
+        except Exception as e:  # noqa: BLE001
+            print(f"[train] không đọc được kiến trúc từ checkpoint ({str(e)[:80]}); dùng config/preset", flush=True)
     args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
         cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
     n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
