@@ -5,8 +5,11 @@ export_yui.py - đóng gói model Adaptive-MoE (checkpoint .pt + config.json + t
     python export_yui.py --out thu_muc_model --ckpt auto --dst model_q8.yui --quant int8   # int8 theo hàng (~50 MB)
     python export_yui.py --out thu_muc_model --ckpt auto --dst model_q4.yui --quant q4     # expert 4-bit theo khối 32, phần còn lại int8 (định dạng v2)
     python export_yui.py --out thu_muc_model --ckpt auto --dst model_q4all.yui --quant q4all   # TẤT CẢ ma trận 4-bit (nhỏ nhất, chất lượng giảm nhiều nhất)
+    python export_yui.py --out thu_muc_model --ckpt auto --dst model_t2.yui --quant t2          # BitNet b1.58: qkv/o/expert ternary (~1.6-2 bit), embedding + head int8 (dùng cho model train với --bitnet)
 
 File .yui gồm: cấu hình, tokenizer (vocab + merges + bảng chữ cái/số Unicode cho bước tách từ) và toàn bộ trọng số.
+t2 (v2, kiểu ma trận 3): ma trận ternary {-1,0,+1} theo nhóm: sau byte kiểu có uint16 cỡ nhóm (bội 32), rồi hệ số fp16 [hàng, cột/nhóm], rồi mỗi khối 32 trọng số = 8 byte
+(byte j chứa trọng số j, j+8, j+16, j+24 ở các cặp bit 0-1, 2-3, 4-5, 6-7; mã 0 -> 0, 1 -> +1, 2 -> -1; xem bitnet_yui.pack_t2). Header: trường quant của file = 3.
 Router (gate, strength) và LayerNorm luôn giữ float32 để việc chọn expert giống hệt PyTorch; int8 chỉ áp cho ma trận lớn
 (embedding, qkv, o, expert, head), mỗi hàng một hệ số scale.
 Định dạng (little-endian): xem hàm write_yui; yui.cpp đọc đúng thứ tự này.
@@ -113,7 +116,7 @@ def q4_dequantize(d16, packed, cols):
     return w.reshape(w.shape[0], -1)[:, :cols]
 
 
-def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None):
+def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
     """sd: {tên tham số PyTorch: np.ndarray float32}; cfg: config.json của train_lm.py (+ tuỳ chọn heads, min_k, max_k, min_strength)."""
     V, D, NL, E = cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]
     H = cfg.get("heads", 4)           # CtxLM mặc định 4 head
@@ -122,12 +125,14 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None):
     min_k, max_k = cfg.get("min_k", 1), cfg.get("max_k", 8)
     ms, top_p = cfg.get("min_strength", 0.3), float(cfg["top_p"])
     n_shared = 1
-    assert quant in ("f32", "int8", "q4", "q4all"), quant
+    assert quant in ("f32", "int8", "q4", "q4all", "t2"), quant
     q8 = quant == "int8"
-    ver = 2 if quant.startswith("q4") else 1
-    qfield = {"f32": 0, "int8": 1, "q4": 2, "q4all": 2}[quant]
+    ver = 2 if (quant.startswith("q4") or quant == "t2") else 1
+    qfield = {"f32": 0, "int8": 1, "q4": 2, "q4all": 2, "t2": 3}[quant]
 
-    def kind(name):   # 0 f32, 1 int8, 2 q4
+    def kind(name):   # 0 f32, 1 int8, 2 q4, 3 ternary t2
+        if quant == "t2":
+            return 3 if ("attn." in name or ".experts." in name or ".shared." in name) else 1
         if quant == "f32":
             return 0
         if quant == "int8":
@@ -166,9 +171,25 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None):
             w = np.asarray(sd[name], dtype=np.float32)
             assert tuple(w.shape) == (rows, cols), f"{name}: {w.shape} != {(rows, cols)}"
             k = kind(name)
+            if k == 3:   # ternary cần cột chia hết cho 32 và cho nhóm; không được thì rơi về int8 (yui.cpp đọc kiểu từng ma trận)
+                g = group
+                while g > 32 and cols % g:
+                    g -= 32
+                if cols % 32:
+                    k = 1
             if ver == 2:
                 f.write(struct.pack("<B", k))
-            if k == 1:
+            if k == 3:
+                from bitnet_pack import ternary_quantize_np
+                s16, packed, q = ternary_quantize_np(w, g)
+                f.write(struct.pack("<H", g))
+                f.write(s16.tobytes())
+                f.write(packed.tobytes())
+                if stats is not None:
+                    deq = (q.astype(np.float32).reshape(rows, cols // g, g) * s16.astype(np.float32)[..., None]).reshape(rows, cols)
+                    e = stats.setdefault("t2:" + (name.split(".", 2)[2].split(".")[0] if name.startswith("blocks") else name.split(".")[0]), [0.0, 0.0])
+                    e[0] += float(((w - deq) ** 2).sum()); e[1] += float((w ** 2).sum())
+            elif k == 1:
                 sc, q = quantize_rows(w)
                 f.write(sc.tobytes())
                 f.write(q.tobytes())
@@ -225,8 +246,9 @@ def main():
     ap.add_argument("--out", required=True, help="thư mục có config.json, tokenizer.json và checkpoint")
     ap.add_argument("--ckpt", default="auto", help="auto = sft_best.pt nếu có, không thì best.pt")
     ap.add_argument("--dst", default=None, help="file .yui đầu ra; bỏ trống = <tên model trong config.json>_<quant>.yui")
-    ap.add_argument("--quant", choices=["f32", "int8", "q4", "q4all"], default="f32",
-                    help="f32 | int8 | q4 (expert 4-bit, còn lại int8) | q4all (mọi ma trận 4-bit; nhỏ nhất nhưng chất lượng giảm nhiều nhất)")
+    ap.add_argument("--quant", choices=["f32", "int8", "q4", "q4all", "t2"], default="f32",
+                    help="f32 | int8 | q4 (expert 4-bit, còn lại int8) | q4all (mọi ma trận 4-bit; nhỏ nhất nhưng chất lượng giảm nhiều nhất) | t2 (ternary BitNet, cho model train --bitnet)")
+    ap.add_argument("--group", type=int, default=0, help="t2: cỡ nhóm scale (bội 32); 0 = lấy từ config.json (bitnet) hoặc 64. PHẢI trùng nhóm lúc train")
     a = ap.parse_args()
     import torch
     cfg = json.load(open(os.path.join(a.out, "config.json"), encoding="utf-8"))
@@ -241,17 +263,26 @@ def main():
     sd = LazySD(obj["model"])
     dst = a.dst or f"{cfg.get('name') or 'model'}_{a.quant}.yui"
     stats = {}
-    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats)
+    grp = a.group or int(cfg.get("bitnet") or 64)
+    if a.quant == "t2" and not cfg.get("bitnet"):
+        print("⚠️ config.json không có 'bitnet': model này không train kiểu ternary, xuất t2 sẽ mất chất lượng nhiều (nên dùng int8/q4).")
+    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats, group=grp)
     print(f"đã ghi {dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}" + (f", tên model: {cfg['name']}" if cfg.get("name") else ""))
     try:   # README riêng cho model này, nằm cạnh file .yui: <tên>.README.md (gom các bản q8/q4/... cùng tên)
         import model_card
         folder = os.path.dirname(os.path.abspath(dst))
-        base = re.sub(r"_(f32|int8|q8|q4all|q4)\.yui$", "", os.path.basename(dst))
+        base = re.sub(r"_(f32|int8|q8|q4all|q4|t2)\.yui$", "", os.path.basename(dst))
         if os.path.basename(dst) != base:
             model_card.write(folder, model_card.yui_card(folder, base, cfg, a.out, ck), name=f"{base}.README.md")
             print(f"đã ghi {base}.README.md cạnh file .yui")
     except Exception as e:  # noqa: BLE001
         print(f"bỏ qua README ({str(e)[:80]})")
+    t2s = {k: v for k, v in stats.items() if k.startswith("t2:")}
+    if t2s:
+        print("sai số lượng tử ternary (căn bậc hai tỉ lệ năng lượng, trên trọng số tiềm ẩn): "
+              + ", ".join(f"{k[3:]} {100 * (v[0] / max(v[1], 1e-12)) ** 0.5:.1f}%" for k, v in sorted(t2s.items())[:6])
+              + "\n(nếu model đã QAT với --bitnet thì sai số này là bình thường; điều quan trọng là loss lúc train đã tính tới nó)")
+    stats = {k: v for k, v in stats.items() if not k.startswith("t2:")}
     if stats:
         tot_e = sum(v[0] for v in stats.values()); tot_n = sum(v[1] for v in stats.values())
         print(f"sai số lượng tử hoá 4-bit (căn bậc hai tỉ lệ năng lượng): tổng {100 * (tot_e / max(tot_n, 1e-12)) ** 0.5:.2f}%  "

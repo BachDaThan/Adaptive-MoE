@@ -27,6 +27,9 @@ Thêm dữ liệu web tiếng Việt (nhiều hơn Wikipedia nhiều lần): --l
 Tuỳ chọn tăng tốc / cân bằng tải: --fast_moe (bmm thay vòng lặp expert, xem fast_moe.py) và --aux 1 (cộng loss cân bằng tải của router;
 mặc định 0 = như các thí nghiệm trong README, vốn chưa dùng loss này).
 
+BitNet b1.58 (ternary): thêm  --bitnet 64  (cỡ nhóm scale, bội số của 32; 0 = tắt). qkv/o/expert thành {-1,0,+1} (bitnet_yui.py), router/head/embedding giữ float.
+Tiếp tục được checkpoint float cũ: --bit_warmup N bước đầu trộn dần float -> ternary. Xuất: export_yui.py --quant t2. --fast_moe bị tắt khi --bitnet (bmm bỏ qua forward của BitLinear).
+
 Chạy nhanh để kiểm tra lỗi:  python train_lm.py --out run_test --mb 2 --steps 200 --eval_every 100 --save_every 100
 """
 import argparse, json, math, os, random, re, time
@@ -271,6 +274,9 @@ def build_data(args):
 def build_model(cfg, device):
     m = CtxLM(vocab=cfg["vocab"], d=cfg["d"], n_layers=cfg["layers"], n_heads=cfg.get("heads", 4), n_experts=cfg["experts"], d_ff=2 * cfg["d"],
               min_k=1, max_k=8, top_p=cfg["top_p"], n_shared=1, compute_coef=0.0).to(device)
+    if cfg.get("bitnet"):   # config.json ghi "bitnet": cỡ nhóm -> mọi script dùng build_model (SFT, generate, verify) tự có model ternary, lam = 1
+        from bitnet_yui import convert_to_bitnet
+        convert_to_bitnet(m, group=int(cfg["bitnet"]))
     return m
 
 
@@ -434,6 +440,11 @@ def main(args):
         cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max, heads=heads, params=n_params)
         if args.name:
             cfg["name"] = args.name
+        _b = args.bitnet or cfg0.get("bitnet")   # đã bật ternary thì giữ mãi (không quay lại float được)
+        if _b:
+            cfg["bitnet"] = int(_b)
+            if cfg0.get("bit_start") is not None:
+                cfg["bit_start"] = cfg0["bit_start"]
         json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         if world > 1:   # báo rank khác: data.pt, config.json, last.pt đã sẵn sàng
             json.dump({"lr": lr, "tag": args._tag, "name": args.name}, open(_rd + ".tmp", "w", encoding="utf-8"))
@@ -446,6 +457,9 @@ def main(args):
     model = build_model(cfg, device)
     if args.drop > 0:
         add_dropout(model, args.drop)
+    if args.fast_moe and cfg.get("bitnet"):
+        print("[train] --fast_moe tắt vì --bitnet (bmm bỏ qua forward của BitLinear nên expert sẽ không được ternary hoá)", flush=True)
+        args.fast_moe = False
     if args.fast_moe:
         from fast_moe import enable_fast_moe
         print(f"[train] fast_moe: đã bật cho {enable_fast_moe(model, args.fast_waste)} layer MoE", flush=True)
@@ -482,6 +496,15 @@ def main(args):
             scaler.load_state_dict(ck["scaler"])
         step, best, bad = ck["step"], tuple(ck["best"]), ck["bad"]
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
+    bit_on, bit_start = bool(cfg.get("bitnet")), 0
+    if bit_on:
+        from bitnet_yui import set_bit_lambda
+        if cfg.get("bit_start") is None:   # lần đầu bật ternary: fade-in tính từ bước hiện tại (mọi rank cùng step nên cùng giá trị)
+            cfg["bit_start"] = step
+            if rank == 0:
+                json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        bit_start = int(cfg["bit_start"])
+        print(f"[train] BitNet: nhóm {cfg['bitnet']}, fade-in {args.bit_warmup} bước từ bước {bit_start}", flush=True)
     if world > 1:   # chắc chắn mọi GPU bắt đầu từ cùng trọng số
         for _p in model.parameters():
             dist.broadcast(_p.data, 0)
@@ -507,6 +530,8 @@ def main(args):
     state = {"amp": amp}
     while step < args.steps:
         model.train()
+        if bit_on:
+            set_bit_lambda(model, 1.0 if args.bit_warmup <= 0 else (step - bit_start) / args.bit_warmup)
         for gr in opt.param_groups:
             gr["lr"] = lr_at(step, args, lr)
         tot = 0.0
@@ -644,6 +669,8 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--fast_moe", action="store_true", help="bmm thay vòng lặp expert khi tải đủ cân bằng (fast_moe.py)")
     ap.add_argument("--fast_waste", type=float, default=3.0)
+    ap.add_argument("--bitnet", type=int, default=0, help="BitNet b1.58: cỡ nhóm scale ternary (bội 32, khuyên 64); 0 = tắt. Xuất bằng export_yui.py --quant t2")
+    ap.add_argument("--bit_warmup", type=int, default=2000, help="số bước trộn dần float -> ternary khi bật --bitnet (0 = ternary ngay)")
     ap.add_argument("--aux", type=float, default=0.0, help="hệ số nhân cho loss phụ của router (cân bằng tải, z-loss); 0 = tắt")
     ap.add_argument("--hf_repo", default=None, help="vd BachDaThan/TrainAI: đồng bộ checkpoint với Hugging Face")
     ap.add_argument("--hf_type", default="dataset")

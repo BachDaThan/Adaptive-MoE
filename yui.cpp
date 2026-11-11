@@ -9,7 +9,8 @@
 // Kiểm tra: ./yui --model model.yui --encode "xin chào"    in id token (so với tokenizers của Hugging Face)
 //           ./yui --model model.yui --ids 5,17,9 --k 2 --logits out.bin   ghi logits float32 từng vị trí (so với PyTorch)
 //
-// Định dạng .yui: v1 (float32 hoặc int8 theo hàng) và v2 (mỗi ma trận một kiểu: float32 / int8 / q4 = 4-bit theo khối 32, xem export_yui.py --quant q4).
+// Định dạng .yui: v1 (float32 hoặc int8 theo hàng) và v2 (mỗi ma trận một kiểu: float32 / int8 / q4 = 4-bit theo khối 32, xem export_yui.py --quant q4;
+//   t2 = ternary BitNet b1.58 {-1,0,+1}, 1.6-2 bit/trọng số, scale theo nhóm, xem export_yui.py --quant t2 và bitnet_yui.py).
 // Phép tính khớp adaptive_moe.py + elastic_ctx.py: LayerNorm -> attention RoPE (KV cache) -> MoE top-p (shared expert luôn bật,
 // expert SwiGLU, trọng số = prob chuẩn hoá * strength). Chat: "User: ...\nYui: ...<eos>" như sft_format.py.
 #ifdef _WIN32
@@ -310,6 +311,88 @@ YUI_TGT_DOT static void rows_q4_dot(const uint8_t* Q, const float* S, int nb, co
 
 // ---- nhóm luồng (không cần OpenMP nên chạy giống nhau trên Android / Windows / Linux) ----
 // Mỗi lần run() chia n tác vụ cho các luồng nền + luồng gọi; luồng nền quay vòng chờ rất ngắn rồi ngủ nên không tốn pin lúc rảnh.
+
+// ---- t2: ternary {-1,0,+1} (BitNet b1.58). Mỗi khối 32 trọng số = 8 byte: byte j chứa trọng số j, j+8, j+16, j+24 ở cặp bit 0-1, 2-3, 4-5, 6-7;
+//      mã 0 -> 0, 1 -> +1, 2 -> -1. Hệ số fp16 theo NHÓM (gb khối = gb*32 cột). Chỉ cộng/trừ, không nhân trọng số. ----
+static inline int t2_blk_scalar(const uint8_t* p, const int8_t* x) {
+    int sum = 0;
+    for (int j = 0; j < 8; j++) for (int s = 0; s < 4; s++) { const int c = (p[j] >> (2 * s)) & 3; sum += ((c & 1) - ((c >> 1) & 1)) * (int)x[j + 8 * s]; }
+    return sum;
+}
+static void rows_t2_scalar(const uint8_t* T, const float* S, int nb, int gb, int ng, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* t = T + (size_t)r * nb * 8; const float* s = S + (size_t)r * ng; float acc = 0.f;
+        for (int g = 0; g < ng; g++) for (int b = g * gb; b < (g + 1) * gb; b++) acc += (float)t2_blk_scalar(t + b * 8, xq + b * 32) * (s[g] * xs[b]);
+        y[r] = acc;
+    }
+}
+static void rows_t2x_scalar(const uint8_t* T, const float* S, int nb, int gb, int ng, const float* x, float* y, int r0, int r1) {   // YUI_EXACT: ternary x float
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* t = T + (size_t)r * nb * 8; const float* s = S + (size_t)r * ng; float acc = 0.f;
+        for (int g = 0; g < ng; g++) {
+            float gs = 0.f;
+            for (int b = g * gb; b < (g + 1) * gb; b++) for (int j = 0; j < 8; j++) for (int q = 0; q < 4; q++) {
+                const int c = (t[b * 8 + j] >> (2 * q)) & 3; gs += (float)((c & 1) - ((c >> 1) & 1)) * x[b * 32 + j + 8 * q];
+            }
+            acc += gs * s[g];
+        }
+        y[r] = acc;
+    }
+}
+#ifdef YUI_X86
+YUI_TGT_AVX2 static void rows_t2_avx2(const uint8_t* T, const float* S, int nb, int gb, int ng, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    const __m128i m3 = _mm_set1_epi8(3); const __m256i one8 = _mm256_set1_epi8(1), one16 = _mm256_set1_epi16(1);
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* t = T + (size_t)r * nb * 8; const float* s = S + (size_t)r * ng; __m256 acc = _mm256_setzero_ps();
+        for (int g = 0; g < ng; g++) {
+            const float gs = s[g];
+            for (int b = g * gb; b < (g + 1) * gb; b++) {
+                const __m128i v = _mm_loadl_epi64((const __m128i*)(t + b * 8));
+                const __m128i a0 = _mm_and_si128(v, m3), a1 = _mm_and_si128(_mm_srli_epi16(v, 2), m3), a2 = _mm_and_si128(_mm_srli_epi16(v, 4), m3), a3 = _mm_and_si128(_mm_srli_epi16(v, 6), m3);
+                const __m256i c = _mm256_inserti128_si256(_mm256_castsi128_si256(_mm_unpacklo_epi64(a0, a1)), _mm_unpacklo_epi64(a2, a3), 1);   // 32 mã theo thứ tự cột
+                const __m256i w = _mm256_sub_epi8(_mm256_and_si256(c, one8), _mm256_and_si256(_mm256_srli_epi16(c, 1), one8));              // +1 / 0 / -1
+                const __m256i vx = _mm256_loadu_si256((const __m256i*)(xq + b * 32));
+                const __m256i p = _mm256_maddubs_epi16(one8, _mm256_sign_epi8(vx, w));                                                     // x * dấu(w), cộng cặp
+                acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_madd_epi16(p, one16)), _mm256_set1_ps(gs * xs[b]), acc);
+            }
+        }
+        y[r] = hsum256(acc);
+    }
+}
+#endif
+#ifdef YUI_ARM64
+static inline void t2_dec_neon(const uint8_t* p, int8x16_t& w0, int8x16_t& w1) {
+    const uint8x8_t v = vld1_u8(p), m3 = vdup_n_u8(3); const uint8x16_t one = vdupq_n_u8(1);
+    const uint8x16_t lo = vcombine_u8(vand_u8(v, m3), vand_u8(vshr_n_u8(v, 2), m3)), hi = vcombine_u8(vand_u8(vshr_n_u8(v, 4), m3), vshr_n_u8(v, 6));
+    w0 = vreinterpretq_s8_u8(vsubq_u8(vandq_u8(lo, one), vandq_u8(vshrq_n_u8(lo, 1), one)));
+    w1 = vreinterpretq_s8_u8(vsubq_u8(vandq_u8(hi, one), vandq_u8(vshrq_n_u8(hi, 1), one)));
+}
+static void rows_t2_neon(const uint8_t* T, const float* S, int nb, int gb, int ng, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* t = T + (size_t)r * nb * 8; const float* s = S + (size_t)r * ng; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int g = 0; g < ng; g++) for (int b = g * gb; b < (g + 1) * gb; b++) {
+            int8x16_t w0, w1; t2_dec_neon(t + b * 8, w0, w1);
+            const int8x16_t x0 = vld1q_s8(xq + b * 32), x1 = vld1q_s8(xq + b * 32 + 16);
+            int16x8_t p0 = vmull_s8(vget_low_s8(w0), vget_low_s8(x0)); p0 = vmlal_s8(p0, vget_high_s8(w0), vget_high_s8(x0));
+            int16x8_t p1 = vmull_s8(vget_low_s8(w1), vget_low_s8(x1)); p1 = vmlal_s8(p1, vget_high_s8(w1), vget_high_s8(x1));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(vpadalq_s16(vpaddlq_s16(p0), p1)), s[g] * xs[b]);
+        }
+        y[r] = vaddvq_f32(acc);
+    }
+}
+YUI_TGT_DOT static void rows_t2_dot(const uint8_t* T, const float* S, int nb, int gb, int ng, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    for (int r = r0; r < r1; r++) {
+        const uint8_t* t = T + (size_t)r * nb * 8; const float* s = S + (size_t)r * ng; float32x4_t acc = vdupq_n_f32(0.f);
+        for (int g = 0; g < ng; g++) for (int b = g * gb; b < (g + 1) * gb; b++) {
+            int8x16_t w0, w1; t2_dec_neon(t + b * 8, w0, w1);
+            int32x4_t a = vdupq_n_s32(0); a = vdotq_s32(a, w0, vld1q_s8(xq + b * 32)); a = vdotq_s32(a, w1, vld1q_s8(xq + b * 32 + 16));
+            acc = vmlaq_n_f32(acc, vcvtq_f32_s32(a), s[g] * xs[b]);
+        }
+        y[r] = vaddvq_f32(acc);
+    }
+}
+#endif
+
 static inline void cpu_relax() {
 #if defined(YUI_X86)
     _mm_pause();
@@ -504,8 +587,9 @@ struct Reader {
 };
 
 struct Mat {
-    int rows = 0, cols = 0, type = 0; bool q = false;   // type: 0 float32, 1 int8 (hệ số mỗi hàng), 2 q4 (4-bit, hệ số mỗi khối 32)
+    int rows = 0, cols = 0, type = 0; bool q = false;   // type: 0 float32, 1 int8 (hệ số mỗi hàng), 2 q4 (4-bit, hệ số mỗi khối 32), 3 t2 (ternary, hệ số mỗi nhóm)
     float* f = nullptr; const int8_t* i8 = nullptr; float* sc = nullptr;   // i8 trỏ thẳng vào file mmap (không sao chép)
+    const uint8_t* t2 = nullptr; float* ts = nullptr; int gb = 0, ng = 0;   // t2 (type 3): ternary 8 byte/khối 32, hệ số float theo nhóm gb khối, ng nhóm mỗi hàng
     const uint8_t* q4 = nullptr; float* bs = nullptr; int nb = 0;          // q4: nb khối mỗi hàng, mỗi khối 16 byte (2 trọng số/byte) + 1 hệ số float
 };
 static float f16_to_f32(uint16_t h) {
@@ -533,6 +617,14 @@ static Mat load_mat(Reader& r, int rows, int cols, bool v1_quant, bool typed = t
         const uint8_t* h = r.skip(nblk * 2);   // hệ số fp16 -> float một lần lúc nạp; phần 4-bit dùng thẳng từ mmap
         for (size_t i = 0; i < nblk; i++) { uint16_t hv; memcpy(&hv, h + 2 * i, 2); m.bs[i] = f16_to_f32(hv); }
         m.q4 = r.skip(nblk * 16);
+    } else if (t == 3) {
+        const int grp = (int)r.get<uint16_t>();
+        if (grp < 32 || grp % 32 || cols % 32 || cols % grp) die("ma trận ternary (t2) có nhóm/cột không hợp lệ");
+        m.nb = cols / 32; m.gb = grp / 32; m.ng = cols / grp; const size_t nsc = (size_t)rows * m.ng;
+        m.ts = (float*)r.alloc(nsc * sizeof(float));
+        const uint8_t* h = r.skip(nsc * 2);
+        for (size_t i = 0; i < nsc; i++) { uint16_t hv; memcpy(&hv, h + 2 * i, 2); m.ts[i] = f16_to_f32(hv); }
+        m.t2 = r.skip((size_t)rows * m.nb * 8);
     } else if (t == 0) {
         m.f = (float*)r.alloc(n * sizeof(float)); r.bytes(m.f, n * sizeof(float));
     } else die("kiểu ma trận không hỗ trợ trong file .yui");
@@ -576,6 +668,18 @@ static void rows_q4(const Mat& m, const int8_t* xq, const float* xs, float* y, i
     default: rows_q4_scalar(m.q4, m.bs, m.nb, xq, xs, y, r0, r1);
     }
 }
+static void rows_t2(const Mat& m, const int8_t* xq, const float* xs, float* y, int r0, int r1) {
+    switch (isa()) {
+#ifdef YUI_X86
+    case ISA_AVX2: rows_t2_avx2(m.t2, m.ts, m.nb, m.gb, m.ng, xq, xs, y, r0, r1); return;
+#endif
+#ifdef YUI_ARM64
+    case ISA_DOT: rows_t2_dot(m.t2, m.ts, m.nb, m.gb, m.ng, xq, xs, y, r0, r1); return;
+    case ISA_NEON: rows_t2_neon(m.t2, m.ts, m.nb, m.gb, m.ng, xq, xs, y, r0, r1); return;
+#endif
+    default: rows_t2_scalar(m.t2, m.ts, m.nb, m.gb, m.ng, xq, xs, y, r0, r1);
+    }
+}
 static void rows_f(const Mat& m, const float* x, float* y, int r0, int r1) {
     switch (isa()) {
 #ifdef YUI_X86
@@ -596,6 +700,7 @@ static void mv(const Mat& m, const float* x, const Act& a, float* y, bool par) {
     auto body = [&](int r0, int r1) {
         if (m.type == 0) rows_f(m, x, y, r0, r1);
         else if (m.type == 1) { if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1); else rows_q(m, a.q, a.s, y, r0, r1); }
+        else if (m.type == 3) { if (g_exact) rows_t2x_scalar(m.t2, m.ts, m.nb, m.gb, m.ng, x, y, r0, r1); else rows_t2(m, a.q, a.s, y, r0, r1); }
         else { if (g_exact) rows_q4x_scalar(m.q4, m.bs, m.nb, m.cols, x, y, r0, r1); else rows_q4(m, a.q, a.s, y, r0, r1); }
     };
     const Pool& p = pool();
@@ -730,7 +835,7 @@ static string to_text(const string& b, bool& incomplete) {
 }
 
 // ============================ model ============================
-static const char* quant_name(uint32_t q) { return q == 0 ? "float32" : (q == 1 ? "int8" : "q4"); }
+static const char* quant_name(uint32_t q) { return q == 0 ? "float32" : (q == 1 ? "int8" : (q == 2 ? "q4" : "t2")); }
 struct Cfg { uint32_t quant, V, D, layers, heads, E, F, nshared, L, min_k, max_k; float top_p, min_strength; int hd; };
 struct Expert { Mat g, u, d; };
 struct Layer { float *n1w, *n1b, *n2w, *n2b; Mat qkv, o, gate; float* sw; float sb; vector<Expert> ex, sh; };
@@ -762,7 +867,7 @@ struct Model {
         Reader r{file.data, file.data + file.size, &mem};
         char mg[4]; r.bytes(mg, 4); if (memcmp(mg, "YUI1", 4)) die("không phải file .yui (sai magic)");
         uint32_t ver = r.get<uint32_t>(); if (ver != 1 && ver != 2) die("phiên bản .yui không hỗ trợ (cần yui.cpp mới hơn?)"); r.ver = (int)ver;
-        c.quant = r.get<uint32_t>(); if (c.quant > 2) die("kiểu lượng tử không hỗ trợ"); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
+        c.quant = r.get<uint32_t>(); if (c.quant > 3) die("kiểu lượng tử không hỗ trợ (cần yui.cpp mới hơn?)"); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
         c.heads = r.get<uint32_t>(); c.E = r.get<uint32_t>(); c.F = r.get<uint32_t>(); c.nshared = r.get<uint32_t>();
         c.L = r.get<uint32_t>(); c.min_k = r.get<uint32_t>(); c.max_k = r.get<uint32_t>();
         c.top_p = r.get<float>(); c.min_strength = r.get<float>();
