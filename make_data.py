@@ -831,6 +831,8 @@ class WebPicker:
             if d and d.get("title") not in self.used:
                 self.used.add(d.get("title"))
                 return d, topic, False
+            if d:   # đã tốn một lượt gọi nguồn nhưng trùng bài cũ: ghi log để số lượt gọi khớp số dòng "nguồn:" (và biết lượt nào bị bỏ phí)
+                print(f"  ↷ nguồn: {d.get('source', 'web')} «{d.get('title')}» đã dùng rồi, bỏ qua", flush=True)
         return None, topic, False   # không nguồn nào dùng được -> thuần sáng tác như cũ
 
 
@@ -1228,7 +1230,11 @@ def auto(args, build_parser):
             new_share = sum(v for k, v in mix.items() if k in tool_data_x.EXTRA_KINDS) / (sum(mix.values()) or 1)
             need = max(0, want - _TOOL_HAVE)
             if new_share > 0:   # data cũ chỉ có calc/time/search vẫn phải được bù thêm các loại mới (py, recall, note, skill, chuỗi nhiều bước)
-                need = max(need, int(max(0, int(want * new_share) - _NEW_HAVE) / new_share))
+                tgt_new = int(want * new_share)
+                # chỉ bù khi thiếu HẲN (data cũ v5 = 0 loại mới). Lấy mẫu ngẫu nhiên, hoặc hội thoại chuỗi 'chain' không khớp _NEW_TOOL_RE,
+                # làm số đếm lệch vài mục: nếu cũng bù thì MỖI lần chạy lại tạo thêm file và không bao giờ "đủ mục tiêu".
+                if _NEW_HAVE < tgt_new * 0.5:
+                    need = max(need, int((tgt_new - _NEW_HAVE) / new_share))
             if need <= 0:
                 print(f"\n✅ tools: đã có {_TOOL_HAVE} hội thoại dùng công cụ ({_NEW_HAVE} thuộc loại py/recall/note/skill), đủ mục tiêu {want}.")
                 continue

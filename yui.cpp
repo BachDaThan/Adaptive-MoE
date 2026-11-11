@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -76,6 +77,7 @@
 #ifndef YUI_LIB   // server HTTP chỉ có ở bản dòng lệnh (POSIX); bản thư viện cho app (-DYUI_LIB) không cần
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -121,6 +123,8 @@ static int detect_isa() {
 }
 static int isa() { static const int v = detect_isa(); return v; }
 static const char* isa_name() { static const char* n[] = {"scalar", "avx2+fma", "neon", "neon+dotprod"}; return n[isa()]; }
+static int g_spec = [] { const char* e = getenv("YUI_SPEC"); int v = (e && *e) ? atoi(e) : 4; return v < 0 ? 0 : (v > 8 ? 8 : v); }();   // số token đoán trước tối đa mỗi lượt (0 = tắt); --spec N hoặc YUI_SPEC
+static std::atomic<long> g_drafted{0}, g_accepted{0};   // thống kê đoán trước: số token đã đoán / số đoán trúng
 static bool g_exact = [] { const char* e = getenv("YUI_EXACT"); return e && *e == '1'; }();
 
 // ---- tích vô hướng int8 x int8: kích hoạt (activation) được lượng tử theo khối 32 phần tử, mỗi khối một hệ số (như Q8_0 của llama.cpp);
@@ -694,14 +698,28 @@ static void rows_f(const Mat& m, const float* x, float* y, int r0, int r1) {
 struct Act { int8_t* q; float* s; };   // kích hoạt đã lượng tử (chỉ dùng khi model int8 và không YUI_EXACT)
 static inline bool use_qact(bool model_q) { return model_q && !g_exact; }
 
+// y[r0..r1) = W[r0..r1) x  (một token)
+static inline void mv_rows(const Mat& m, const float* x, const Act& a, float* y, int r0, int r1) {
+    if (m.type == 0) rows_f(m, x, y, r0, r1);
+    else if (m.type == 1) { if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1); else rows_q(m, a.q, a.s, y, r0, r1); }
+    else if (m.type == 3) { if (g_exact) rows_t2x_scalar(m.t2, m.ts, m.nb, m.gb, m.ng, x, y, r0, r1); else rows_t2(m, a.q, a.s, y, r0, r1); }
+    else { if (g_exact) rows_q4x_scalar(m.q4, m.bs, m.nb, m.cols, x, y, r0, r1); else rows_q4(m, a.q, a.s, y, r0, r1); }
+}
 // y = W x. par=true: chia hàng cho nhóm luồng nếu ma trận đủ lớn (>= ~0,5 triệu phép nhân)
 static void mv(const Mat& m, const float* x, const Act& a, float* y, bool par) {
     const int R = m.rows;
+    auto body = [&](int r0, int r1) { mv_rows(m, x, a, y, r0, r1); };
+    const Pool& p = pool();
+    if (!par || p.nthreads <= 1 || (size_t)R * m.cols < (1u << 19)) { body(0, R); return; }
+    const int ch = std::max(16, (R / (p.nthreads * 4) + 3) / 4 * 4), nt = (R + ch - 1) / ch;
+    par_for(nt, [&](int t) { body(t * ch, std::min(R, (t + 1) * ch)); });
+}
+// y_t = W x_t cho n token cùng lúc: mỗi nhóm 8 hàng trọng số chỉ được đọc từ RAM MỘT lần rồi dùng cho cả n token (còn nằm trong cache).
+// Kết quả từng token giống hệt mv() (cùng kernel, cùng thứ tự cộng) nên đoán trước token không đổi đầu ra.
+static void mv_batch(const Mat& m, int n, const float* const* x, const Act* a, float* const* y, bool par) {
+    const int R = m.rows;
     auto body = [&](int r0, int r1) {
-        if (m.type == 0) rows_f(m, x, y, r0, r1);
-        else if (m.type == 1) { if (g_exact) rows_q8x_scalar(m.i8, m.cols, x, m.sc, y, r0, r1); else rows_q(m, a.q, a.s, y, r0, r1); }
-        else if (m.type == 3) { if (g_exact) rows_t2x_scalar(m.t2, m.ts, m.nb, m.gb, m.ng, x, y, r0, r1); else rows_t2(m, a.q, a.s, y, r0, r1); }
-        else { if (g_exact) rows_q4x_scalar(m.q4, m.bs, m.nb, m.cols, x, y, r0, r1); else rows_q4(m, a.q, a.s, y, r0, r1); }
+        for (int rb = r0; rb < r1; rb += 8) { const int re = std::min(rb + 8, r1); for (int t = 0; t < n; t++) mv_rows(m, x[t], a[t], y[t], rb, re); }
     };
     const Pool& p = pool();
     if (!par || p.nthreads <= 1 || (size_t)R * m.cols < (1u << 19)) { body(0, R); return; }
@@ -1008,6 +1026,141 @@ struct Model {
         }
         s.n++;
     }
+
+    // Nạp n token liên tiếp (n >= 1) tại vị trí s.n .. s.n+n-1 trong MỘT lượt: trọng số mỗi ma trận/expert chỉ đọc một lần cho cả n token.
+    // Dùng cho đọc prompt (prefill) và kiểm chứng token đoán trước. lg_mode: 0 không tính logits | 1 chỉ token cuối (ghi V số) | 2 mọi token (n*V số).
+    // Từng token cho kết quả giống hệt step() (đã kiểm tra bằng test so sánh bit-by-bit).
+    void step_batch(Session& s, const int* toks, int n, int kcap, float* logits, int lg_mode) const {
+        const int D = c.D, H = c.heads, hd = c.hd, half = hd / 2, L = c.L, E = c.E, F = c.F, V = c.V;
+        const int pos0 = s.n; const bool qa = use_qact(c.quant >= 1);
+        if (n < 1 || pos0 + n > L) die("step_batch: vượt ngữ cảnh (lỗi nội bộ)");
+        const size_t pad = ((size_t)std::max(D, F) + 31) / 32 * 32, nsc = pad / 32 + 1;
+        vector<float> X((size_t)n * D), XN((size_t)n * D), QKV((size_t)n * 3 * D), ATT((size_t)n * D), Y((size_t)n * D), MOE((size_t)n * D), XS((size_t)n * nsc);
+        vector<int8_t> XQ((size_t)n * pad);
+        vector<Act> A(n); vector<const float*> pxn(n), patt(n); vector<float*> pqkv(n), py(n);
+        for (int t = 0; t < n; t++) {
+            A[t] = Act{&XQ[(size_t)t * pad], &XS[(size_t)t * nsc]};
+            pxn[t] = &XN[(size_t)t * D]; patt[t] = &ATT[(size_t)t * D]; pqkv[t] = &QKV[(size_t)t * 3 * D]; py[t] = &Y[(size_t)t * D];
+            embed(toks[t], &X[(size_t)t * D]);
+        }
+        const float scale = 1.f / sqrtf((float)hd);
+        for (int li = 0; li < (int)c.layers; li++) {
+            const Layer& l = ly[li];
+            for (int t = 0; t < n; t++) {
+                layernorm(&X[(size_t)t * D], l.n1w, l.n1b, &XN[(size_t)t * D], D);
+                if (qa) quant_act(&XN[(size_t)t * D], D, A[t].q, A[t].s);
+            }
+            mv_batch(l.qkv, n, pxn.data(), A.data(), pqkv.data(), true);
+            for (int t = 0; t < n; t++) {   // RoPE + ghi KV cho MỌI token trước, rồi mới tính attention (token t chỉ đọc vị trí <= pos0+t)
+                const int pos = pos0 + t; const float* cs = &cosT[(size_t)pos * half]; const float* sn = &sinT[(size_t)pos * half];
+                float *q = pqkv[t], *k = q + D, *v = q + 2 * D;
+                for (int h = 0; h < H; h++) for (int p = 0; p < 2; p++) {
+                    float* x = (p ? k : q) + h * hd;
+                    for (int i = 0; i < half; i++) { float x1 = x[i], x2 = x[i + half]; x[i] = x1 * cs[i] - x2 * sn[i]; x[i + half] = x1 * sn[i] + x2 * cs[i]; }
+                }
+                memcpy(&s.K[((size_t)li * L + pos) * D], k, D * sizeof(float));
+                memcpy(&s.V[((size_t)li * L + pos) * D], v, D * sizeof(float));
+            }
+            for (int t = 0; t < n; t++) {
+                const int pos = pos0 + t; const float* q = pqkv[t];
+                for (int h = 0; h < H; h++) {
+                    const float* qh = q + h * hd; float mx = -INFINITY;
+                    for (int u = 0; u <= pos; u++) {
+                        const float* kt = &s.K[((size_t)li * L + u) * D + h * hd]; float d = 0.f;
+                        #pragma omp simd reduction(+ : d)
+                        for (int i = 0; i < hd; i++) d += qh[i] * kt[i];
+                        s.sc[u] = d * scale; mx = std::max(mx, s.sc[u]);
+                    }
+                    float sum = 0.f; for (int u = 0; u <= pos; u++) { s.sc[u] = expf(s.sc[u] - mx); sum += s.sc[u]; }
+                    float* yh = &ATT[(size_t)t * D] + h * hd; for (int i = 0; i < hd; i++) yh[i] = 0.f;
+                    for (int u = 0; u <= pos; u++) {
+                        float w = s.sc[u] / sum; const float* vt = &s.V[((size_t)li * L + u) * D + h * hd];
+                        #pragma omp simd
+                        for (int i = 0; i < hd; i++) yh[i] += w * vt[i];
+                    }
+                }
+                if (qa) quant_act(&ATT[(size_t)t * D], D, A[t].q, A[t].s);
+            }
+            mv_batch(l.o, n, patt.data(), A.data(), py.data(), true);
+            for (int t = 0; t < n; t++) for (int i = 0; i < D; i++) X[(size_t)t * D + i] += Y[(size_t)t * D + i];
+            // ---- MoE: định tuyến từng token như step(), rồi GOM các token dùng cùng một expert để đọc trọng số expert một lần ----
+            struct TK { const Expert* e; float w; };
+            vector<vector<TK>> tk(n);
+            for (int t = 0; t < n; t++) {
+                const float* xn = &XN[(size_t)t * D];
+                layernorm(&X[(size_t)t * D], l.n2w, l.n2b, &XN[(size_t)t * D], D);
+                float lg[256], pr[256]; int idx[256];
+                for (int e = 0; e < E; e++) { const float* g = l.gate.f + (size_t)e * D; float a = 0.f; for (int i = 0; i < D; i++) a += g[i] * xn[i]; lg[e] = a; }
+                float mx = lg[0]; for (int e = 1; e < E; e++) mx = std::max(mx, lg[e]);
+                float sm = 0.f; for (int e = 0; e < E; e++) { pr[e] = expf(lg[e] - mx); sm += pr[e]; }
+                for (int e = 0; e < E; e++) pr[e] /= sm;
+                for (int e = 0; e < E; e++) idx[e] = e;
+                std::stable_sort(idx, idx + E, [&](int a, int b) { return pr[a] > pr[b]; });
+                int cap = (kcap > 0) ? std::min((int)c.max_k, kcap) : (int)c.max_k; cap = std::max(cap, (int)c.min_k);
+                float run = 0.f, wsum = 0.f; float wsort[256];
+                for (int j = 0; j < E; j++) {
+                    float p = pr[idx[j]]; run += p; float before = run - p;
+                    bool keep = ((before < c.top_p) || j < (int)c.min_k) && j < cap;
+                    wsort[j] = keep ? p : 0.f; wsum += wsort[j];
+                }
+                float st = 0.f; for (int i = 0; i < D; i++) st += l.sw[i] * xn[i]; st += l.sb;
+                float strength = c.min_strength + (1.f - c.min_strength) * (1.f / (1.f + expf(-st)));
+                if (qa) quant_act(&XN[(size_t)t * D], D, A[t].q, A[t].s);
+                for (auto& sh : l.sh) tk[t].push_back({&sh, 1.f});
+                float den = std::max(wsum, 1e-9f);
+                for (int j = 0; j < E; j++) if (wsort[j] > 0.f) tk[t].push_back({&l.ex[idx[j]], (wsort[j] / den) * strength});
+            }
+            vector<size_t> off(n); size_t total = 0;
+            for (int t = 0; t < n; t++) { off[t] = total; total += tk[t].size(); }
+            vector<float> OUT(total * D);
+            vector<const Expert*> uq; vector<vector<std::pair<int, int>>> mem;
+            for (int t = 0; t < n; t++) for (int ti = 0; ti < (int)tk[t].size(); ti++) {
+                size_t u = 0; while (u < uq.size() && uq[u] != tk[t][ti].e) u++;
+                if (u == uq.size()) { uq.push_back(tk[t][ti].e); mem.emplace_back(); }
+                mem[u].push_back({t, ti});
+            }
+            auto work = [&](int u) {
+                const Expert& e = *uq[u]; const int mc = (int)mem[u].size();
+                vector<float> TG((size_t)mc * F), TU((size_t)mc * F), TY((size_t)mc * D), S2((size_t)mc * nsc); vector<int8_t> Q2((size_t)mc * pad);
+                vector<const float*> xp(mc), gp(mc); vector<Act> a1(mc), a2(mc); vector<float*> og(mc), ou(mc), oy(mc);
+                for (int i = 0; i < mc; i++) {
+                    const int t = mem[u][i].first;
+                    xp[i] = &XN[(size_t)t * D]; a1[i] = A[t]; og[i] = &TG[(size_t)i * F]; ou[i] = &TU[(size_t)i * F]; oy[i] = &TY[(size_t)i * D];
+                    a2[i] = Act{&Q2[(size_t)i * pad], &S2[(size_t)i * nsc]}; gp[i] = og[i];
+                }
+                mv_batch(e.g, mc, xp.data(), a1.data(), og.data(), false); mv_batch(e.u, mc, xp.data(), a1.data(), ou.data(), false);
+                for (int i = 0; i < mc; i++) {
+                    float* tg = og[i]; const float* tu = ou[i];
+                    for (int j = 0; j < F; j++) { float z = tg[j]; tg[j] = z / (1.f + expf(-z)) * tu[j]; }
+                    if (qa) quant_act(tg, F, a2[i].q, a2[i].s);
+                }
+                mv_batch(e.d, mc, gp.data(), a2.data(), oy.data(), false);
+                for (int i = 0; i < mc; i++) {
+                    const int t = mem[u][i].first, ti = mem[u][i].second; const float w = tk[t][ti].w; float* out = &OUT[(off[t] + ti) * D];
+                    for (int j = 0; j < D; j++) out[j] = w * oy[i][j];
+                }
+            };
+            const int nu = (int)uq.size();
+            if (nu >= 2 && (size_t)F * D >= (1u << 15)) par_for(nu, work); else for (int u = 0; u < nu; u++) work(u);
+            for (int t = 0; t < n; t++) {
+                float* mo = &MOE[(size_t)t * D]; for (int i = 0; i < D; i++) mo[i] = 0.f;
+                for (size_t ti = 0; ti < tk[t].size(); ti++) { const float* o = &OUT[(off[t] + ti) * D]; for (int i = 0; i < D; i++) mo[i] += o[i]; }   // cùng thứ tự cộng như step()
+                for (int i = 0; i < D; i++) X[(size_t)t * D + i] += mo[i];
+            }
+        }
+        if (lg_mode) {
+            const int t0 = lg_mode == 1 ? n - 1 : 0, cnt = n - t0;
+            vector<const float*> hx(cnt); vector<Act> ha(cnt); vector<float*> ho(cnt);
+            for (int j = 0; j < cnt; j++) {
+                const int t = t0 + j;
+                layernorm(&X[(size_t)t * D], nfw, nfb, &XN[(size_t)t * D], D);
+                if (qa) quant_act(&XN[(size_t)t * D], D, A[t].q, A[t].s);
+                hx[j] = &XN[(size_t)t * D]; ha[j] = A[t]; ho[j] = logits + (size_t)j * V;
+            }
+            mv_batch(head, cnt, hx.data(), ha.data(), ho.data(), true);
+        }
+        s.n += n;
+    }
 };
 
 // ============================ định dạng chat (khớp sft_format.py) ============================
@@ -1063,7 +1216,7 @@ static bool build_prompt(const Model& m, const vector<Msg>& all, vector<int>& id
 }
 
 // ============================ sinh token ============================
-struct GenOpts { int max_new = 120; float temp = 0.8f; int top_k = 40; float top_p = 0.95f; float rep = 1.1f; int k = 2; uint64_t seed = 0; };
+struct GenOpts { int max_new = 120; float temp = 0.8f; int top_k = 40; float top_p = 0.95f; float rep = 1.1f; int k = 2; uint64_t seed = 0; int spec = g_spec; };
 
 static int sample(vector<float>& lg, const vector<int>& gen, const GenOpts& o, std::mt19937_64& rng) {
     const int V = (int)lg.size();
@@ -1127,6 +1280,21 @@ struct TextStream {
 };
 
 // Bộ sinh từng bước (KV cache + dịch ngữ cảnh khi cache đầy). next() trả đoạn văn bản mới cho tới khi hết; dùng chung cho CLI, server và API C.
+// Đoán trước token KHÔNG cần model phụ ("prompt lookup"): tìm lần xuất hiện gần nhất của 3 (rồi 2) token cuối trong lịch sử và đoán các token đi sau nó.
+// Hiệu quả khi văn bản có lặp (trích lại câu hỏi, danh sách, mã, số liệu, tên riêng); không lặp thì không đoán gì và chạy y như cũ.
+static void draft_lookup(const vector<int>& h, int maxd, vector<int>& out) {
+    out.clear(); const int n = (int)h.size();
+    for (int ng = 3; ng >= 2; ng--) {
+        if (n < ng + 1) continue;
+        const int lo = std::max(0, n - 512);
+        for (int i = n - ng - 1; i >= lo; i--) {
+            bool ok = true; for (int j = 0; j < ng; j++) if (h[i + j] != h[n - ng + j]) { ok = false; break; }
+            if (!ok) continue;
+            for (int j = i + ng; j < n && (int)out.size() < maxd; j++) out.push_back(h[j]);
+            if (!out.empty()) return;
+        }
+    }
+}
 struct Gen {
     const Model& m; GenOpts o; bool chat; Session s; vector<float> lg; std::mt19937_64 rng; vector<int> hist, gen;
     TextStream ts; int n = 0; bool finished = false, flushed = false; int L, keep;
@@ -1136,7 +1304,36 @@ struct Gen {
         if (hist.empty()) hist.push_back(m.tok.eos >= 0 ? m.tok.eos : 0);
         prefill(hist.size() > (size_t)(L - 8) ? hist.size() - (L - 8) : 0);
     }
-    void prefill(size_t from) { s.n = 0; for (size_t i = from; i < hist.size(); i++) m.step(s, hist[i], o.k, i + 1 == hist.size() ? lg.data() : nullptr); }
+    struct PQ { int tok; vector<float> lg; };   // token đã đoán (đã nằm trong KV cache) + logits dự đoán token đứng sau nó
+    std::deque<PQ> pq; int cur_acc = 0, cool = 0, ndraft = 0; float ema = 0.7f;   // ema = tỉ lệ đoán trúng gần đây; thấp thì tạm ngừng đoán (đoán sai tốn thêm tính toán)
+    void prefill(size_t from) {   // đọc prompt theo lô 16 token: mỗi ma trận chỉ đọc từ RAM một lần cho cả lô
+        s.n = 0; pq.clear(); const size_t B = 16;
+        for (size_t i = from; i < hist.size(); ) {
+            const size_t e = std::min(hist.size(), i + B); const bool last = e == hist.size();
+            m.step_batch(s, hist.data() + i, (int)(e - i), o.k, last ? lg.data() : nullptr, last ? 1 : 0); i = e;
+        }
+    }
+    // Sau khi chọn token thật nxt: có logits cho token kế tiếp. Nếu nxt trùng token đã đoán thì KHÔNG phải chạy model.
+    void advance(int nxt) {
+        if (!pq.empty() && pq.front().tok == nxt) { lg = std::move(pq.front().lg); pq.pop_front(); cur_acc++; g_accepted++; return; }
+        if (!pq.empty()) { s.n -= (int)pq.size(); pq.clear(); }
+        if (ndraft > 0) {   // kết thúc một lượt đoán: cập nhật tỉ lệ trúng; dưới ngưỡng thì nghỉ 12 token rồi thử lại
+            ema = 0.6f * ema + 0.4f * ((float)cur_acc / ndraft);
+            if (ema < 0.55f) { cool = 12; ema = 0.6f; }
+        }
+        cur_acc = 0; ndraft = 0;
+        if (s.n >= L) { prefill(hist.size() > (size_t)keep ? hist.size() - keep : 0); return; }
+        int D = o.spec; if (cool > 0) { cool--; D = 0; }
+        D = std::min(D, L - s.n - 1);
+        vector<int> dr; if (D > 0) draft_lookup(hist, D, dr);
+        if (dr.empty()) { m.step(s, nxt, o.k, lg.data()); return; }
+        vector<int> tk; tk.push_back(nxt); tk.insert(tk.end(), dr.begin(), dr.end());
+        const size_t V = m.c.V; vector<float> all(tk.size() * V);
+        m.step_batch(s, tk.data(), (int)tk.size(), o.k, all.data(), 2);
+        lg.assign(all.begin(), all.begin() + V);
+        for (size_t j = 0; j < dr.size(); j++) pq.push_back({dr[j], vector<float>(all.begin() + (j + 1) * V, all.begin() + (j + 2) * V)});
+        g_drafted += (long)dr.size(); ndraft = (int)dr.size();
+    }
     bool next(string& delta) {
         delta.clear();
         while (true) {
@@ -1152,8 +1349,7 @@ struct Gen {
             if (getenv("YUI_DEBUG_IDS")) fprintf(stderr, "%d ", nxt);
             string d = ts.feed(nxt);
             if (ts.done) { finished = true; flushed = true; delta = d; return !delta.empty(); }
-            if (s.n >= L) prefill(hist.size() > (size_t)keep ? hist.size() - keep : 0);
-            else m.step(s, nxt, o.k, lg.data());
+            advance(nxt);
             if (!d.empty()) { delta = d; return true; }
         }
     }
@@ -1254,7 +1450,7 @@ static GenOpts parse_opts(const J& body, int def_k) {
     int mx = (int)num({"num_predict", "max_tokens"}, 120); o.max_new = mx <= 0 ? 256 : std::min(mx, 4096);
     o.temp = (float)num({"temperature"}, 0.8); o.top_k = (int)num({"top_k"}, 40); o.top_p = (float)num({"top_p"}, 0.95);
     o.rep = (float)num({"repeat_penalty"}, 1.1); int k = (int)num({"k"}, def_k); o.k = (k == 1 || k == 2) ? k : def_k;
-    o.seed = (uint64_t)num({"seed"}, 0); return o;
+    o.seed = (uint64_t)num({"seed"}, 0); o.spec = std::max(0, std::min(8, (int)num({"spec"}, g_spec))); return o;
 }
 
 // ============================ API C (cho app Flutter/FFI, kiểu poll, không callback) ============================
@@ -1446,7 +1642,8 @@ struct Server {
         listen(s, 64);
         fprintf(stderr, "[yui] http://%s:%d  (trang chat ở '/'; /api/chat, /api/generate, /v1/chat/completions) %s\n", host.c_str(), port,
                 api_key.empty() ? "[KHÔNG có API key - đừng mở ra Internet]" : "[có API key]");
-        while (true) { int fd = accept(s, nullptr, nullptr); if (fd < 0) continue; std::thread([this, fd] { try { handle(fd); } catch (...) { close(fd); } }).detach(); }
+        while (true) { int fd = accept(s, nullptr, nullptr); if (fd < 0) continue; { int nd = 1; setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nd, sizeof nd); }   /* gửi ngay từng đoạn chữ, không chờ gộp gói (Nagle) -> chữ hiện đều */
+            std::thread([this, fd] { try { handle(fd); } catch (...) { close(fd); } }).detach(); }
     }
 };
 
@@ -1465,7 +1662,7 @@ static int cli_main(int argc, char** argv) {
         else if (a == "--temp") o.temp = (float)atof(nx().c_str()); else if (a == "--top_k") o.top_k = atoi(nx().c_str());
         else if (a == "--top_p") o.top_p = (float)atof(nx().c_str()); else if (a == "--rep") o.rep = (float)atof(nx().c_str());
         else if (a == "--seed") o.seed = (uint64_t)atoll(nx().c_str()); else if (a == "--max_turns") max_turns = atoi(nx().c_str());
-        else if (a == "--threads") threads = atoi(nx().c_str()); else if (a == "--exact") g_exact = true; else if (a == "--bench_threads") bench_threads = true;
+        else if (a == "--threads") threads = atoi(nx().c_str()); else if (a == "--exact") g_exact = true; else if (a == "--spec") { g_spec = std::max(0, std::min(8, atoi(nx().c_str()))); o.spec = g_spec; } else if (a == "--bench_threads") bench_threads = true;
         else die("tham số lạ: " + a);
     }
     if (model_path.empty()) die("cần --model file.yui");
@@ -1497,9 +1694,22 @@ static int cli_main(int argc, char** argv) {
     }
     if (bench) {
         vector<int> ids = m.tok.encode("Hà Nội là thủ đô của Việt Nam"); GenOpts b = o; b.max_new = 200; b.temp = 0; b.rep = 1.0f;
-        auto t0 = std::chrono::steady_clock::now(); int n = generate(m, ids, b, false, [](const string&) { return true; });
-        double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        printf("%d token trong %.2fs = %.1f token/giây (prompt %zu token, k=%d)\n", n, sec, n / sec, ids.size(), o.k); return 0;
+        double base = 0;
+        for (int sp : {0, o.spec}) {
+            if (sp == 0 && o.spec == 0 && base > 0) break;
+            b.spec = sp; g_drafted = g_accepted = 0;
+            generate(m, ids, b, false, [](const string&) { return true; });   // làm nóng
+            g_drafted = g_accepted = 0;
+            auto t0 = std::chrono::steady_clock::now(); int n = generate(m, ids, b, false, [](const string&) { return true; });
+            double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), tps = n / sec;
+            printf("%d token trong %.2fs = %.1f token/giây (prompt %zu token, k=%d, spec=%d", n, sec, tps, ids.size(), o.k, sp);
+            if (sp > 0) printf(", đoán trúng %ld/%ld", (long)g_accepted, (long)g_drafted);
+            printf(")");
+            if (sp == 0) base = tps; else if (base > 0) printf("  => x%.2f so với spec=0", tps / base);
+            printf("\n");
+            if (o.spec == 0) break;
+        }
+        printf("(bench dùng greedy temp=0; tốc độ đoán trước phụ thuộc văn bản có lặp hay không, xem YUI_SPEC / --spec N)\n"); return 0;
     }
     if (!prompt.empty()) { generate(m, m.tok.encode(prompt), o, false, [](const string& d) { fputs(d.c_str(), stdout); fflush(stdout); return true; }); printf("\n"); return 0; }
     printf("Chat với Yui. Dòng trống để thoát.\n");
