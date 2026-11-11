@@ -1112,7 +1112,7 @@ struct Model {
             }
             vector<size_t> off(n); size_t total = 0;
             for (int t = 0; t < n; t++) { off[t] = total; total += tk[t].size(); }
-            vector<float> OUT(total * D);
+            vector<float> EXOUT(total * D);
             vector<const Expert*> uq; vector<vector<std::pair<int, int>>> mem;
             for (int t = 0; t < n; t++) for (int ti = 0; ti < (int)tk[t].size(); ti++) {
                 size_t u = 0; while (u < uq.size() && uq[u] != tk[t][ti].e) u++;
@@ -1136,7 +1136,7 @@ struct Model {
                 }
                 mv_batch(e.d, mc, gp.data(), a2.data(), oy.data(), false);
                 for (int i = 0; i < mc; i++) {
-                    const int t = mem[u][i].first, ti = mem[u][i].second; const float w = tk[t][ti].w; float* out = &OUT[(off[t] + ti) * D];
+                    const int t = mem[u][i].first, ti = mem[u][i].second; const float w = tk[t][ti].w; float* out = &EXOUT[(off[t] + ti) * D];
                     for (int j = 0; j < D; j++) out[j] = w * oy[i][j];
                 }
             };
@@ -1144,7 +1144,7 @@ struct Model {
             if (nu >= 2 && (size_t)F * D >= (1u << 15)) par_for(nu, work); else for (int u = 0; u < nu; u++) work(u);
             for (int t = 0; t < n; t++) {
                 float* mo = &MOE[(size_t)t * D]; for (int i = 0; i < D; i++) mo[i] = 0.f;
-                for (size_t ti = 0; ti < tk[t].size(); ti++) { const float* o = &OUT[(off[t] + ti) * D]; for (int i = 0; i < D; i++) mo[i] += o[i]; }   // cùng thứ tự cộng như step()
+                for (size_t ti = 0; ti < tk[t].size(); ti++) { const float* o = &EXOUT[(off[t] + ti) * D]; for (int i = 0; i < D; i++) mo[i] += o[i]; }   // cùng thứ tự cộng như step()
                 for (int i = 0; i < D; i++) X[(size_t)t * D + i] += mo[i];
             }
         }
