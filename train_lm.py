@@ -76,7 +76,7 @@ def card_files(args, cfg, step, best):
 
 
 def hf_push(args, files, subdir=None):
-    if not args.hf_repo:
+    if not args.hf_repo or int(os.environ.get("RANK", "0")) != 0:   # DDP: chỉ rank 0 đẩy lên HF
         return
     d = getattr(args, "hf_dir", "") if subdir is None else subdir
     try:
@@ -97,6 +97,8 @@ def hf_push(args, files, subdir=None):
 
 
 def atomic_save(obj, path):
+    if int(os.environ.get("RANK", "0")) != 0:   # DDP: chỉ rank 0 ghi file
+        return
     tmp = path + ".tmp"
     torch.save(obj, tmp)
     os.replace(tmp, path)
@@ -302,6 +304,29 @@ def evaluate(model, vals, ks, args, device, amp):
     return res
 
 
+def sync_grads(model, world, bucket_mb=128):
+    """Trung bình gradient giữa các GPU (data parallel thủ công, không bọc DDP nên mọi code truy cập model giữ nguyên).
+    Expert không được chọn ở batch này (grad=None) được coi là 0 để mọi rank gọi all_reduce giống hệt nhau."""
+    import torch.distributed as dist
+    ps = [p for p in model.parameters() if p.requires_grad]
+    for p in ps:
+        if p.grad is None:
+            p.grad = torch.zeros_like(p)
+    cap = bucket_mb * 1024 * 1024 // 4
+    i = 0
+    while i < len(ps):
+        j, n = i, 0
+        while j < len(ps) and (n == 0 or n + ps[j].numel() <= cap):
+            n += ps[j].numel(); j += 1
+        flat = torch.cat([p.grad.reshape(-1) for p in ps[i:j]])
+        dist.all_reduce(flat)
+        flat.div_(world)
+        o = 0
+        for p in ps[i:j]:
+            k = p.numel(); p.grad.copy_(flat[o:o + k].view_as(p)); o += k
+        i = j
+
+
 def lr_at(step, args, lr):
     if step < args.warmup:
         return lr * (step + 1) / args.warmup
@@ -336,6 +361,11 @@ def generate(args, device):
 # ---------------------------------------------------------------- train
 def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    rank, world = int(os.environ.get("RANK", "0")), int(os.environ.get("WORLD_SIZE", "1"))
+    follower = world > 1 and rank != 0   # rank != 0 chỉ chờ rank 0 chuẩn bị xong data/checkpoint rồi cùng train
+    if world > 1:
+        torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", rank)))
+        print(f"[train] data parallel: rank {rank}/{world}", flush=True)
     os.makedirs(args.out, exist_ok=True)
     from data_layout import params_from_arch, size_tag, parse_params, arch_for_params, lr_for_params, heads_for, DEFAULT_DATA_REPO
     import model_registry
@@ -343,56 +373,76 @@ def main(args):
         model_registry.setup_generate(args)
         hf_pull(args, ["config.json", "tokenizer.json", "best.pt"])
         return generate(args, device)
-    if args.size in PRESETS:
-        P = PRESETS[args.size]
-    else:   # --size 50M / 120M / 1.2B: tự chọn d, số lớp, số expert cho đúng số tham số
-        n_target = parse_params(args.size)
-        d0, l0, e0 = arch_for_params(n_target, args.vocab)
-        P = dict(d=d0, layers=l0, experts=e0, lr=lr_for_params(params_from_arch(args.vocab, d0, l0, e0)))
-        print(f"[train] --size {args.size}: chọn d={d0}, {l0} lớp, {e0} expert = {params_from_arch(args.vocab, d0, l0, e0) / 1e6:.1f}M tham số, lr={P['lr']:.2e}", flush=True)
-    d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
-    lr = args.lr or P["lr"]
-    model_registry.setup_identity(args, size_tag(params_from_arch(args.vocab, d, layers, experts)))   # đặt tên model + chọn thư mục models/<tên>/ trên HF
-    hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
-    cfg0 = {}
-    if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
-        cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
-    # --- FIX resume: kiến trúc phải theo CHECKPOINT đang có, không theo preset --size (preset có thể đã đổi) ---
-    _ckp = os.path.join(args.out, "last.pt")
-    if not os.path.exists(_ckp):
-        _ckp = os.path.join(args.out, "best.pt")
-    if os.path.exists(_ckp):
-        try:
-            _sd = torch.load(_ckp, map_location="cpu", mmap=True, weights_only=False)["model"]
-            _d = _sd["emb.weight"].shape[1]
-            _L = 1 + max(int(k.split(".")[1]) for k in _sd if k.startswith("blocks."))
-            _E = 1 + max(int(k.split("moe.experts.")[1].split(".")[0]) for k in _sd if k.startswith("blocks.0.moe.experts."))
-            if (_d, _L, _E) != (d, layers, experts):
-                print(f"[train] ⚠ checkpoint là d={_d}, {_L} lớp, {_E} expert (preset --size {args.size} đòi d={d}, {layers} lớp, {experts} expert) -> theo checkpoint để tiếp tục", flush=True)
-            d, layers, experts = _d, _L, _E
-            cfg0.update(d=d, layers=layers, experts=experts, vocab=_sd["emb.weight"].shape[0])
-            if not args.lr:
-                lr = lr_for_params(params_from_arch(cfg0["vocab"], d, layers, experts))
-            del _sd
-        except Exception as e:  # noqa: BLE001
-            print(f"[train] không đọc được kiến trúc từ checkpoint ({str(e)[:80]}); dùng config/preset", flush=True)
-    args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
-        cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
-    n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
-    heads = cfg0.get("heads") or (4 if cfg0 else (args.heads or heads_for(d)))   # checkpoint cũ không ghi heads = 4; model mới tự chọn để mỗi head <= 128 chiều
-    custom = args.size not in PRESETS
-    if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key của ít nhất 1 provider LLM: Cohere/OpenRouter/Mistral/Gemini; không có thì bỏ qua)
-        if os.path.exists(os.path.join(args.out, "data.pt")):
-            print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
-        else:
-            import make_data
-            make_data.make_for_training(n_params, args._tag, args.data_repo or os.environ.get("HF_REPO") or DEFAULT_DATA_REPO, args.hf_type, args.make_data_kinds, args.make_data_minutes)
-    train, vals, V, langs = build_data(args)
-    cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max, heads=heads, params=n_params)
-    if args.name:
-        cfg["name"] = args.name
-    json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    random.seed(args.seed); torch.manual_seed(args.seed)
+    _rd = os.path.join(args.out, f".ready_{os.getppid()}")
+    if follower:
+        while not os.path.exists(_rd):
+            time.sleep(5)
+        time.sleep(1)
+        info = json.load(open(_rd, encoding="utf-8"))
+        lr, args._tag = info["lr"], info["tag"]
+        if info.get("name"):
+            args.name = info["name"]
+        cfg = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
+        d, layers, experts, n_params = cfg["d"], cfg["layers"], cfg["experts"], cfg.get("params")
+        train, vals, V, langs = build_data(args)
+    else:
+        if args.size in PRESETS:
+            P = PRESETS[args.size]
+        else:   # --size 50M / 120M / 1.2B: tự chọn d, số lớp, số expert cho đúng số tham số
+            n_target = parse_params(args.size)
+            d0, l0, e0 = arch_for_params(n_target, args.vocab)
+            P = dict(d=d0, layers=l0, experts=e0, lr=lr_for_params(params_from_arch(args.vocab, d0, l0, e0)))
+            print(f"[train] --size {args.size}: chọn d={d0}, {l0} lớp, {e0} expert = {params_from_arch(args.vocab, d0, l0, e0) / 1e6:.1f}M tham số, lr={P['lr']:.2e}", flush=True)
+        d = args.d or P["d"]; layers = args.layers or P["layers"]; experts = args.experts or P["experts"]
+        lr = args.lr or P["lr"]
+        model_registry.setup_identity(args, size_tag(params_from_arch(args.vocab, d, layers, experts)))   # đặt tên model + chọn thư mục models/<tên>/ trên HF
+        hf_pull(args, ["config.json", "tokenizer.json", "data.pt", "last.pt", "best.pt"])
+        cfg0 = {}
+        if os.path.exists(os.path.join(args.out, "config.json")):   # tiếp tục train: lấy cỡ thật từ config.json cũ
+            cfg0 = json.load(open(os.path.join(args.out, "config.json"), encoding="utf-8"))
+        # --- FIX resume: kiến trúc phải theo CHECKPOINT đang có, không theo preset --size (preset có thể đã đổi) ---
+        _ckp = os.path.join(args.out, "last.pt")
+        if not os.path.exists(_ckp):
+            _ckp = os.path.join(args.out, "best.pt")
+        if os.path.exists(_ckp):
+            try:
+                _sd = torch.load(_ckp, map_location="cpu", mmap=True, weights_only=False)["model"]
+                _d = _sd["emb.weight"].shape[1]
+                _L = 1 + max(int(k.split(".")[1]) for k in _sd if k.startswith("blocks."))
+                _E = 1 + max(int(k.split("moe.experts.")[1].split(".")[0]) for k in _sd if k.startswith("blocks.0.moe.experts."))
+                if (_d, _L, _E) != (d, layers, experts):
+                    print(f"[train] ⚠ checkpoint là d={_d}, {_L} lớp, {_E} expert (preset --size {args.size} đòi d={d}, {layers} lớp, {experts} expert) -> theo checkpoint để tiếp tục", flush=True)
+                d, layers, experts = _d, _L, _E
+                cfg0.update(d=d, layers=layers, experts=experts, vocab=_sd["emb.weight"].shape[0])
+                if not args.lr:
+                    lr = lr_for_params(params_from_arch(cfg0["vocab"], d, layers, experts))
+                del _sd
+            except Exception as e:  # noqa: BLE001
+                print(f"[train] không đọc được kiến trúc từ checkpoint ({str(e)[:80]}); dùng config/preset", flush=True)
+        args._tag = args.size_tag if args.size_tag not in ("auto", "") else size_tag(params_from_arch(
+            cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts)))
+        n_params = params_from_arch(cfg0.get("vocab", args.vocab), cfg0.get("d", d), cfg0.get("layers", layers), cfg0.get("experts", experts))
+        heads = cfg0.get("heads") or (4 if cfg0 else (args.heads or heads_for(d)))   # checkpoint cũ không ghi heads = 4; model mới tự chọn để mỗi head <= 128 chiều
+        custom = args.size not in PRESETS
+        if args.make_data == "on" or (args.make_data == "auto" and custom):   # tự tạo data hợp cỡ model trước khi train (cần key của ít nhất 1 provider LLM: Cohere/OpenRouter/Mistral/Gemini; không có thì bỏ qua)
+            if os.path.exists(os.path.join(args.out, "data.pt")):
+                print("[train] đã có data.pt (đang train tiếp) nên không tạo data mới", flush=True)
+            else:
+                import make_data
+                make_data.make_for_training(n_params, args._tag, args.data_repo or os.environ.get("HF_REPO") or DEFAULT_DATA_REPO, args.hf_type, args.make_data_kinds, args.make_data_minutes)
+        train, vals, V, langs = build_data(args)
+        cfg = dict(vocab=V, d=d, layers=layers, experts=experts, top_p=args.top_p, L=args.L, langs=langs, k_max=args.k_max, heads=heads, params=n_params)
+        if args.name:
+            cfg["name"] = args.name
+        json.dump(cfg, open(os.path.join(args.out, "config.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        if world > 1:   # báo rank khác: data.pt, config.json, last.pt đã sẵn sàng
+            json.dump({"lr": lr, "tag": args._tag, "name": args.name}, open(_rd + ".tmp", "w", encoding="utf-8"))
+            os.replace(_rd + ".tmp", _rd)
+    random.seed(args.seed + rank); torch.manual_seed(args.seed)
+    if world > 1:
+        import datetime
+        import torch.distributed as dist
+        dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=120))   # rank 0 có thể mất lâu để lưu/đẩy checkpoint
     model = build_model(cfg, device)
     if args.drop > 0:
         add_dropout(model, args.drop)
@@ -432,6 +482,10 @@ def main(args):
             scaler.load_state_dict(ck["scaler"])
         step, best, bad = ck["step"], tuple(ck["best"]), ck["bad"]
         print(f"[train] tiếp tục từ bước {step} (val tốt nhất {best[0]:.4f} ở bước {best[1]})", flush=True)
+    if world > 1:   # chắc chắn mọi GPU bắt đầu từ cùng trọng số
+        for _p in model.parameters():
+            dist.broadcast(_p.data, 0)
+        torch.manual_seed(args.seed + 1000 + rank)
     hf_push(args, ["config.json", "tokenizer.json"] + (["data.pt"] if step == 0 or CTX.get("data_built") else []))
     if step >= args.steps:
         hf_push(args, card_files(args, cfg, step, best))   # model đã train xong từ trước: bổ sung README.md nếu chưa có
@@ -439,7 +493,7 @@ def main(args):
               f"Muốn train tiếp thì tăng --steps (vd {2 * args.steps}); lịch learning rate sẽ co giãn theo --steps mới.", flush=True)
         return
     ks = [int(x) for x in args.eval_ks.split(",")]
-    g = torch.Generator().manual_seed(args.seed + step)
+    g = torch.Generator().manual_seed(args.seed + step + 7919 * rank)
     t0, t_log, tok_log = time.time(), time.time(), 0
 
     def save_last():
@@ -476,17 +530,19 @@ def main(args):
                 raise
             tot += loss.item() / args.accum
             tok_log += x.numel()
+        if world > 1:
+            sync_grads(model, world)
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(opt); scaler.update()
         opt.zero_grad(set_to_none=True)
         step += 1
-        if step % args.log_every == 0:
+        if step % args.log_every == 0 and rank == 0:
             now = time.time()
             print(f"[train] bước {step}/{args.steps} loss {tot:.4f} lr {opt.param_groups[0]['lr']:.2e} "
-                  f"{tok_log / (now - t_log):.0f} token/giây", flush=True)
+                  f"{world * tok_log / (now - t_log):.0f} token/giây", flush=True)
             t_log, tok_log = now, 0
-        if step % args.eval_every == 0 or step == args.steps:
+        if (step % args.eval_every == 0 or step == args.steps) and rank == 0:
             res = evaluate(model, vals, ks, args, device, state["amp"])
             show = "  ".join(f"k={k}: " + " ".join(f"{l} {v:.4f}" for l, v in res[k].items()) for k in ks)
             ups_ = parse_upsample(args.upsample)
@@ -508,15 +564,26 @@ def main(args):
             save_last()
         if args.hf_repo and step % args.hf_every == 0:
             hf_push(args, ["last.pt", "best.pt"])
+        stop = 0   # rank 0 quyết định dừng, các rank khác theo (nếu không sẽ treo ở all_reduce)
         if args.patience and bad >= args.patience:
+            stop = 1
+        elif args.max_minutes and (time.time() - t0) / 60 > args.max_minutes:
+            stop = 2
+        if world > 1:
+            _st = torch.tensor([stop], device=device)
+            dist.broadcast(_st, 0)
+            stop = int(_st.item())
+        if stop == 1:
             print(f"[train] dừng sớm: {bad} lần đánh giá liên tiếp không cải thiện", flush=True)
             finish()
             return
-        if args.max_minutes and (time.time() - t0) / 60 > args.max_minutes:
+        if stop == 2:
             finish()
             print(f"[train] hết {args.max_minutes} phút, đã lưu last.pt; chạy lại cùng lệnh để tiếp tục", flush=True)
             return
     finish()
+    if world > 1:
+        dist.destroy_process_group()
     print(f"[train] xong. val tốt nhất {best[0]:.4f} ở bước {best[1]}; dùng best.pt để suy luận (--generate)", flush=True)
 
 
