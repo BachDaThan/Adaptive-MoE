@@ -125,6 +125,7 @@ def main():
     ap.add_argument("--warmup", type=int, default=100); ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--val_frac", type=float, default=0.02); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no_amp", action="store_true")
+    ap.add_argument("--max_minutes", type=float, default=0, help="dừng êm (vẫn đánh giá + lưu) khi quá số phút này; 0 = không giới hạn")
     ap.add_argument("--push_repo", default=None, help="đẩy vision_proj.pt/vision_best.pt lên repo HF này (cần HF_TOKEN)")
     a = ap.parse_args()
     if not a.data and not a.hf_dataset: raise SystemExit("cần --data file.jsonl hoặc --hf_dataset")
@@ -172,7 +173,7 @@ def main():
     opt = torch.optim.AdamW(groups, weight_decay=0.01)
     base = [g["lr"] for g in opt.param_groups]
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
-    total = max(1, len(tr) * a.epochs); step = 0; best = float("inf"); t0 = time.time()
+    total = max(1, len(tr) * a.epochs); step = 0; best = float("inf"); t0 = time.time(); stop = False
 
     def save(tag):
         meta = {"proj": proj.state_dict(), "pool": a.pool, "d_model": cfg["d"], "n_img": n_img, "tower": V.SIGLIP, "stage": a.stage}
@@ -199,6 +200,8 @@ def main():
             scaler.scale(loss).backward(); scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_([p for g in opt.param_groups for p in g["params"]], 1.0)
             scaler.step(opt); scaler.update(); step += 1
+            if a.max_minutes and (time.time() - t0) / 60 > a.max_minutes:
+                stop = True; print(f"[vision] hết {a.max_minutes:.0f} phút, dừng êm", flush=True); break
             if step % 50 == 0:
                 print(f"[vision] ep {ep} bước {step}/{total} loss {loss.item():.4f}  {time.time() - t0:.0f}s", flush=True)
         v_ok = evaluate(model, tower, proj, va, n_img, eos, L, device, amp, False)
@@ -206,6 +209,7 @@ def main():
         print(f"[vision] ep {ep}: val(ảnh đúng) {v_ok:.4f}   val(ảnh xáo) {v_sh:.4f}   chênh {v_sh - v_ok:+.4f}"
               f"{'   ⚠ chênh ~0: model đang bỏ qua ảnh' if v_sh - v_ok < 0.02 else ''}", flush=True)
         if v_ok < best: best = v_ok; save(f"ep {ep}, val {v_ok:.4f}")
+        if stop: break
     print(f"[vision] xong. val tốt nhất {best:.4f}. Tiếp: stage 2 (nếu vừa chạy stage 1), rồi export_vision.py + export_yui.py --ckpt vision_best.pt", flush=True)
 
 
