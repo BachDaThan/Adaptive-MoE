@@ -139,7 +139,7 @@ def test_cau_hinh_ngoai_khoang(files, tmp_path):
     raw = bytearray(open(files["f32"], "rb").read())
     off = {"E": 4 + 4 * 6, "heads": 4 + 4 * 5, "quant": 4 + 4}
     p = tmp_path / "bad.yui"
-    for field, val in (("E", 100000), ("E", 0), ("heads", 0), ("heads", 5), ("quant", 9)):
+    for field, val in (("E", 100000), ("E", 0), ("heads", 0), ("heads", 5), ("heads", 64), ("quant", 9)):
         bad = bytearray(raw); bad[off[field]:off[field] + 4] = struct.pack("<I", val)
         p.write_bytes(bad)
         with pytest.raises(YuiFormatError):

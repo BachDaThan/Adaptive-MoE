@@ -96,8 +96,8 @@ def read_yui(path, with_tensors=True):
             raise YuiFormatError("file v1 chỉ có quant f32/int8")
         if not (0 < E <= MAX_E and 0 < NL <= MAX_LAYERS and 0 < H and 0 < D <= MAX_DIM and 0 < V <= MAX_DIM and n_shared <= 64):
             raise YuiFormatError("cấu hình .yui không hợp lệ (E/layers/heads/D/V ngoài khoảng cho phép)")
-        if D % H:
-            raise YuiFormatError(f"D={D} không chia hết cho heads={H}")
+        if D % H or D % (H * 2):
+            raise YuiFormatError(f"D={D} phải chia hết cho 2*heads (heads={H}); engine cần head_dim chẵn")
         cfg = dict(V=V, D=D, layers=NL, heads=H, E=E, F=F, n_shared=n_shared, L=L, min_k=min_k, max_k=max_k,
                    top_p=top_p, min_strength=min_strength)
 
