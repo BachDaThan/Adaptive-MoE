@@ -3,9 +3,9 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-12 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 0/45
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 0/45 (1 task chờ bạn up: P0-1)
 
-## ▶ TIẾP THEO: `P0-1`
+## ▶ TIẾP THEO: `P0-2` (cần bạn quyết: xoá hay lưu `provider-chain.patch`), rồi `P0-3`
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
@@ -31,6 +31,8 @@ Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử
 2. Đính kèm đúng file được xin.
 3. Dán nội dung file nếu ngắn.
 Không gửi `README.md` / `README.vi.md` (rất nặng ~85 KB); nếu cần mình sẽ xin đúng mục.
+
+**Mình tự lấy file được:** cả 2 repo đang public và môi trường của mình `git clone` được, nên thường mình tự đọc code, bạn chỉ cần up file mình giao. Việc cần dữ liệu/thiết bị của bạn thì mình vẫn xin riêng.
 
 **Mình giao lại:** chỉ gồm file cần up, kèm đường dẫn đích ghi rõ dạng `Adaptive-MoE/…` hoặc `Y-App/…`, và luôn kèm `docs/PLAN.md` đã đánh dấu mới.
 
@@ -90,9 +92,9 @@ Mỗi task: **✎** file sẽ sửa/tạo · **📥** file mình cần bạn g�
 
 ### P0 — Dọn nền, đo mốc ban đầu
 
-- [ ] **P0-1 · Đồng bộ `yui.cpp` giữa 2 repo**
-  ✎ tạo `tools/check_yui_sync.py` (so sha256 hai bản) + bước trong CI · 📥 `yui.cpp` (1 file, vì 2 bản giống nhau) + `Y-App/.github/workflows/build-app.yml` · 📤 `Adaptive-MoE/tools/check_yui_sync.py`, `Adaptive-MoE/.github/workflows/tests.yml`, `Y-App/tools/check_yui_sync.py`
-  ✅ CI đỏ nếu 2 bản `yui.cpp` khác nhau; xanh khi bằng nhau.
+- [~] **P0-1 · Đồng bộ `yui.cpp` giữa 2 repo**
+  ✎ tạo `tools/check_yui_sync.py` (so sha256 hai bản; vị trí: `Adaptive-MoE/yui.cpp` và `Y-App/native/yui.cpp`) + job `sync-yui` trong CI cả 2 repo · 📥 (đã lấy xong) · 📤 `Adaptive-MoE/tools/check_yui_sync.py`, `Adaptive-MoE/.github/workflows/tests.yml`, `Y-App/tools/check_yui_sync.py`, `Y-App/.github/workflows/build-app.yml`
+  ✅ CI đỏ nếu 2 bản `yui.cpp` khác nhau; xanh khi bằng nhau. *Đã thử: giống → exit 0, lệch → exit 1, tải GitHub thật OK. Chờ bạn up và báo job `sync-yui` xanh trên Actions.*
 
 - [ ] **P0-2 · Dọn `provider-chain.patch`**
   ✎ chuyển vào `docs/archive/` hoặc xoá; thêm vào `.gitignore` mẫu `*.patch` · 📥 không cần (bạn quyết: giữ hay xoá) · 📤 `Adaptive-MoE/.gitignore`
@@ -301,6 +303,7 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 - `ModelStore.isYui` chỉ kiểm 4 byte đầu `"YUI1"`. Danh sách model = mọi `*.yui` trong thư mục dữ liệu app.
 - `lib/agent.dart`: chỉ 3 công cụ `calc`, `time`, `search` (Wikipedia vi); `kToolResultChars = 120`; tối đa 2 lần gọi công cụ/câu. **Không có** vault/RAG/Graphify/skill/orchestrator (chỉ có bản Python).
 - Dịch vụ: `voice_service`, `sherpa_stt` (STT offline), `vision_service`, `update_service`, `notifier`, `background_guard` (flutter_foreground_task 8.17.0 ghim phiên bản).
+- `yui.cpp` của Y-App nằm ở **`native/yui.cpp`** (không phải gốc repo); bản Adaptive-MoE ở gốc. Cả hai đang trùng sha256 `39cc442d…c073e` (115 111 byte).
 - Build: `.github/workflows/build-app.yml` (Android APK arm64 + Windows setup/portable), phát hành lên Releases tag `latest`.
 
 ### 4.4 Adaptive-MoE (Python) — module chính
@@ -321,6 +324,7 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | Ngày | Mục | Ghi chú |
 |---|---|---|
 | 2026-11-12 | Khởi tạo kế hoạch v1 | Dựa trên đọc code 2 repo + tư vấn Gemini; chưa có task nào xong |
+| 2026-11-13 | P0-1 giao file `[~]` | Hiện 2 bản `yui.cpp` đang trùng nhau. Script mặc định bỏ qua nếu mất mạng, CI dùng `--strict`. Push `yui.cpp` ở cả 2 repo cùng lúc có thể đỏ tạm thời đến khi repo kia cập nhật |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
