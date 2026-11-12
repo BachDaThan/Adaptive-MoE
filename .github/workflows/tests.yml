@@ -17,3 +17,13 @@ jobs:
           pip install numpy pytest
       - name: Test
         run: pytest -q
+  sync-yui:
+    # yui.cpp phải giống hệt giữa Adaptive-MoE và Y-App (native/yui.cpp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Kiểm tra đồng bộ yui.cpp
+        run: python tools/check_yui_sync.py --strict
