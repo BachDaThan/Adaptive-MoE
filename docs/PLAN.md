@@ -3,15 +3,15 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 0/45 (1 task chờ bạn up: P0-1)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 1/45 (P0-2…P0-5 chờ bạn up, xem Nhật ký)
 
-## ▶ TIẾP THEO: `P0-2` (cần bạn quyết: xoá hay lưu `provider-chain.patch`), rồi `P0-3`
+## ▶ TIẾP THEO: `P1-1` (đặc tả `.yui` v3) — sau khi bạn up xong gói P0-2…P0-5
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
-| P0 | Dọn nền, đo mốc ban đầu | 0/5 |
+| P0 | Dọn nền, đo mốc ban đầu | 1/5 |
 | P1 | `.yui` v3: có meta + mục lục | 0/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
@@ -92,23 +92,23 @@ Mỗi task: **✎** file sẽ sửa/tạo · **📥** file mình cần bạn g�
 
 ### P0 — Dọn nền, đo mốc ban đầu
 
-- [~] **P0-1 · Đồng bộ `yui.cpp` giữa 2 repo**
+- [x] **P0-1 · Đồng bộ `yui.cpp` giữa 2 repo**
   ✎ tạo `tools/check_yui_sync.py` (so sha256 hai bản; vị trí: `Adaptive-MoE/yui.cpp` và `Y-App/native/yui.cpp`) + job `sync-yui` trong CI cả 2 repo · 📥 (đã lấy xong) · 📤 `Adaptive-MoE/tools/check_yui_sync.py`, `Adaptive-MoE/.github/workflows/tests.yml`, `Y-App/tools/check_yui_sync.py`, `Y-App/.github/workflows/build-app.yml`
-  ✅ CI đỏ nếu 2 bản `yui.cpp` khác nhau; xanh khi bằng nhau. *Đã thử: giống → exit 0, lệch → exit 1, tải GitHub thật OK. Chờ bạn up và báo job `sync-yui` xanh trên Actions.*
+  ✅ CI đỏ nếu 2 bản `yui.cpp` khác nhau; xanh khi bằng nhau. *Xong: bạn báo cả 2 repo xanh (2026-11-13).*
 
-- [ ] **P0-2 · Dọn `provider-chain.patch`**
+- [~] **P0-2 · Dọn `provider-chain.patch`**
   ✎ chuyển vào `docs/archive/` hoặc xoá; thêm vào `.gitignore` mẫu `*.patch` · 📥 không cần (bạn quyết: giữ hay xoá) · 📤 `Adaptive-MoE/.gitignore`
   ✅ Gốc repo không còn file patch 84 KB (nếu bạn đồng ý xoá).
 
-- [ ] **P0-3 · Chạy baseline test + build, ghi kết quả**
+- [~] **P0-3 · Chạy baseline test + build, ghi kết quả**
   ✎ ghi vào mục Nhật ký bên dưới · 📥 bạn dán kết quả `pytest -q`, `make test`, và kết quả Actions của Y-App · 📤 `Adaptive-MoE/docs/PLAN.md`
   ✅ Có số: bao nhiêu test xanh/đỏ, bản Y-App build được hay không.
 
-- [ ] **P0-4 · Xác minh Y-App thực sự build và chạy**
+- [~] **P0-4 · Xác minh Y-App thực sự build và chạy**
   ✎ sửa dòng "Dart CHƯA build thử" trong `Y-App/README.md` cho đúng thực tế · 📥 đoạn cuối README Y-App + kết quả thử trên điện thoại (bạn báo) · 📤 `Y-App/README.md`
   ✅ README phản ánh đúng; mọi lỗi build còn lại có trong Nhật ký.
 
-- [ ] **P0-5 · `yui_format.py`: bộ đọc header `.yui` thuần Python**
+- [~] **P0-5 · `yui_format.py`: bộ đọc header `.yui` thuần Python**
   ✎ tạo `yui_format.py` (đọc magic, ver, cấu hình, tokenizer-hash, vị trí các ma trận) + `test_yui_format.py` · 📥 `export_yui.py` (đã có trong zip bạn gửi nhưng chat mới cần lại) · 📤 `Adaptive-MoE/yui_format.py`, `Adaptive-MoE/test_yui_format.py`
   ✅ Test xuất file nhỏ v1/v2/t2 rồi đọc lại đúng cấu hình; dùng lại cho P1, P2.
 
@@ -324,7 +324,12 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | Ngày | Mục | Ghi chú |
 |---|---|---|
 | 2026-11-12 | Khởi tạo kế hoạch v1 | Dựa trên đọc code 2 repo + tư vấn Gemini; chưa có task nào xong |
-| 2026-11-13 | P0-1 giao file `[~]` | Hiện 2 bản `yui.cpp` đang trùng nhau. Script mặc định bỏ qua nếu mất mạng, CI dùng `--strict`. Push `yui.cpp` ở cả 2 repo cùng lúc có thể đỏ tạm thời đến khi repo kia cập nhật |
+| 2026-11-13 | P0-1 xong `[x]` | Cả 2 repo xanh sau khi up. Chi tiết bên dưới: |
+| 2026-11-13 | (P0-1 chi tiết) | Hiện 2 bản `yui.cpp` đang trùng nhau. Script mặc định bỏ qua nếu mất mạng, CI dùng `--strict`. Push `yui.cpp` ở cả 2 repo cùng lúc có thể đỏ tạm thời đến khi repo kia cập nhật |
+| 2026-11-13 | P0-2 `[~]` | Bạn đã chuyển `provider-chain.patch` vào `docs/archive/` (xác nhận trên repo). Còn: up `.gitignore` mới (chặn `/*.patch` chỉ ở gốc, không chặn `docs/archive/`) và **xoá file rác `docs/archive/Z`** (1 byte, tạo nhầm khi tạo thư mục) |
+| 2026-11-13 | P0-3 `[~]` baseline | `make test` (C++): **OK** (isa=avx2+fma). CI `tests` (pytest, Py 3.10 + 3.12): **xanh** (bạn báo). Mã nguồn có 11 file `test_*.py` ≈ **157 hàm test** (mình đếm bằng grep; môi trường mình không cài được torch nên không tự chạy pytest). Y-App: Actions build **xanh**. *Còn thiếu:* dòng tổng kết của pytest trên Actions (vd `157 passed in …s`) để ghi số chính xác |
+| 2026-11-13 | P0-4 `[~]` | README Y-App sửa theo thực tế: build Actions OK; vẫn ghi "chưa đo trên điện thoại thật" cho tính năng chưa đo. *Còn thiếu:* bạn báo app đã chạy thử trên điện thoại/PC chưa, kết quả ra sao (nạp model, chat, tốc độ tok/s) để mình ghi đúng |
+| 2026-11-13 | P0-5 `[~]` | `yui_format.py` (đọc header + bảng tensor + sha256 tokenizer, chỉ dùng thư viện chuẩn, kiểm biên, từ chối ver ≠ 1/2) và `test_yui_format.py` (**14 test xanh** ở môi trường mình: f32/int8/q4/q4all/t2, file cụt/thừa/magic/ver/cấu hình lạ, và nạp cùng file bằng `yui.cpp` qua ctypes khớp V/D/layers/E/heads/ctx). Tokenizer hash = sha256 của vocab+merges+eos (bỏ bảng khoảng Unicode vì phụ thuộc phiên bản Python) |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
