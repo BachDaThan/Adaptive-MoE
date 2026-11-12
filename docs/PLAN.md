@@ -3,15 +3,15 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 1/45 (P0-2…P0-5 chờ bạn up, xem Nhật ký)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 5/45 (P0 xong; P1-1 chờ bạn duyệt)
 
-## ▶ TIẾP THEO: `P1-1` (đặc tả `.yui` v3) — sau khi bạn up xong gói P0-2…P0-5
+## ▶ TIẾP THEO: `P1-1` — bạn duyệt `docs/YUI_FORMAT.md` (6 câu hỏi ở mục 6.4), rồi mới tới `P1-2`
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
-| P0 | Dọn nền, đo mốc ban đầu | 1/5 |
+| P0 | Dọn nền, đo mốc ban đầu | 5/5 |
 | P1 | `.yui` v3: có meta + mục lục | 0/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
@@ -96,19 +96,19 @@ Mỗi task: **✎** file sẽ sửa/tạo · **📥** file mình cần bạn g�
   ✎ tạo `tools/check_yui_sync.py` (so sha256 hai bản; vị trí: `Adaptive-MoE/yui.cpp` và `Y-App/native/yui.cpp`) + job `sync-yui` trong CI cả 2 repo · 📥 (đã lấy xong) · 📤 `Adaptive-MoE/tools/check_yui_sync.py`, `Adaptive-MoE/.github/workflows/tests.yml`, `Y-App/tools/check_yui_sync.py`, `Y-App/.github/workflows/build-app.yml`
   ✅ CI đỏ nếu 2 bản `yui.cpp` khác nhau; xanh khi bằng nhau. *Xong: bạn báo cả 2 repo xanh (2026-11-13).*
 
-- [~] **P0-2 · Dọn `provider-chain.patch`**
+- [x] **P0-2 · Dọn `provider-chain.patch`**
   ✎ chuyển vào `docs/archive/` hoặc xoá; thêm vào `.gitignore` mẫu `*.patch` · 📥 không cần (bạn quyết: giữ hay xoá) · 📤 `Adaptive-MoE/.gitignore`
   ✅ Gốc repo không còn file patch 84 KB (nếu bạn đồng ý xoá).
 
-- [~] **P0-3 · Chạy baseline test + build, ghi kết quả**
+- [x] **P0-3 · Chạy baseline test + build, ghi kết quả**
   ✎ ghi vào mục Nhật ký bên dưới · 📥 bạn dán kết quả `pytest -q`, `make test`, và kết quả Actions của Y-App · 📤 `Adaptive-MoE/docs/PLAN.md`
   ✅ Có số: bao nhiêu test xanh/đỏ, bản Y-App build được hay không.
 
-- [~] **P0-4 · Xác minh Y-App thực sự build và chạy**
+- [x] **P0-4 · Xác minh Y-App thực sự build và chạy**
   ✎ sửa dòng "Dart CHƯA build thử" trong `Y-App/README.md` cho đúng thực tế · 📥 đoạn cuối README Y-App + kết quả thử trên điện thoại (bạn báo) · 📤 `Y-App/README.md`
   ✅ README phản ánh đúng; mọi lỗi build còn lại có trong Nhật ký.
 
-- [~] **P0-5 · `yui_format.py`: bộ đọc header `.yui` thuần Python**
+- [x] **P0-5 · `yui_format.py`: bộ đọc header `.yui` thuần Python**
   ✎ tạo `yui_format.py` (đọc magic, ver, cấu hình, tokenizer-hash, vị trí các ma trận) + `test_yui_format.py` · 📥 `export_yui.py` (đã có trong zip bạn gửi nhưng chat mới cần lại) · 📤 `Adaptive-MoE/yui_format.py`, `Adaptive-MoE/test_yui_format.py`
   ✅ Test xuất file nhỏ v1/v2/t2 rồi đọc lại đúng cấu hình; dùng lại cho P1, P2.
 
@@ -116,7 +116,7 @@ Mỗi task: **✎** file sẽ sửa/tạo · **📥** file mình cần bạn g�
 
 Thiết kế (chốt ở P1-1): giữ magic `YUI1`, `ver = 3`. Sau cấu hình/tokenizer thêm **khối META** (độ dài + JSON UTF-8: `arch_id`, `name`, `domains[]`, `lang[]`, `tokenizer_sha256`, `quant`, `params`, `created`, `license`, tuỳ chọn `centroid` 64 số). Cuối file thêm **mục lục** (tên tensor → offset, size, kiểu) + 16 byte chân (offset mục lục + magic `YUIX`). Phần trọng số giữ nguyên thứ tự v2 nên engine tái dùng `load_mat`.
 
-- [ ] **P1-1 · Viết đặc tả `docs/YUI_FORMAT.md` (v1, v2, t2, v3)**
+- [~] **P1-1 · Viết đặc tả `docs/YUI_FORMAT.md` (v1, v2, t2, v3)**
   ✎ tạo `docs/YUI_FORMAT.md` · 📥 không (mình đã đọc `export_yui.py`/`yui.cpp`) · 📤 `Adaptive-MoE/docs/YUI_FORMAT.md`
   ✅ Bạn duyệt đặc tả (đặc biệt các trường META) trước khi code.
 
@@ -326,10 +326,11 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-12 | Khởi tạo kế hoạch v1 | Dựa trên đọc code 2 repo + tư vấn Gemini; chưa có task nào xong |
 | 2026-11-13 | P0-1 xong `[x]` | Cả 2 repo xanh sau khi up. Chi tiết bên dưới: |
 | 2026-11-13 | (P0-1 chi tiết) | Hiện 2 bản `yui.cpp` đang trùng nhau. Script mặc định bỏ qua nếu mất mạng, CI dùng `--strict`. Push `yui.cpp` ở cả 2 repo cùng lúc có thể đỏ tạm thời đến khi repo kia cập nhật |
-| 2026-11-13 | P0-2 `[~]` | Bạn đã chuyển `provider-chain.patch` vào `docs/archive/` (xác nhận trên repo). Còn: up `.gitignore` mới (chặn `/*.patch` chỉ ở gốc, không chặn `docs/archive/`) và **xoá file rác `docs/archive/Z`** (1 byte, tạo nhầm khi tạo thư mục) |
-| 2026-11-13 | P0-3 `[~]` baseline | `make test` (C++): **OK** (isa=avx2+fma). CI `tests` (pytest, Py 3.10 + 3.12): **xanh** (bạn báo). Mã nguồn có 11 file `test_*.py` ≈ **157 hàm test** (mình đếm bằng grep; môi trường mình không cài được torch nên không tự chạy pytest). Y-App: Actions build **xanh**. *Còn thiếu:* dòng tổng kết của pytest trên Actions (vd `157 passed in …s`) để ghi số chính xác |
-| 2026-11-13 | P0-4 `[~]` | README Y-App sửa theo thực tế: build Actions OK; vẫn ghi "chưa đo trên điện thoại thật" cho tính năng chưa đo. *Còn thiếu:* bạn báo app đã chạy thử trên điện thoại/PC chưa, kết quả ra sao (nạp model, chat, tốc độ tok/s) để mình ghi đúng |
-| 2026-11-13 | P0-5 `[~]` | `yui_format.py` (đọc header + bảng tensor + sha256 tokenizer, chỉ dùng thư viện chuẩn, kiểm biên, từ chối ver ≠ 1/2) và `test_yui_format.py` (**14 test xanh** ở môi trường mình: f32/int8/q4/q4all/t2, file cụt/thừa/magic/ver/cấu hình lạ, và nạp cùng file bằng `yui.cpp` qua ctypes khớp V/D/layers/E/heads/ctx). Tokenizer hash = sha256 của vocab+merges+eos (bỏ bảng khoảng Unicode vì phụ thuộc phiên bản Python) |
+| 2026-11-13 | P0-2 `[x]` | Bạn đã chuyển `provider-chain.patch` vào `docs/archive/` (xác nhận trên repo). `.gitignore` mới đã lên (chặn `/*.patch` chỉ ở gốc, không chặn `docs/archive/`). **Còn nhắc:** xoá file rác `docs/archive/Z` (1 byte), vẫn còn trên repo lúc kiểm 2026-11-13 |
+| 2026-11-13 | P0-3 `[x]` baseline | `make test` (C++): **OK** (isa=avx2+fma). CI `tests` (pytest, Py 3.10 + 3.12): **xanh** (bạn báo). **pytest: 237 passed, 1 skipped, 204.91 s (0:03:24)** (bạn báo, gồm cả `test_yui_format.py`). Y-App: Actions build **xanh**. Mốc so sánh từ giờ: không được tụt dưới 237 passed / 0 failed |
+| 2026-11-13 | P0-4 `[x]` | README Y-App sửa theo thực tế: build Actions OK; vẫn ghi "chưa đo trên điện thoại thật" cho tính năng chưa đo. **Chạy thật trên điện thoại Android (bạn báo):** cài APK OK; nạp `yui_q4.yui` (32,9 MB, d=256, 6 lớp, 16 expert, ngữ cảnh 128, q4) thành công; chat mượt; **≈ 186,6–240,4 token/s**; nội dung trả lời còn lan man (model nhỏ/chưa fine-tune kỹ). Mốc tốc độ để so khi làm P5. README đã ghi số này |
+| 2026-11-13 | P0-5 `[x]` | `yui_format.py` (đọc header + bảng tensor + sha256 tokenizer, chỉ dùng thư viện chuẩn, kiểm biên, từ chối ver ≠ 1/2) và `test_yui_format.py` (**14 test xanh**, có thêm kiểm `D % (2·heads)` cho khớp engine, ở môi trường mình: f32/int8/q4/q4all/t2, file cụt/thừa/magic/ver/cấu hình lạ, và nạp cùng file bằng `yui.cpp` qua ctypes khớp V/D/layers/E/heads/ctx). Tokenizer hash = sha256 của vocab+merges+eos (bỏ bảng khoảng Unicode vì phụ thuộc phiên bản Python) |
+| 2026-11-13 | P1-1 `[~]` | Giao `docs/YUI_FORMAT.md`: đặc tả v1/v2/t2 đã đối chiếu code thật + **v3 đề xuất** (META JSON + mục lục nhị phân + footer `YUIX`). Chưa code gì. Chờ bạn trả lời 6 câu ở mục 6.4 của file đó (license bắt buộc?, công thức `arch_id`, danh sách `domains`, `centroid` sớm hay muộn, mục lục nhị phân hay JSON, vị trí META) |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
