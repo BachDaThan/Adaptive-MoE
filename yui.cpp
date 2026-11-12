@@ -861,6 +861,7 @@ struct Layer { float *n1w, *n1b, *n2w, *n2b; Mat qkv, o, gate; float* sw; float 
 struct ExScratch { vector<float> tg, tu, ty, out, qs; vector<int8_t> q; };   // bộ nhớ riêng của MỖI expert để nhiều expert chạy song song
 struct Session {   // KV cache + bộ nhớ tạm của MỘT cuộc sinh (model chỉ đọc nên nhiều Session chạy song song được)
     vector<float> K, V; int n = 0;
+    const float* ext = nullptr; int next = 0;   // embedding ngoài (vd ảnh): token id âm -1-r nghĩa là hàng r của ext
     vector<float> x, xn, qkv, att, y, moe, sc, xs; vector<int8_t> xq; vector<ExScratch> ex;
     explicit Session(const Cfg& c)
         : K((size_t)c.layers * c.L * c.D), V((size_t)c.layers * c.L * c.D), x(c.D), xn(c.D), qkv(3 * c.D), att(c.D),
@@ -928,6 +929,12 @@ struct Model {
             }
     }
 
+    void embed_s(const Session& s, int t, float* out) const {   // như embed(), nhưng id âm = hàng embedding ảnh
+        if (t >= 0) { embed(t, out); return; }
+        const int r = -1 - t;
+        if (!s.ext || r >= s.next) memset(out, 0, c.D * sizeof(float));
+        else memcpy(out, s.ext + (size_t)r * c.D, c.D * sizeof(float));
+    }
     void embed(int t, float* out) const {
         if (t < 0 || t >= (int)c.V) t = 0;
         if (emb.type == 0) memcpy(out, emb.f + (size_t)t * c.D, c.D * sizeof(float));
@@ -954,7 +961,7 @@ struct Model {
         const int D = c.D, H = c.heads, hd = c.hd, half = hd / 2, L = c.L, E = c.E;
         const int pos = s.n; const bool qa = use_qact(c.quant >= 1);
         if (pos >= L) die("Session.n >= L (lỗi nội bộ)");
-        embed(tok_id, s.x.data());
+        embed_s(s, tok_id, s.x.data());
         const float* cs = &cosT[(size_t)pos * half]; const float* sn = &sinT[(size_t)pos * half];
         const float scale = 1.f / sqrtf((float)hd);
         const Act xa{s.xq.data(), s.xs.data()};
@@ -1041,7 +1048,7 @@ struct Model {
         for (int t = 0; t < n; t++) {
             A[t] = Act{&XQ[(size_t)t * pad], &XS[(size_t)t * nsc]};
             pxn[t] = &XN[(size_t)t * D]; patt[t] = &ATT[(size_t)t * D]; pqkv[t] = &QKV[(size_t)t * 3 * D]; py[t] = &Y[(size_t)t * D];
-            embed(toks[t], &X[(size_t)t * D]);
+            embed_s(s, toks[t], &X[(size_t)t * D]);
         }
         const float scale = 1.f / sqrtf((float)hd);
         for (int li = 0; li < (int)c.layers; li++) {
@@ -1186,10 +1193,10 @@ static string clean(const string& t) {   // gộp xuống dòng + khoảng trắ
 struct Msg { string role, content; };
 static string lower(string s) { for (auto& ch : s) ch = (char)tolower((unsigned char)ch); return s; }
 
-static bool build_prompt(const Model& m, const vector<Msg>& all, vector<int>& ids, string& err) {
+static bool build_prompt(const Model& m, const vector<Msg>& all, vector<int>& ids, string& err, int n_img = 0) {
     vector<Msg> msgs; for (auto& x : all) if (lower(x.role) != "system") msgs.push_back(x);
     int last = -1; for (int i = 0; i < (int)msgs.size(); i++) { string r = lower(msgs[i].role); if (r == "user" || r == "human") last = i; }
-    if (last < 0 || clean(msgs[last].content).empty()) { err = "cần ít nhất một tin nhắn role=user có nội dung"; return false; }
+    if (last < 0 || (n_img == 0 && clean(msgs[last].content).empty())) { err = "cần ít nhất một tin nhắn role=user có nội dung"; return false; }
     vector<std::pair<string, string>> pairs; string cur; bool has = false;   // to_pairs
     for (int i = 0; i < last; i++) {
         string r = lower(msgs[i].role), t = clean(msgs[i].content); if (t.empty()) continue;
@@ -1203,7 +1210,14 @@ static bool build_prompt(const Model& m, const vector<Msg>& all, vector<int>& id
         Seg s; s.p = m.tok.encode(string(USER_TAG) + " " + pr.first + "\n" + BOT_TAG);
         s.r = m.tok.encode(" " + pr.second); s.r.push_back(m.tok.eos); segs.push_back(s);
     }
-    vector<int> fin = m.tok.encode(string(USER_TAG) + " " + clean(msgs[last].content) + "\n" + BOT_TAG);
+    vector<int> fin;
+    if (n_img > 0) {   // User: <ảnh x n_img> câu hỏi \nYui:   (id âm -1-i = hàng i của embedding ảnh; train_vision.py dựng đúng khuôn này)
+        if (n_img + 24 > budget) { err = "ngữ cảnh model quá nhỏ để chứa ảnh (cần --L lớn hơn)"; return false; }
+        fin = m.tok.encode(string(USER_TAG) + " ");
+        for (int i = 0; i < n_img; i++) fin.push_back(-1 - i);
+        const string q = clean(msgs[last].content);
+        for (int t : m.tok.encode((q.empty() ? string() : " " + q) + "\n" + BOT_TAG)) fin.push_back(t);
+    } else fin = m.tok.encode(string(USER_TAG) + " " + clean(msgs[last].content) + "\n" + BOT_TAG);
     auto total = [&]() { size_t t = fin.size(); for (auto& s : segs) t += s.p.size() + s.r.size(); return t; };
     size_t drop = 0;
     while (drop < segs.size() && total() > (size_t)budget) { segs.erase(segs.begin()); }
@@ -1297,10 +1311,11 @@ static void draft_lookup(const vector<int>& h, int maxd, vector<int>& out) {
 }
 struct Gen {
     const Model& m; GenOpts o; bool chat; Session s; vector<float> lg; std::mt19937_64 rng; vector<int> hist, gen;
-    TextStream ts; int n = 0; bool finished = false, flushed = false; int L, keep;
-    Gen(const Model& mm, vector<int> ids, const GenOpts& op, bool c)
+    TextStream ts; int n = 0; bool finished = false, flushed = false; int L, keep; vector<float> ext;
+    Gen(const Model& mm, vector<int> ids, const GenOpts& op, bool c, vector<float> e = {})
         : m(mm), o(op), chat(c), s(mm.c), lg(mm.c.V), rng(op.seed ? op.seed : std::random_device{}()), hist(std::move(ids)), ts(mm, c),
-          L((int)mm.c.L), keep(std::max(16, (int)mm.c.L / 2)) {
+          L((int)mm.c.L), keep(std::max(16, (int)mm.c.L / 2)), ext(std::move(e)) {
+        if (!ext.empty()) { s.ext = ext.data(); s.next = (int)(ext.size() / mm.c.D); }
         if (hist.empty()) hist.push_back(m.tok.eos >= 0 ? m.tok.eos : 0);
         prefill(hist.size() > (size_t)(L - 8) ? hist.size() - (L - 8) : 0);
     }
@@ -1326,6 +1341,7 @@ struct Gen {
         int D = o.spec; if (cool > 0) { cool--; D = 0; }
         D = std::min(D, L - s.n - 1);
         vector<int> dr; if (D > 0) draft_lookup(hist, D, dr);
+        for (size_t i = 0; i < dr.size(); i++) if (dr[i] < 0) { dr.resize(i); break; }   // không đoán token ảnh
         if (dr.empty()) { m.step(s, nxt, o.k, lg.data()); return; }
         vector<int> tk; tk.push_back(nxt); tk.insert(tk.end(), dr.begin(), dr.end());
         const size_t V = m.c.V; vector<float> all(tk.size() * V);
@@ -1459,13 +1475,13 @@ static GenOpts parse_opts(const J& body, int def_k) {
 #else
 #define YUI_API extern "C" __attribute__((visibility("default")))
 #endif
-struct YuiGenH { Gen g; string pending; size_t off = 0; YuiGenH(const Model& m, vector<int> ids, const GenOpts& o, bool chat) : g(m, std::move(ids), o, chat) {} };
+struct YuiGenH { Gen g; string pending; size_t off = 0; YuiGenH(const Model& m, vector<int> ids, const GenOpts& o, bool chat, vector<float> ext = {}) : g(m, std::move(ids), o, chat, std::move(ext)) {} };
 static void set_err(char* err, int len, const string& m) { if (err && len > 0) snprintf(err, (size_t)len, "%s", m.c_str()); }
 static GenOpts opts_from_json(const char* js, int def_k) {
     if (js && *js) { string t = js; J j; JP jp(t); if (jp.val(j) && j.t == J::OBJ) return parse_opts(j, def_k); }
     GenOpts o; o.k = def_k; return o;
 }
-YUI_API const char* yui_version() { return "yui-engine 1.2"; }
+YUI_API const char* yui_version() { return "yui-engine 1.3-img"; }
 YUI_API void yui_set_threads(int n) { pool().resize(n > 0 ? n : default_threads()); }   // n <= 0: tự chọn
 YUI_API int yui_get_threads() { return pool().nthreads; }
 YUI_API int yui_cpu_features(char* out, int len) {   // vd "neon+dotprod, 4 luồng"; trả số byte, <0 nếu lỗi
@@ -1497,6 +1513,18 @@ YUI_API void* yui_chat_begin(void* h, const char* messages_json, const char* opt
         return new YuiGenH(*m, ids, opts_from_json(opts_json, def_k == 1 ? 1 : 2), true);
     } catch (const std::exception& e) { set_err(err, errlen, e.what()); return nullptr; }
 }
+// Chat có ảnh ở lượt user cuối. img = n_img * D số float (D lấy từ yui_info) đã qua projector của train_vision.py.
+YUI_API void* yui_chat_begin_img(void* h, const char* messages_json, const char* opts_json, int def_k, const float* img, int n_img, char* err, int errlen) {
+    try {
+        Model* m = (Model*)h; if (!m) throw YuiError("model chưa nạp");
+        if (!img || n_img < 1 || n_img > 1024) throw YuiError("ảnh không hợp lệ (cần 1..1024 token ảnh)");
+        string t = messages_json ? messages_json : ""; J j; JP jp(t); if (!jp.val(j)) throw YuiError("messages_json không phải JSON hợp lệ");
+        vector<Msg> msgs; parse_messages(j, msgs); vector<int> ids; string e;
+        if (!build_prompt(*m, msgs, ids, e, n_img)) throw YuiError(e);
+        vector<float> ext(img, img + (size_t)n_img * m->c.D);
+        return new YuiGenH(*m, ids, opts_from_json(opts_json, def_k == 1 ? 1 : 2), true, std::move(ext));
+    } catch (const std::exception& e) { set_err(err, errlen, e.what()); return nullptr; }
+}
 YUI_API void* yui_complete_begin(void* h, const char* prompt, const char* opts_json, int def_k, char* err, int errlen) {
     try {
         Model* m = (Model*)h; if (!m) throw YuiError("model chưa nạp");
@@ -1516,6 +1544,98 @@ YUI_API int yui_gen_next(void* g, char* buf, int buflen) {
 }
 YUI_API int yui_gen_tokens(void* g) { return g ? ((YuiGenH*)g)->g.n : 0; }
 YUI_API void yui_gen_end(void* g) { delete (YuiGenH*)g; }
+
+// ============================ mã hoá ảnh bằng ONNX Runtime (nạp lúc chạy) ============================
+// Không gắn cứng ONNX Runtime vào engine: dùng libonnxruntime.so / onnxruntime.dll sẵn có trong app (do Sherpa-ONNX mang theo),
+// nên không thêm thư viện native thứ hai và không trùng tên. Cần file onnxruntime_c_api.h (v1.17.x) cạnh yui.cpp lúc biên dịch;
+// không có thì các hàm dưới trả lỗi "không hỗ trợ". Model ảnh do export_vision.py xuất: vào "pixel_values" [1,3,224,224], ra "image_embeds" [N,D].
+#if __has_include("onnxruntime_c_api.h")
+#define YUI_HAVE_ORT 1
+#include "onnxruntime_c_api.h"
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+namespace {
+struct VisionH { const OrtApi* api = nullptr; OrtEnv* env = nullptr; OrtSessionOptions* so = nullptr; OrtSession* sess = nullptr; OrtMemoryInfo* mi = nullptr; };
+const OrtApi* ort_api(string& err) {
+    static const OrtApi* api = nullptr;
+    if (api) return api;
+    const char* over = getenv("YUI_ORT_LIB");
+#ifdef _WIN32
+    HMODULE h = LoadLibraryA(over ? over : "onnxruntime.dll");
+    void* sym = h ? (void*)GetProcAddress(h, "OrtGetApiBase") : nullptr;
+#else
+    void* h = dlopen(over ? over : "libonnxruntime.so", RTLD_NOW | RTLD_GLOBAL);
+    void* sym = h ? dlsym(h, "OrtGetApiBase") : nullptr;
+#endif
+    if (!sym) { err = "không nạp được ONNX Runtime (bật chip \"Offline (Sherpa)\" để app có thư viện này)"; return nullptr; }
+    const OrtApiBase* base = ((const OrtApiBase* (*)())sym)();
+    api = base ? base->GetApi(ORT_API_VERSION) : nullptr;
+    if (!api) err = "ONNX Runtime trong app quá cũ so với engine";
+    return api;
+}
+bool ort_ok(const OrtApi* a, OrtStatus* st, string& err) {
+    if (!st) return true;
+    err = a->GetErrorMessage(st); a->ReleaseStatus(st); return false;
+}
+}  // namespace
+YUI_API void yui_vision_free(void* h);
+YUI_API void* yui_vision_load(const char* path, char* err, int errlen) {
+    string e; const OrtApi* a = ort_api(e);
+    if (!a) { set_err(err, errlen, e); return nullptr; }
+    VisionH* v = new VisionH(); v->api = a;
+    bool ok = ort_ok(a, a->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "yui", &v->env), e)
+           && ort_ok(a, a->CreateSessionOptions(&v->so), e)
+           && ort_ok(a, a->SetIntraOpNumThreads(v->so, 2), e)
+           && ort_ok(a, a->SetSessionGraphOptimizationLevel(v->so, ORT_ENABLE_ALL), e);
+    if (ok) {
+#ifdef _WIN32
+        std::wstring wp; { int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0); wp.resize(n > 0 ? n - 1 : 0); if (n > 1) MultiByteToWideChar(CP_UTF8, 0, path, -1, &wp[0], n); }
+        ok = ort_ok(a, a->CreateSession(v->env, wp.c_str(), v->so, &v->sess), e);
+#else
+        ok = ort_ok(a, a->CreateSession(v->env, path, v->so, &v->sess), e);
+#endif
+    }
+    if (ok) ok = ort_ok(a, a->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &v->mi), e);
+    if (!ok) { set_err(err, errlen, "nạp model ảnh lỗi: " + e); yui_vision_free(v); return nullptr; }
+    return v;
+}
+// chw: 3*size*size float đã chuẩn hoá [-1,1]. Ghi vào out tối đa out_cap float; trả số float thật (N*D), <0 nếu lỗi (-2: out quá nhỏ).
+YUI_API int yui_vision_run(void* h, const float* chw, int size, float* out, int out_cap, char* err, int errlen) {
+    VisionH* v = (VisionH*)h; if (!v || !chw || !out) return -1;
+    const OrtApi* a = v->api; string e;
+    int64_t shape[4] = {1, 3, size, size};
+    OrtValue* in = nullptr; OrtValue* res = nullptr; OrtTensorTypeAndShapeInfo* info = nullptr;
+    const char* in_names[1] = {"pixel_values"}; const char* out_names[1] = {"image_embeds"};
+    int ret = -1;
+    if (ort_ok(a, a->CreateTensorWithDataAsOrtValue(v->mi, (void*)chw, (size_t)3 * size * size * sizeof(float), shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in), e)
+        && ort_ok(a, a->Run(v->sess, nullptr, in_names, &in, 1, out_names, 1, &res), e)) {
+        float* data = nullptr; size_t cnt = 0;
+        if (ort_ok(a, a->GetTensorMutableData(res, (void**)&data), e) && ort_ok(a, a->GetTensorTypeAndShape(res, &info), e)
+            && ort_ok(a, a->GetTensorShapeElementCount(info, &cnt), e)) {
+            if ((int)cnt > out_cap) { e = "bộ đệm đầu ra quá nhỏ"; ret = -2; }
+            else { memcpy(out, data, cnt * sizeof(float)); ret = (int)cnt; }
+        }
+    }
+    if (info) a->ReleaseTensorTypeAndShapeInfo(info);
+    if (res) a->ReleaseValue(res);
+    if (in) a->ReleaseValue(in);
+    if (ret < 0) set_err(err, errlen, e);
+    return ret;
+}
+YUI_API void yui_vision_free(void* h) {
+    VisionH* v = (VisionH*)h; if (!v) return;
+    if (v->mi) v->api->ReleaseMemoryInfo(v->mi);
+    if (v->sess) v->api->ReleaseSession(v->sess);
+    if (v->so) v->api->ReleaseSessionOptions(v->so);
+    if (v->env) v->api->ReleaseEnv(v->env);
+    delete v;
+}
+#else
+YUI_API void* yui_vision_load(const char*, char* err, int errlen) { set_err(err, errlen, "bản engine này không kèm mã hoá ảnh (thiếu onnxruntime_c_api.h lúc biên dịch)"); return nullptr; }
+YUI_API int yui_vision_run(void*, const float*, int, float*, int, char* err, int errlen) { set_err(err, errlen, "không hỗ trợ ảnh"); return -1; }
+YUI_API void yui_vision_free(void*) {}
+#endif
 
 #ifndef YUI_LIB
 // ============================ server HTTP (Ollama + OpenAI) ============================

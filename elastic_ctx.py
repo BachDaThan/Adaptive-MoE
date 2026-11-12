@@ -82,15 +82,16 @@ class CtxLM(nn.Module):
         self.norm = nn.LayerNorm(d)
         self.head = nn.Linear(d, vocab, bias=False)
 
-    def forward(self, ids, past=None):
+    def forward(self, ids, past=None, embeds=None):
+        """embeds [B,T,D] (tuỳ chọn) thay cho self.emb(ids): dùng để chèn embedding ảnh (vision_yui.py)."""
+        x = self.emb(ids) if embeds is None else embeds
         n = 0 if past is None else past["n"]
-        pos = torch.arange(n, n + ids.shape[1], device=ids.device)
-        x = self.emb(ids)
+        pos = torch.arange(n, n + x.shape[1], device=x.device)
         kv = []
         for i, b in enumerate(self.blocks):
             x, pr = b(x, pos, None if past is None else past["kv"][i])
             kv.append(pr)
-        return self.head(self.norm(x)), {"kv": kv, "n": n + ids.shape[1]}
+        return self.head(self.norm(x)), {"kv": kv, "n": n + x.shape[1]}
 
 
 def set_window(model, W, sink=4):
