@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+# kết quả thí nghiệm
+r_*.json
+results_*.json
+# file vá tạm ở gốc repo (cần lưu thì để trong docs/archive/)
+/*.patch
