@@ -14,14 +14,18 @@ Router (gate, strength) và LayerNorm luôn giữ float32 để việc chọn ex
 (embedding, qkv, o, expert, head), mỗi hàng một hệ số scale.
 Định dạng (little-endian): xem hàm write_yui; yui.cpp đọc đúng thứ tự này.
 
+v3 (--fmt 3, xem docs/YUI_FORMAT.md): thêm khối META (JSON) NGAY SAU header, trọng số giữ y hệt v2 (mỗi ma trận có byte kiểu), rồi mục lục nhị phân + chân file 16 byte (offset mục lục, độ dài, magic YUIX).
+    python export_yui.py --out thu_muc_model --ckpt auto --dst model_q4.yui --quant q4 --fmt 3 --domains chat,general --lang vi,en --license MIT
+
 v1 (f32, int8): như cũ, engine nào cũng đọc được. v2 (q4, q4all): sau tiêu đề, MỖI ma trận có 1 byte kiểu: 0 = float32, 1 = int8 theo hàng (hệ số/hàng rồi int8),
 2 = q4: mỗi hàng chia khối 32 trọng số (hàng ngắn hơn thì đệm 0), mỗi khối 1 hệ số fp16 + 16 byte (byte j = trọng số j ở 4 bit thấp, j+16 ở 4 bit cao);
 giá trị = (nibble - 8) * hệ số. Ghi: toàn bộ hệ số fp16 của ma trận, rồi toàn bộ byte 4-bit. Router/LayerNorm luôn float32.
 q4 chỉ lượng tử expert (chiếm ~85% tham số) và giữ attention + embedding + head ở int8: nhỏ hơn int8 khoảng 1/3, chất lượng gần như int8.
 """
 import re
-import argparse, json, os, struct, unicodedata
+import argparse, datetime, functools, hashlib, json, os, struct, unicodedata
 import numpy as np
+import yui_format
 
 MAGIC = b"YUI1"
 
@@ -38,6 +42,7 @@ def bytes_to_unicode():
     return dict(zip(bs, [chr(c) for c in cs]))
 
 
+@functools.lru_cache(maxsize=1)
 def unicode_ranges():
     """Các khoảng code point thuộc \\p{L} (cls 1) và \\p{N} (cls 2), để C++ tách từ giống regex GPT-2 của tokenizers."""
     out, cur = [], None
@@ -55,7 +60,7 @@ def unicode_ranges():
             cur = [cp, cp, cls]
     if cur and cur[2]:
         out.append(tuple(cur))
-    return out
+    return tuple(out)
 
 
 def load_tokenizer(path):
@@ -116,8 +121,23 @@ def q4_dequantize(d16, packed, cols):
     return w.reshape(w.shape[0], -1)[:, :cols]
 
 
-def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
-    """sd: {tên tham số PyTorch: np.ndarray float32}; cfg: config.json của train_lm.py (+ tuỳ chọn heads, min_k, max_k, min_strength)."""
+def write_index(f, entries):
+    """v3: mục lục nhị phân + chân file 16 byte. Mỗi mục: u16 độ dài tên, tên, u64 offset, u64 size, u8 kind, u32 rows, u32 cols, u16 group.
+    Chân file: u64 offset mục lục, u32 số byte mục lục, magic YUIX."""
+    idx_off = f.tell()
+    blob = struct.pack("<I", len(entries))
+    for name, off, size, k, rows, cols, grp in entries:
+        nb = name.encode("utf-8")
+        assert 0 < len(nb) <= yui_format.MAX_NAME, name
+        blob += struct.pack("<H", len(nb)) + nb + struct.pack("<QQBIIH", off, size, k, rows, cols, grp)
+    f.write(blob)
+    f.write(struct.pack("<QI4s", idx_off, len(blob), yui_format.FOOT_MAGIC))
+
+
+def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64, meta=None):
+    """sd: {tên tham số PyTorch: np.ndarray float32}; cfg: config.json của train_lm.py (+ tuỳ chọn heads, min_k, max_k, min_strength).
+    meta=None: xuất v1/v2 như cũ (byte-for-byte). meta=dict (name, lang, domains, license, + tuỳ chọn description/base/source_url/exporter/created): xuất v3;
+    các trường suy từ file (meta_version, arch_id, quant, params, tokenizer_sha256) được điền tự động."""
     V, D, NL, E = cfg["vocab"], cfg["d"], cfg["layers"], cfg["experts"]
     H = cfg.get("heads", 4)           # CtxLM mặc định 4 head
     F = 2 * D
@@ -127,7 +147,8 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
     n_shared = 1
     assert quant in ("f32", "int8", "q4", "q4all", "t2"), quant
     q8 = quant == "int8"
-    ver = 2 if (quant.startswith("q4") or quant == "t2") else 1
+    ver = 3 if meta is not None else (2 if (quant.startswith("q4") or quant == "t2") else 1)
+    typed = ver >= 2   # v2/v3: mỗi ma trận có byte kiểu
     qfield = {"f32": 0, "int8": 1, "q4": 2, "q4all": 2, "t2": 3}[quant]
 
     def kind(name):   # 0 f32, 1 int8, 2 q4, 3 ternary t2
@@ -145,39 +166,56 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
     b2u = bytes_to_unicode()
     assert len({b2u[b] for b in range(256)} - set(inv)) == 0, "tokenizer thiếu ký tự byte-level"
 
+    # khối tokenizer dựng sẵn thành byte (vocab + merges + eos): băm được cho META, và ghi đúng y hệt như trước
+    tok_blob = (struct.pack("<I", len(inv)) + b"".join(pack_str(t) for t in inv)
+                + struct.pack("<I", len(merges)) + b"".join(pack_str(a) + pack_str(b) for a, b in merges)
+                + struct.pack("<i", eos))
+    rg = unicode_ranges()
+    rg_blob = struct.pack("<I", len(rg)) + b"".join(struct.pack("<3I", a, b, c) for a, b, c in rg)
+    meta_blob = None
+    if ver == 3:
+        fcfg = dict(V=V, D=D, layers=NL, heads=H, E=E, F=F, n_shared=n_shared)
+        m = dict(meta)
+        m.setdefault("name", cfg.get("name") or "model")
+        m.setdefault("lang", [])
+        m.setdefault("domains", [])
+        m.setdefault("license", "unknown")
+        m.setdefault("created", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))
+        m.update(meta_version=yui_format.META_VERSION, arch_id=yui_format.arch_id(fcfg), quant=quant,
+                 params=yui_format.count_params(fcfg), tokenizer_sha256=hashlib.sha256(tok_blob).hexdigest())
+        m = yui_format.validate_meta(m, strict_domains=True)
+        meta_blob = json.dumps(m, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        assert len(meta_blob) <= yui_format.MAX_META, f"META dài {len(meta_blob)} byte, quá trần {yui_format.MAX_META}"
+    entries = []   # (tên, offset, size, kind, rows, cols, group) cho mục lục v3
+
     with open(dst, "wb") as f:
         f.write(MAGIC)
         f.write(struct.pack("<12I", ver, qfield, V, D, NL, H, E, F, n_shared, L, min_k, max_k))
         f.write(struct.pack("<2f", top_p, ms))
-        # tokenizer
-        f.write(struct.pack("<I", len(inv)))
-        for t in inv:
-            f.write(pack_str(t))
-        f.write(struct.pack("<I", len(merges)))
-        for a, b in merges:
-            f.write(pack_str(a) + pack_str(b))
-        f.write(struct.pack("<i", eos))
-        rg = unicode_ranges()
-        f.write(struct.pack("<I", len(rg)))
-        for a, b, c in rg:
-            f.write(struct.pack("<3I", a, b, c))
+        if meta_blob is not None:   # v3: META ngay sau header (đọc nhanh, không phải bỏ qua tokenizer)
+            f.write(struct.pack("<I", len(meta_blob)) + meta_blob)
+        f.write(tok_blob)
+        f.write(rg_blob)
 
         def put_f32(name, shape):
             w = np.asarray(sd[name], dtype=np.float32)
             assert tuple(w.shape) == tuple(shape), f"{name}: {w.shape} != {shape}"
+            off = f.tell()
             f.write(np.ascontiguousarray(w).tobytes())
+            entries.append((name, off, f.tell() - off, 0, shape[0] if len(shape) == 2 else 1, shape[-1], 0))
 
         def put_mat(name, rows, cols):
             w = np.asarray(sd[name], dtype=np.float32)
             assert tuple(w.shape) == (rows, cols), f"{name}: {w.shape} != {(rows, cols)}"
             k = kind(name)
+            off = f.tell()
             if k == 3:   # ternary cần cột chia hết cho 32 và cho nhóm; không được thì rơi về int8 (yui.cpp đọc kiểu từng ma trận)
                 g = group
                 while g > 32 and cols % g:
                     g -= 32
                 if cols % 32:
                     k = 1
-            if ver == 2:
+            if typed:
                 f.write(struct.pack("<B", k))
             if k == 3:
                 from bitnet_pack import ternary_quantize_np
@@ -203,6 +241,7 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
                     e[1] += float((w ** 2).sum())
             else:
                 f.write(np.ascontiguousarray(w).tobytes())
+            entries.append((name, off, f.tell() - off, k, rows, cols, g if k == 3 else 0))
 
         put_mat("emb.weight", V, D)
         for l in range(NL):
@@ -222,6 +261,8 @@ def write_yui(sd, cfg, tokenizer_json, dst, quant="f32", stats=None, group=64):
                 put_mat(q + "w_gate.weight", F, D); put_mat(q + "w_up.weight", F, D); put_mat(q + "w_down.weight", D, F)
         put_f32("norm.weight", (D,)); put_f32("norm.bias", (D,))
         put_mat("head.weight", V, D)
+        if ver == 3:
+            write_index(f, entries)
     return os.path.getsize(dst)
 
 
@@ -249,6 +290,15 @@ def main():
     ap.add_argument("--quant", choices=["f32", "int8", "q4", "q4all", "t2"], default="f32",
                     help="f32 | int8 | q4 (expert 4-bit, còn lại int8) | q4all (mọi ma trận 4-bit; nhỏ nhất nhưng chất lượng giảm nhiều nhất) | t2 (ternary BitNet, cho model train --bitnet)")
     ap.add_argument("--group", type=int, default=0, help="t2: cỡ nhóm scale (bội 32); 0 = lấy từ config.json (bitnet) hoặc 64. PHẢI trùng nhóm lúc train")
+    ap.add_argument("--fmt", choices=["auto", "3"], default="auto",
+                    help="auto = v1/v2 như cũ (mặc định, không đổi thói quen) | 3 = .yui v3 có META + mục lục (docs/YUI_FORMAT.md)")
+    ap.add_argument("--name", default=None, help="v3: tên model trong META (mặc định lấy từ config.json, không có thì 'model')")
+    ap.add_argument("--domains", default="", help=f"v3: miền, cách nhau dấu phẩy, trong {','.join(yui_format.DOMAINS)} (vd chat,general)")
+    ap.add_argument("--lang", default="", help="v3: mã ngôn ngữ, cách nhau dấu phẩy (vd vi,en)")
+    ap.add_argument("--license", default="unknown", help="v3: giấy phép (mã SPDX hoặc mô tả ngắn); 'unknown' nếu chưa rõ")
+    ap.add_argument("--desc", default=None, help="v3: mô tả ngắn (≤ 300 ký tự)")
+    ap.add_argument("--base", default=None, help="v3: tên model gốc (nếu là bản fine-tune)")
+    ap.add_argument("--source-url", default=None, help="v3: trang nguồn (chỉ để hiển thị)")
     a = ap.parse_args()
     import torch
     cfg = json.load(open(os.path.join(a.out, "config.json"), encoding="utf-8"))
@@ -266,7 +316,14 @@ def main():
     grp = a.group or int(cfg.get("bitnet") or 64)
     if a.quant == "t2" and not cfg.get("bitnet"):
         print("⚠️ config.json không có 'bitnet': model này không train kiểu ternary, xuất t2 sẽ mất chất lượng nhiều (nên dùng int8/q4).")
-    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats, group=grp)
+    meta = None
+    if a.fmt == "3":
+        split = lambda t: [x.strip() for x in t.split(",") if x.strip()]
+        meta = dict(lang=split(a.lang), domains=split(a.domains), license=a.license, exporter="export_yui.py")
+        for k, v in (("name", a.name), ("description", a.desc), ("base", a.base), ("source_url", a.source_url)):
+            if v:
+                meta[k] = v
+    n = write_yui(sd, cfg, os.path.join(a.out, "tokenizer.json"), dst, a.quant, stats, group=grp, meta=meta)
     print(f"đã ghi {dst} ({n / 1e6:.1f} MB) từ {ck}, quant={a.quant}" + (f", tên model: {cfg['name']}" if cfg.get("name") else ""))
     try:   # README riêng cho model này, nằm cạnh file .yui: <tên>.README.md (gom các bản q8/q4/... cùng tên)
         import model_card

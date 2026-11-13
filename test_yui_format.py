@@ -1,4 +1,4 @@
-"""Thử yui_format.py: xuất model nhỏ NGẪU NHIÊN (không cần PyTorch) ở f32/int8/q4/q4all/t2, đọc lại bằng bộ đọc thuần Python,
+"""Thử yui_format.py (v1/v2/t2 + v3): xuất model nhỏ NGẪU NHIÊN (không cần PyTorch) ở f32/int8/q4/q4all/t2, đọc lại bằng bộ đọc thuần Python,
 đối chiếu cấu hình + bảng tensor, thử file cụt/thừa/hỏng; nếu có g++ thì nạp cùng file bằng engine C++ để chắc bộ đọc khớp yui.cpp."""
 import ctypes, json, os, shutil, struct, subprocess, sys
 import numpy as np
@@ -7,7 +7,8 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from export_yui import write_yui, bytes_to_unicode  # noqa: E402
-from yui_format import read_yui, YuiFormatError, mat_bytes, summary  # noqa: E402
+import yui_format  # noqa: E402
+from yui_format import read_yui, read_meta, YuiFormatError, mat_bytes, summary, validate_meta, arch_id, count_params, expected_tensor_count  # noqa: E402
 
 V, D, NL, E, L = 300, 64, 2, 4, 32
 
@@ -128,7 +129,7 @@ def test_magic_sai_va_phien_ban_la(files, tmp_path):
     p.write_bytes(bad)
     with pytest.raises(YuiFormatError, match="magic"):
         read_yui(str(p))
-    for ver in (0, 3, 99):
+    for ver in (0, 4, 99):
         bad = bytearray(raw); bad[4:8] = struct.pack("<I", ver)
         p.write_bytes(bad)
         with pytest.raises(YuiFormatError, match="phiên bản"):
@@ -175,3 +176,237 @@ def test_engine_cpp_nap_duoc_cung_file(files, tmp_path):
         c = read_yui(files[q])["cfg"]
         for k_py, k_js in (("V", "vocab"), ("D", "d"), ("layers", "layers"), ("E", "experts"), ("heads", "heads"), ("L", "ctx")):
             assert j[k_js] == c[k_py], (q, k_js, j)
+
+
+# ====================================================================== v3: META + mục lục
+
+META_IN = dict(name="thu-nghiem", lang=["vi", "en"], domains=["chat", "general"], license="MIT", description="model thử", created="2026-11-13")
+HDR = 60   # magic 4 + 12×u32 + 2×f32
+
+
+@pytest.fixture(scope="module")
+def files3(tmp_path_factory):
+    d = tmp_path_factory.mktemp("yui3")
+    sd, cfg = make_sd(str(d / "tok.json"))
+    out = {"_cfg": cfg, "_tok": str(d / "tok.json"), "_sd": sd}
+    for q in EXPECT:
+        p = str(d / f"m3_{q}.yui")
+        write_yui(sd, cfg, str(d / "tok.json"), p, q, meta=dict(META_IN))
+        out[q] = p
+    return out
+
+
+def _meta_span(raw):
+    n = struct.unpack("<I", raw[HDR:HDR + 4])[0]
+    return HDR + 4, HDR + 4 + n
+
+
+def _rewrite_meta(raw, mutate):
+    """Sửa META nhưng GIỮ NGUYÊN độ dài (đệm khoảng trắng) để mục lục không lệch -> thử riêng các kiểm tra chéo."""
+    a, b = _meta_span(raw)
+    m = json.loads(raw[a:b].decode("utf-8"))
+    m.pop("description", None)   # chừa chỗ để các ca thử có thể dài hơn vài ký tự
+    mutate(m)
+    blob = json.dumps(m, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    assert len(blob) <= b - a, "ca thử làm META dài hơn"
+    return raw[:a] + blob + b" " * (b - a - len(blob)) + raw[b:]
+
+
+@pytest.mark.parametrize("q", list(EXPECT))
+def test_v3_doc_lai_dung(files3, q):
+    info = read_yui(files3[q])
+    assert info["ver"] == 3 and info["quant"] == EXPECT[q][1]
+    m = info["meta"]
+    assert m["meta_version"] == 1 and m["name"] == "thu-nghiem" and m["license"] == "MIT"
+    assert m["lang"] == ["vi", "en"] and m["domains"] == ["chat", "general"] and m["created"] == "2026-11-13"
+    assert m["arch_id"] == f"amoe-d{D}-l{NL}-h4-e{E}-s1-f{2 * D}" == arch_id(info["cfg"])
+    assert m["params"] == info["params"] == count_params(info["cfg"])
+    assert m["quant"] == q and m["tokenizer_sha256"] == info["tokenizer_sha256"]
+    assert len(info["tensors"]) == expected_tensor_count(info["cfg"])
+    t = info["tensors"]
+    assert t[0][1] == info["weights_offset"] and t[-1][1] + t[-1][2] == info["index_offset"]
+    for a, b in zip(t, t[1:]):
+        assert a[1] + a[2] == b[1]
+    raw = open(files3[q], "rb").read()
+    io, ib, fm = struct.unpack("<QI4s", raw[-16:])
+    assert fm == b"YUIX" and io == info["index_offset"] and io + ib + 16 == len(raw)
+    assert "v3" in summary(info) and "thu-nghiem" in summary(info)
+
+
+@pytest.mark.parametrize("q", ["q4", "t2"])
+def test_v3_trong_so_giong_het_v2(files, files3, q):
+    """Phần trọng số v3 (từ sau tokenizer đến hết tensor cuối) phải trùng từng byte với v2: engine tái dùng được load_mat."""
+    a, b = read_yui(files[q]), read_yui(files3[q])
+    w2 = open(files[q], "rb").read()[a["weights_offset"]:]
+    w3 = open(files3[q], "rb").read()[b["weights_offset"]:b["index_offset"]]
+    assert w2 == w3
+    # tokenizer cũng y hệt (nằm sau META trong v3)
+    assert b["tokenizer_sha256"] == a["tokenizer_sha256"]
+
+
+def test_v3_cung_tensor_voi_v2(files, files3):
+    a = [(n, k) for n, _, _, k in read_yui(files["q4"])["tensors"]]
+    b = [(n, k) for n, _, _, k in read_yui(files3["q4"])["tensors"]]
+    assert a == b
+
+
+def test_read_meta_nhanh_chi_can_dau_file(files, files3, tmp_path):
+    raw = open(files3["q4"], "rb").read()
+    a, b = _meta_span(raw)
+    p = tmp_path / "head_only.yui"
+    p.write_bytes(raw[:b])          # chỉ header + META, không có tokenizer/trọng số
+    r = read_meta(str(p))
+    assert r["ver"] == 3 and r["meta"]["name"] == "thu-nghiem" and r["cfg"]["D"] == D
+    with pytest.raises(YuiFormatError):
+        read_yui(str(p))             # đọc đầy đủ thì phải báo cụt
+    assert read_meta(files["q4"])["meta"] is None   # v2: không có META
+
+
+def test_v3_khoa_la_duoc_giu(files3, tmp_path):
+    p = str(tmp_path / "x.yui")
+    write_yui(files3["_sd"], files3["_cfg"], files3["_tok"], p, "q4", meta=dict(META_IN, tuong_lai={"a": 1}, base="goc", source_url="https://example.org"))
+    m = read_yui(p)["meta"]
+    assert m["tuong_lai"] == {"a": 1} and m["base"] == "goc" and m["source_url"] == "https://example.org"
+
+
+def test_v3_mac_dinh_khi_thieu_truong(files3, tmp_path):
+    p = str(tmp_path / "x.yui")
+    write_yui(files3["_sd"], dict(files3["_cfg"], name="ten-tu-config"), files3["_tok"], p, "int8", meta={})
+    m = read_yui(p)["meta"]
+    assert m["name"] == "ten-tu-config" and m["license"] == "unknown" and m["lang"] == [] and m["domains"] == []
+    assert len(m["created"]) == 10
+
+
+@pytest.mark.parametrize("bad", [
+    dict(domains=["khong-co"]), dict(domains=["Chat"]), dict(domains="chat"), dict(lang=["viet nam"]), dict(lang="vi"),
+    dict(name="x" * 129), dict(name=""), dict(license=""), dict(created="13/11/2026"), dict(created="2026-13-40"),
+    dict(description="x" * 301), dict(source_url=5),
+])
+def test_xuat_v3_tu_choi_meta_xau(files3, tmp_path, bad):
+    with pytest.raises(YuiFormatError):
+        write_yui(files3["_sd"], files3["_cfg"], files3["_tok"], str(tmp_path / "x.yui"), "q4", meta=dict(META_IN, **bad))
+
+
+def test_xuat_v3_domain_chuan_va_other(files3, tmp_path):
+    p = str(tmp_path / "x.yui")
+    write_yui(files3["_sd"], files3["_cfg"], files3["_tok"], p, "q4", meta=dict(META_IN, domains=list(yui_format.DOMAINS)))
+    assert read_yui(p)["meta"]["domains"] == list(yui_format.DOMAINS) and "other" in yui_format.DOMAINS
+
+
+def test_doc_chap_nhan_domain_la_nhung_phai_dung_dang_slug(files3):
+    """Lúc ĐỌC chỉ kiểm dạng slug (tương thích về sau); lúc XUẤT mới bắt theo danh sách chuẩn."""
+    m = dict(META_IN, meta_version=1, arch_id="a", quant="q4", params=1, tokenizer_sha256="0" * 64, domains=["domain-moi"])
+    assert validate_meta(m)["domains"] == ["domain-moi"]
+    with pytest.raises(YuiFormatError):
+        validate_meta(m, strict_domains=True)
+    with pytest.raises(YuiFormatError):
+        validate_meta(dict(m, domains=["Co Hoa"]))
+
+
+def test_meta_lam_sach_ky_tu_dieu_khien(files3, tmp_path):
+    p = str(tmp_path / "x.yui")
+    write_yui(files3["_sd"], files3["_cfg"], files3["_tok"], p, "q4", meta=dict(META_IN, name="a\x00b\x1b[31mc", description="dong1\ndong2"))
+    m = read_yui(p)["meta"]
+    assert "\x00" not in m["name"] and "\x1b" not in m["name"] and "\n" not in m["description"]
+
+
+def test_validate_meta_kieu_so_nguyen_khong_nhan_bool():
+    base = dict(META_IN, meta_version=1, arch_id="a", quant="q4", params=1, tokenizer_sha256="0" * 64)
+    validate_meta(base)
+    for k, v in (("params", True), ("meta_version", True), ("params", 0), ("params", "1"), ("quant", "q9"), ("tokenizer_sha256", "ABC")):
+        with pytest.raises(YuiFormatError):
+            validate_meta(dict(base, **{k: v}))
+    for k in ("name", "arch_id", "quant", "params", "tokenizer_sha256", "created", "license", "lang", "domains", "meta_version"):
+        with pytest.raises(YuiFormatError, match=k):
+            validate_meta({x: y for x, y in base.items() if x != k})
+    with pytest.raises(YuiFormatError):
+        validate_meta(["khong", "phai", "dict"])
+    with pytest.raises(YuiFormatError, match="phiên bản"):
+        validate_meta(dict(base, meta_version=2))
+
+
+def test_v3_cut_bao_loi(files3, tmp_path):
+    raw = open(files3["q4"], "rb").read()
+    info = read_yui(files3["q4"])
+    cuts = [0, 10, 59, 62, 100, info["weights_offset"] - 5, info["weights_offset"] + 10, len(raw) // 2,
+            info["index_offset"], info["index_offset"] + 3, len(raw) - 17, len(raw) - 16, len(raw) - 1]
+    for n in cuts:
+        p = tmp_path / "cut.yui"
+        p.write_bytes(raw[:n])
+        with pytest.raises(YuiFormatError):
+            read_yui(str(p))
+
+
+def test_v3_chan_file_va_muc_luc_hong(files3, tmp_path):
+    raw = open(files3["q4"], "rb").read()
+    info = read_yui(files3["q4"])
+    p = tmp_path / "bad.yui"
+    bad = bytearray(raw); bad[-4:] = b"XXXX"
+    p.write_bytes(bad)
+    with pytest.raises(YuiFormatError, match="YUIX"):
+        read_yui(str(p))
+    bad = bytearray(raw); bad[-16:-8] = struct.pack("<Q", info["index_offset"] + 1)
+    p.write_bytes(bad)
+    with pytest.raises(YuiFormatError, match="chân file"):
+        read_yui(str(p))
+    p.write_bytes(raw + b"\0")                    # thừa 1 byte sau chân file -> chân file không còn ở cuối
+    with pytest.raises(YuiFormatError):
+        read_yui(str(p))
+    io = info["index_offset"]
+    for pos, what in ((io, "số mục"), (io + 4 + 2 + len("emb.weight"), "offset emb"), (io + 4 + 2 + len("emb.weight") + 16, "kind emb")):
+        bad = bytearray(raw); bad[pos] ^= 0x01
+        p.write_bytes(bad)
+        with pytest.raises(YuiFormatError):
+            read_yui(str(p))
+
+
+def test_v3_meta_khong_khop_header(files3, tmp_path):
+    raw = open(files3["q4"], "rb").read()
+    p = tmp_path / "bad.yui"
+    cases = [
+        (lambda m: m.update(arch_id=m["arch_id"].replace("-d64-", "-d65-")), "arch_id"),
+        (lambda m: m.update(params=m["params"] + 1), "params"),
+        (lambda m: m.update(tokenizer_sha256="0" * 64), "tokenizer_sha256"),
+        (lambda m: m.update(quant="int8"), "quant"),
+        (lambda m: m.update(quant="t2"), "quant"),
+    ]
+    for mut, key in cases:
+        p.write_bytes(_rewrite_meta(raw, mut))
+        with pytest.raises(YuiFormatError, match=key):
+            read_yui(str(p))
+    # q4all trong META vẫn hợp lệ với header quant=2
+    p.write_bytes(_rewrite_meta(raw, lambda m: m.update(quant="q4all")))
+    assert read_yui(str(p))["meta"]["quant"] == "q4all"
+
+
+def test_v3_meta_hong_cau_truc(files3, tmp_path):
+    raw = open(files3["q4"], "rb").read()
+    p = tmp_path / "bad.yui"
+    for mut in (lambda m: m.pop("license"), lambda m: m.update(domains="chat"), lambda m: m.update(meta_version=2),
+                lambda m: m.update(created="2026-02-30"), lambda m: m.update(name=5)):
+        p.write_bytes(_rewrite_meta(raw, mut))
+        with pytest.raises(YuiFormatError):
+            read_yui(str(p))
+    a, b = _meta_span(raw)
+    p.write_bytes(raw[:a] + b"{" * (b - a) + raw[b:])               # không phải JSON
+    with pytest.raises(YuiFormatError, match="JSON"):
+        read_yui(str(p))
+    p.write_bytes(raw[:a] + b"\xff" * (b - a) + raw[b:])            # không phải UTF-8
+    with pytest.raises(YuiFormatError):
+        read_yui(str(p))
+    for n in (0, 65537, 0xFFFFFFFF):                                # meta_len ngoài khoảng cho phép
+        bad = bytearray(raw); bad[HDR:HDR + 4] = struct.pack("<I", n)
+        p.write_bytes(bad)
+        with pytest.raises(YuiFormatError, match="META"):
+            read_yui(str(p))
+        with pytest.raises(YuiFormatError):
+            read_meta(str(p))
+
+
+def test_v3_config_ngoai_khoang_van_bi_chan(files3, tmp_path):
+    raw = bytearray(open(files3["q4"], "rb").read())
+    p = tmp_path / "bad.yui"
+    bad = bytearray(raw); bad[4 + 4 * 6:4 + 4 * 6 + 4] = struct.pack("<I", 100000)   # E
+    p.write_bytes(bad)
+    with pytest.raises(YuiFormatError):
+        read_yui(str(p))
