@@ -3,16 +3,16 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 7/45 (P0, P1-1, P1-2 xong; P1-3 chờ bạn up + CI xanh)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 8/45 (P0, P1-1, P1-2, P1-3 xong; P1-4 chờ bạn build app)
 
-## ▶ TIẾP THEO: `P1-3` — bạn up `yui.cpp` vào **cả 2 repo** và báo CI; sau đó `P1-4` (app hiển thị META)
+## ▶ TIẾP THEO: `P1-4` — bạn up 3 file Dart rồi chờ Actions build; sau đó `P1-5`
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
 | P0 | Dọn nền, đo mốc ban đầu | 5/5 |
-| P1 | `.yui` v3: có meta + mục lục | 2/5 |
+| P1 | `.yui` v3: có meta + mục lục | 3/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
@@ -124,12 +124,12 @@ Thiết kế (chốt ở P1-1): giữ magic `YUI1`, `ver = 3`. Sau cấu hình/t
   ✎ `export_yui.py`, `yui_format.py`, `test_yui_format.py` · 📥 `export_yui.py`, `yui_format.py`, `model_card.py` · 📤 `Adaptive-MoE/export_yui.py`, `yui_format.py`, `test_yui_format.py`, `docs/YUI_FORMAT.md`
   ✅ Xuất v3 từ model thử; đọc lại bằng `yui_format.py` khớp; mặc định vẫn xuất v2 (không phá thói quen). *Xong: bạn chạy trên `sft_best.pt` thật, xuất OK.*
 
-- [~] **P1-3 · `yui.cpp` đọc v3 (bỏ qua META an toàn, trả META qua `yui_meta`)**
+- [x] **P1-3 · `yui.cpp` đọc v3 (bỏ qua META an toàn, trả META qua `yui_meta`)**
   ✎ `yui.cpp` (+ kiểm tra biên: trần độ dài META, trần số mục) + `test_yui_kernels.cpp` · 📥 `yui.cpp`, `test_yui_kernels.cpp` · 📤 `Adaptive-MoE/yui.cpp` **và** `Y-App/native/yui.cpp` (cùng nội dung), `Adaptive-MoE/test_yui_kernels.cpp`
   ✅ `make test` xanh; file v1/v2/t2 cũ chạy y hệt (so đầu ra); file v3 chạy đúng; file v3 bị cắt/hỏng báo lỗi, không crash.
 
-- [ ] **P1-4 · Dart đọc META**
-  ✎ `lib/state.dart` (ModelStore.isYui → đọc ver + META qua FFI `yui_info` hoặc đọc đầu file), `lib/screens/models_screen.dart` hiển thị tên/miền/lượng tử · 📥 `lib/state.dart`, `lib/screens/models_screen.dart`, `lib/engine.dart` · 📤 3 file ở `Y-App/lib/…`
+- [~] **P1-4 · Dart đọc META**
+  ✎ `lib/state.dart` (ModelStore.isYui → đọc ver + META qua FFI `yui_info` hoặc đọc đầu file), `lib/screens/models_screen.dart` hiển thị tên/miền/lượng tử · 📥 (đã nhận) · 📤 `Y-App/lib/yui_header.dart` (MỚI), `Y-App/lib/state.dart`, `Y-App/lib/screens/models_screen.dart` (không cần sửa `engine.dart`)
   ✅ Tab Model hiện miền/kích cỡ của file v3; file ver lạ bị từ chối với thông báo rõ. (`[~]` tới khi bạn build.)
 
 - [ ] **P1-5 · `verify_cpp.py` đối chiếu v3 với PyTorch**
@@ -334,6 +334,8 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-13 | P1-2 `[~]` | `export_yui.py --fmt 3` (+ `--name --domains --lang --license --desc --base --source-url`), `yui_format.py` đọc/kiểm v3 (`read_meta` nhanh + `read_yui` kiểm toàn bộ: META khớp header, mục lục khớp bố cục, chân file `YUIX`), `docs/YUI_FORMAT.md` chốt v3. **Kiểm:** xuất v1/v2 mới == bản cũ **từng byte** (f32/int8/q4/q4all/t2); trọng số v3 == v2 từng byte; `test_yui_format.py` **46 test xanh** + 136 test yui khác xanh ở môi trường mình. Chưa chạy `main()` trên checkpoint thật (môi trường mình không có torch). **Bạn chạy giúp:** `python export_yui.py --out <thư_mục_model> --ckpt auto --quant q4 --fmt 3 --dst model_v3.yui --name yui-q4 --domains chat,general --lang vi,en --license unknown` rồi `python yui_format.py model_v3.yui`, dán 1 dòng kết quả. Engine C++ **chưa** đọc v3 (P1-3), nên đừng nạp file này vào app/`yui.cpp` hiện tại |
 | 2026-11-13 | P1-2 `[x]` | Bạn chạy trên checkpoint thật `sft_best.pt` (49,91M tham số): `model_v3.yui` 33,0 MB, `yui_format.py` đọc lại OK: `v3 q4, V=16000 D=256 layers=6 heads=4 E=16 L=128`, tokenizer `b3c098768a48`, META `yui-q4`, domains `chat,general`, lang `vi,en`, license `unknown`. Sai số lượng tử q4 8,58% (moe 8,58%) |
 | 2026-11-13 | P1-3 `[~]` | `yui.cpp` đọc v3: kiểm `meta_len` (1…65536) và META phải là `{…}`; giữ chuỗi META không phân tích; kiểm chân file `YUIX` + mục lục (số mục, nối tiếp, phủ đúng vùng trọng số) sau khi nạp; API mới `yui_meta`. **Lệch kế hoạch có chủ ý:** META **không** nằm trong `yui_info` vì app cấp buffer 1024 byte cho hàm đó (`engine.dart:393`), META tới 64 KiB sẽ làm nó lỗi `-2`; `yui_info` chỉ thêm `"ver"`. **Kiểm (môi trường mình):** `make test` OK; engine mới sinh chữ **giống hệt** engine cũ trên file f32/int8/q4/q4all/t2 (so đầu ra); v3 sinh giống hệt v2 (q4, t2) và giống v1 (f32, int8); v3 bị cắt ở 11 vị trí, sai chân/mục lục/META/ver đều báo lỗi gọn, không crash; engine **cũ** gặp v3 báo "phiên bản .yui không hỗ trợ" (đúng dự kiến). `test_yui_format.py` **55 test**, cả nhóm yui **148 passed, 1 skipped**. Không dùng `test_yui_kernels.cpp` cho phần này (test bằng ctypes trong pytest để chạy cả trên CI Python). **Lưu ý CI:** job `sync-yui` sẽ **đỏ tạm** giữa hai lần up `yui.cpp`; up xong cả 2 repo rồi bấm Re-run là xanh |
+| 2026-11-13 | P1-3 `[x]` | Kiểm trên repo: `yui.cpp` ở `Adaptive-MoE/` và `Y-App/native/` **trùng nhau và đúng bản P1-3** (so từng byte). Chưa nghe bạn báo CI, nếu `sync-yui` hoặc build đỏ thì báo mình |
+| 2026-11-13 | P1-4 `[~]` | **Cách làm:** đọc META bằng **Dart thuần** từ đầu file (`yui_header.dart`: 60 byte header + `u32` độ dài + JSON) thay vì gọi FFI, vì tab Model cần hiện thông tin **trước khi nạp** model và không muốn nạp cả file chỉ để xem tên. Vì vậy `engine.dart` giữ nguyên (và `yui_meta` của engine để dành cho dùng sau). **Tab Model:** mỗi file hiện kích cỡ · lượng tử · số tham số · `.yui vN`; file v3 thêm tên model, chip **miền** (tiếng Việt: Tổng quát, Trò chuyện, Lập trình, Toán, Truyện tiếng Việt, Dịch, Công cụ, Khác) và ngôn ngữ, giấy phép; thẻ "Đang dùng" hiện mô tả + miền. **Từ chối rõ:** phiên bản `.yui` lạ (≠ 1–3), lượng tử lạ, cấu hình hỏng, META hỏng/cụt đều báo tiếng Việt ở lúc nhập, tải link, và bấm "Dùng" (không gọi engine). Header được cache theo (đường dẫn, kích thước, ngày sửa) nên vẽ lại không đọc lại file. META chỉ để hiển thị: không chạy/tải/mở link từ META, ký tự điều khiển bị thay bằng dấu cách. **Kiểm:** môi trường mình **không có Dart/Flutter** nên **chưa biên dịch**; mình đối chiếu offset đọc header với `yui_format.py` trên file v1/v2/v3 thật (khớp) và rà cú pháp tay. Đánh `[x]` sau khi Actions build xanh và bạn thấy tab Model hiện đúng với `model_v3.yui` |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
