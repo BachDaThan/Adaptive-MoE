@@ -876,22 +876,53 @@ struct Session {   // KV cache + bộ nhớ tạm của MỘT cuộc sinh (model
 
 struct Model {
     Cfg c; Mat emb, head; float *nfw, *nfb; vector<Layer> ly; Tok tok; vector<float> cosT, sinT; vector<void*> mem; MappedFile file;
+    int ver = 1; string meta;   // phiên bản .yui; meta = JSON META của v3 (rỗng với v1/v2). Engine KHÔNG phân tích META, chỉ giữ nguyên để app đọc (yui_meta).
     Model() = default;
     Model(const Model&) = delete;
     Model& operator=(const Model&) = delete;
     ~Model() { for (void* p : mem) afree(p); }
 
+    // v3: sau trọng số là mục lục nhị phân + chân file 16 byte (u64 offset mục lục, u32 số byte, "YUIX"). Kiểm: chân file khớp vị trí, số mục đúng
+    // theo cấu hình, mọi mục nằm trong vùng mục lục, các mục nối tiếp nhau phủ đúng [w0, w1). Không nạp theo mục lục (nạp vẫn tuần tự như v2).
+    void check_v3_index(size_t w0, size_t w1) const {
+        const size_t fs = file.size;
+        if (fs < w1 + 16 + 4 || fs - w1 < 20) die("file .yui v3 thiếu mục lục/chân file (bị cụt?)");
+        const uint8_t* ft = file.data + fs - 16; uint64_t io; uint32_t ib; memcpy(&io, ft, 8); memcpy(&ib, ft + 8, 4);
+        if (memcmp(ft + 12, "YUIX", 4)) die("file .yui v3: chân file sai magic YUIX");
+        if (io != (uint64_t)w1 || (uint64_t)io + ib + 16 != (uint64_t)fs) die("file .yui v3: chân file chỉ sai vị trí mục lục");
+        Reader r{file.data + io, file.data + io + ib, nullptr, 3};
+        const uint64_t want = 4 + (uint64_t)c.layers * (9 + 3 * ((uint64_t)c.E + c.nshared));
+        const uint32_t cnt = r.get<uint32_t>(); if (cnt != want) die("file .yui v3: số mục trong mục lục không khớp cấu hình");
+        uint64_t next = w0;
+        for (uint32_t i = 0; i < cnt; i++) {
+            uint16_t nl = r.get<uint16_t>(); if (nl == 0 || nl > 128) die("file .yui v3: tên tensor trong mục lục bất thường");
+            r.skip(nl);
+            uint64_t off = r.get<uint64_t>(), sz = r.get<uint64_t>(); uint8_t kind = r.get<uint8_t>(); r.get<uint32_t>(); r.get<uint32_t>(); r.get<uint16_t>();
+            if (kind > 3 || off != next || sz > (uint64_t)w1 || off + sz > (uint64_t)w1) die("file .yui v3: mục lục lệch với vùng trọng số");
+            next = off + sz;
+        }
+        if (next != (uint64_t)w1 || r.p != r.end) die("file .yui v3: mục lục không phủ hết vùng trọng số");
+    }
+
     void load(const string& path) {
         file.open(path);
         Reader r{file.data, file.data + file.size, &mem};
         char mg[4]; r.bytes(mg, 4); if (memcmp(mg, "YUI1", 4)) die("không phải file .yui (sai magic)");
-        uint32_t ver = r.get<uint32_t>(); if (ver != 1 && ver != 2) die("phiên bản .yui không hỗ trợ (cần yui.cpp mới hơn?)"); r.ver = (int)ver;
+        uint32_t ver = r.get<uint32_t>(); if (ver < 1 || ver > 3) die("phiên bản .yui không hỗ trợ (cần yui.cpp mới hơn?)"); r.ver = (int)ver; this->ver = (int)ver;
         c.quant = r.get<uint32_t>(); if (c.quant > 3) die("kiểu lượng tử không hỗ trợ (cần yui.cpp mới hơn?)"); c.V = r.get<uint32_t>(); c.D = r.get<uint32_t>(); c.layers = r.get<uint32_t>();
         c.heads = r.get<uint32_t>(); c.E = r.get<uint32_t>(); c.F = r.get<uint32_t>(); c.nshared = r.get<uint32_t>();
         c.L = r.get<uint32_t>(); c.min_k = r.get<uint32_t>(); c.max_k = r.get<uint32_t>();
         c.top_p = r.get<float>(); c.min_strength = r.get<float>();
         if (c.D % c.heads || c.E > 256 || c.D % (c.heads * 2)) die("cấu hình không hợp lệ");
         c.hd = c.D / c.heads;
+        if (ver == 3) {   // v3: khối META (JSON) ngay sau header: u32 độ dài (1..65536) + byte. Chỉ giữ lại, không phân tích; kiểm biên trước khi sao chép.
+            uint32_t ml = r.get<uint32_t>(); if (ml == 0 || ml > 65536) die("META .yui không hợp lệ (độ dài ngoài 1..65536)");
+            const uint8_t* mp = r.skip(ml); size_t a = 0, b = ml;
+            while (a < b && (mp[a] == ' ' || mp[a] == '\t' || mp[a] == '\n' || mp[a] == '\r')) a++;
+            while (b > a && (mp[b - 1] == ' ' || mp[b - 1] == '\t' || mp[b - 1] == '\n' || mp[b - 1] == '\r')) b--;
+            if (b - a < 2 || mp[a] != '{' || mp[b - 1] != '}') die("META .yui không phải đối tượng JSON");
+            meta.assign((const char*)mp + a, b - a);
+        }
         uint32_t nv = r.get<uint32_t>(); tok.vocab.resize(nv);
         for (uint32_t i = 0; i < nv; i++) { tok.vocab[i] = r.str(); tok.v2i[tok.vocab[i]] = (int)i; }
         uint32_t nm = r.get<uint32_t>();
@@ -905,6 +936,7 @@ struct Model {
         uint32_t nr = r.get<uint32_t>(); tok.ranges.resize(nr);
         for (uint32_t i = 0; i < nr; i++) { tok.ranges[i][0] = r.get<uint32_t>(); tok.ranges[i][1] = r.get<uint32_t>(); tok.ranges[i][2] = r.get<uint32_t>(); }
         tok.init_bytes();
+        const size_t w0 = (size_t)(r.p - file.data);   // đầu vùng trọng số (cho kiểm mục lục v3)
         const bool q = c.quant == 1; const int D = c.D, F = c.F;
         emb = load_mat(r, c.V, D, q);
         ly.resize(c.layers);
@@ -921,6 +953,7 @@ struct Model {
         }
         nfw = load_vec(r, D); nfb = load_vec(r, D);
         head = load_mat(r, c.V, D, q);
+        if (ver == 3) check_v3_index(w0, (size_t)(r.p - file.data));
         const int half = c.hd / 2; cosT.resize((size_t)c.L * half); sinT.resize((size_t)c.L * half);
         for (int p = 0; p < (int)c.L; p++)
             for (int i = 0; i < half; i++) {
@@ -1500,9 +1533,14 @@ YUI_API int yui_info(void* h, char* out, int len) {   // JSON thông tin model; 
     Model* m = (Model*)h; if (!m || !out) return -1;
     string s = "{\"d\":" + std::to_string(m->c.D) + ",\"layers\":" + std::to_string(m->c.layers) + ",\"experts\":" + std::to_string(m->c.E) +
                ",\"heads\":" + std::to_string(m->c.heads) + ",\"ctx\":" + std::to_string(m->c.L) + ",\"vocab\":" + std::to_string(m->c.V) +
-               ",\"quant\":\"" + quant_name(m->c.quant) + "\"}";
+               ",\"quant\":\"" + quant_name(m->c.quant) + "\",\"ver\":" + std::to_string(m->ver) + "}";
     if ((int)s.size() + 1 > len) return -2;
     memcpy(out, s.c_str(), s.size() + 1); return (int)s.size();
+}
+YUI_API int yui_meta(void* h, char* out, int len) {   // v3: JSON META (UTF-8, tối đa 65536 byte; dùng buffer >= 65537 cho chắc); v1/v2: trả 0 và chuỗi rỗng. <0 nếu lỗi (-2: buffer nhỏ)
+    Model* m = (Model*)h; if (!m || !out || len <= 0) return -1;
+    if ((int)m->meta.size() + 1 > len) return -2;
+    memcpy(out, m->meta.c_str(), m->meta.size() + 1); return (int)m->meta.size();
 }
 YUI_API void* yui_chat_begin(void* h, const char* messages_json, const char* opts_json, int def_k, char* err, int errlen) {
     try {

@@ -153,10 +153,12 @@ def test_summary_va_khong_doc_tensor(files):
     assert "q4" in summary(info)
 
 
-@pytest.mark.skipif(shutil.which("g++") is None, reason="không có g++")
-def test_engine_cpp_nap_duoc_cung_file(files, tmp_path):
-    """Bộ đọc Python và yui.cpp phải đồng ý về cấu hình: engine nạp được file nào thì bộ đọc cũng đọc được, và V/D/layers/E khớp yui_info."""
-    so = tmp_path / "libyui.so"
+@pytest.fixture(scope="module")
+def engine_lib(tmp_path_factory):
+    """Biên dịch yui.cpp thành thư viện dùng chung một lần cho cả module (bỏ qua nếu không có g++)."""
+    if shutil.which("g++") is None:
+        pytest.skip("không có g++")
+    so = tmp_path_factory.mktemp("lib") / "libyui.so"
     r = subprocess.run(["g++", "-O1", "-std=c++17", "-fopenmp-simd", "-pthread", "-shared", "-fPIC", "-DYUI_LIB",
                         os.path.join(HERE, "yui.cpp"), "-o", str(so)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-500:]
@@ -164,18 +166,56 @@ def test_engine_cpp_nap_duoc_cung_file(files, tmp_path):
     lib.yui_load.restype = ctypes.c_void_p
     lib.yui_load.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
     lib.yui_info.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    lib.yui_meta.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.yui_free.argtypes = [ctypes.c_void_p]
+    lib.yui_complete_begin.restype = ctypes.c_void_p
+    lib.yui_complete_begin.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    lib.yui_gen_next.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    lib.yui_gen_end.argtypes = [ctypes.c_void_p]
+    return lib
+
+
+def _load(lib, path):
+    err = ctypes.create_string_buffer(512)
+    h = lib.yui_load(path.encode(), err, 512)
+    return h, err.value.decode()
+
+
+def _info(lib, h):
+    buf = ctypes.create_string_buffer(1024)   # app Y-App cấp đúng 1024 byte: yui_info KHÔNG được phình quá
+    assert lib.yui_info(h, buf, 1024) > 0
+    return json.loads(buf.value.decode())
+
+
+def _generate(lib, h, n=24):
+    err = ctypes.create_string_buffer(256)
+    g = lib.yui_complete_begin(h, "xin chào".encode(), json.dumps({"temperature": 0, "max_tokens": n, "seed": 1}).encode(), 4, err, 256)
+    assert g, err.value.decode()
+    out = b""
+    buf = ctypes.create_string_buffer(256)
+    while True:
+        k = lib.yui_gen_next(g, buf, 256)
+        if k <= 0:
+            break
+        out += buf.raw[:k]
+    lib.yui_gen_end(g)
+    return out
+
+
+def test_engine_cpp_nap_duoc_cung_file(files, engine_lib):
+    """Bộ đọc Python và yui.cpp phải đồng ý về cấu hình: engine nạp được file nào thì bộ đọc cũng đọc được, và V/D/layers/E khớp yui_info."""
+    lib = engine_lib
     for q in EXPECT:
-        err = ctypes.create_string_buffer(256)
-        h = lib.yui_load(files[q].encode(), err, 256)
-        assert h, f"{q}: engine không nạp được: {err.value.decode()}"
-        buf = ctypes.create_string_buffer(8192)
-        assert lib.yui_info(h, buf, 8192) > 0
-        j = json.loads(buf.value.decode())
+        h, err = _load(lib, files[q])
+        assert h, f"{q}: engine không nạp được: {err}"
+        j = _info(lib, h)
+        buf = ctypes.create_string_buffer(8)
+        assert lib.yui_meta(h, buf, 8) == 0 and buf.value == b""       # v1/v2: không có META
         lib.yui_free(h)
         c = read_yui(files[q])["cfg"]
         for k_py, k_js in (("V", "vocab"), ("D", "d"), ("layers", "layers"), ("E", "experts"), ("heads", "heads"), ("L", "ctx")):
             assert j[k_js] == c[k_py], (q, k_js, j)
+        assert j["ver"] == (1 if q in ("f32", "int8") else 2)
 
 
 # ====================================================================== v3: META + mục lục
@@ -410,3 +450,77 @@ def test_v3_config_ngoai_khoang_van_bi_chan(files3, tmp_path):
     p.write_bytes(bad)
     with pytest.raises(YuiFormatError):
         read_yui(str(p))
+
+
+# ====================================================================== v3 trên engine C++
+
+@pytest.mark.parametrize("q", list(EXPECT))
+def test_engine_nap_v3_va_tra_meta(files3, engine_lib, q):
+    lib = engine_lib
+    h, err = _load(lib, files3[q])
+    assert h, f"{q}: engine không nạp được v3: {err}"
+    j = _info(lib, h)
+    assert j["ver"] == 3 and j["d"] == D and j["layers"] == NL and j["experts"] == E and isinstance(j["quant"], str)
+    buf = ctypes.create_string_buffer(65537)
+    n = lib.yui_meta(h, buf, 65537)
+    assert n > 0
+    m = json.loads(buf.value.decode("utf-8"))
+    assert m == read_yui(files3[q])["meta"]                       # engine trả đúng META mà bộ đọc Python thấy
+    assert lib.yui_meta(h, buf, 10) == -2                         # buffer nhỏ -> -2, không ghi tràn
+    assert lib.yui_meta(None, buf, 100) == -1
+    lib.yui_free(h)
+
+
+@pytest.mark.parametrize("q_v2,q_v3", [("q4", "q4"), ("t2", "t2")])
+def test_engine_v3_chay_giong_het_v2(files, files3, engine_lib, q_v2, q_v3):
+    """Cùng trọng số: v2 và v3 phải sinh đúng cùng văn bản (temperature 0)."""
+    lib = engine_lib
+    h2, _ = _load(lib, files[q_v2]); h3, _ = _load(lib, files3[q_v3])
+    assert h2 and h3
+    a, b = _generate(lib, h2), _generate(lib, h3)
+    lib.yui_free(h2); lib.yui_free(h3)
+    assert len(a) > 0 and a == b
+
+
+def test_engine_v3_f32_int8_giong_v1(files, files3, engine_lib):
+    lib = engine_lib
+    for q in ("f32", "int8"):
+        h1, _ = _load(lib, files[q]); h3, _ = _load(lib, files3[q])
+        assert h1 and h3
+        a, b = _generate(lib, h1), _generate(lib, h3)
+        lib.yui_free(h1); lib.yui_free(h3)
+        assert len(a) > 0 and a == b, q
+
+
+def test_engine_v3_cut_va_hong_bao_loi_khong_crash(files3, engine_lib, tmp_path):
+    lib = engine_lib
+    raw = open(files3["q4"], "rb").read()
+    info = read_yui(files3["q4"])
+    io = info["index_offset"]
+    p = tmp_path / "bad.yui"
+
+    def must_fail(data, why):
+        p.write_bytes(bytes(data))
+        h, err = _load(lib, str(p))
+        if h:
+            lib.yui_free(h)
+        assert not h, why
+        assert err, why
+
+    for n in (0, 5, 60, 62, 100, info["weights_offset"] - 3, len(raw) // 2, io, io + 5, len(raw) - 17, len(raw) - 16, len(raw) - 1):
+        must_fail(raw[:n], f"cắt {n}")
+    must_fail(raw + b"\0", "thừa byte sau chân file")
+    bad = bytearray(raw); bad[-4:] = b"XXXX"; must_fail(bad, "chân sai magic")
+    bad = bytearray(raw); bad[-16:-8] = struct.pack("<Q", io + 1); must_fail(bad, "chân chỉ sai vị trí")
+    bad = bytearray(raw); bad[io] ^= 1; must_fail(bad, "số mục sai")
+    bad = bytearray(raw); bad[io + 4 + 2 + len("emb.weight")] ^= 1; must_fail(bad, "offset mục lục lệch")
+    for n in (0, 65537, 0xFFFFFFFF):
+        bad = bytearray(raw); bad[HDR:HDR + 4] = struct.pack("<I", n); must_fail(bad, f"meta_len {n}")
+    a, b = _meta_span(raw)
+    must_fail(raw[:a] + b"x" * (b - a) + raw[b:], "META không phải JSON object")
+    bad = bytearray(raw); bad[4:8] = struct.pack("<I", 4); must_fail(bad, "ver 4")
+    # file v3 nguyên vẹn vẫn nạp được sau chuỗi thử trên
+    p.write_bytes(raw)
+    h, err = _load(lib, str(p))
+    assert h, err
+    lib.yui_free(h)
