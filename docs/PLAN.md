@@ -3,16 +3,16 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 5/45 (P0 xong; P1-1 chờ bạn duyệt)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 6/45 (P0 xong, P1-1 xong; P1-2 chờ bạn chạy thử trên checkpoint thật)
 
-## ▶ TIẾP THEO: `P1-1` — bạn duyệt `docs/YUI_FORMAT.md` (6 câu hỏi ở mục 6.4), rồi mới tới `P1-2`
+## ▶ TIẾP THEO: `P1-2` — bạn chạy thử xuất v3 trên checkpoint thật (lệnh trong Nhật ký), rồi tới `P1-3` (yui.cpp đọc v3)
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
 | P0 | Dọn nền, đo mốc ban đầu | 5/5 |
-| P1 | `.yui` v3: có meta + mục lục | 0/5 |
+| P1 | `.yui` v3: có meta + mục lục | 1/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
@@ -116,13 +116,13 @@ Mỗi task: **✎** file sẽ sửa/tạo · **📥** file mình cần bạn g�
 
 Thiết kế (chốt ở P1-1): giữ magic `YUI1`, `ver = 3`. Sau cấu hình/tokenizer thêm **khối META** (độ dài + JSON UTF-8: `arch_id`, `name`, `domains[]`, `lang[]`, `tokenizer_sha256`, `quant`, `params`, `created`, `license`, tuỳ chọn `centroid` 64 số). Cuối file thêm **mục lục** (tên tensor → offset, size, kiểu) + 16 byte chân (offset mục lục + magic `YUIX`). Phần trọng số giữ nguyên thứ tự v2 nên engine tái dùng `load_mat`.
 
-- [~] **P1-1 · Viết đặc tả `docs/YUI_FORMAT.md` (v1, v2, t2, v3)**
+- [x] **P1-1 · Viết đặc tả `docs/YUI_FORMAT.md` (v1, v2, t2, v3)**
   ✎ tạo `docs/YUI_FORMAT.md` · 📥 không (mình đã đọc `export_yui.py`/`yui.cpp`) · 📤 `Adaptive-MoE/docs/YUI_FORMAT.md`
   ✅ Bạn duyệt đặc tả (đặc biệt các trường META) trước khi code.
 
-- [ ] **P1-2 · `export_yui.py --fmt 3` ghi META + mục lục**
-  ✎ `export_yui.py`, `yui_format.py`, `test_yui_format.py` · 📥 `export_yui.py`, `yui_format.py`, `model_card.py` · 📤 cả 3 file ở `Adaptive-MoE/`
-  ✅ Xuất v3 từ model thử; đọc lại bằng `yui_format.py` khớp; mặc định vẫn xuất v2 (không phá thói quen).
+- [~] **P1-2 · `export_yui.py --fmt 3` ghi META + mục lục**
+  ✎ `export_yui.py`, `yui_format.py`, `test_yui_format.py` · 📥 `export_yui.py`, `yui_format.py`, `model_card.py` · 📤 `Adaptive-MoE/export_yui.py`, `yui_format.py`, `test_yui_format.py`, `docs/YUI_FORMAT.md`
+  ✅ Xuất v3 từ model thử; đọc lại bằng `yui_format.py` khớp; mặc định vẫn xuất v2 (không phá thói quen). *Đã đạt trên model thử; còn chờ chạy trên checkpoint thật.*
 
 - [ ] **P1-3 · `yui.cpp` đọc v3 (bỏ qua META an toàn, trả META trong `yui_info`)**
   ✎ `yui.cpp` (+ kiểm tra biên: trần độ dài META, trần số mục) + `test_yui_kernels.cpp` · 📥 `yui.cpp`, `test_yui_kernels.cpp` · 📤 `Adaptive-MoE/yui.cpp` **và** `Y-App/native/yui.cpp` (cùng nội dung), `Adaptive-MoE/test_yui_kernels.cpp`
@@ -330,7 +330,8 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-13 | P0-3 `[x]` baseline | `make test` (C++): **OK** (isa=avx2+fma). CI `tests` (pytest, Py 3.10 + 3.12): **xanh** (bạn báo). **pytest: 237 passed, 1 skipped, 204.91 s (0:03:24)** (bạn báo, gồm cả `test_yui_format.py`). Y-App: Actions build **xanh**. Mốc so sánh từ giờ: không được tụt dưới 237 passed / 0 failed |
 | 2026-11-13 | P0-4 `[x]` | README Y-App sửa theo thực tế: build Actions OK; vẫn ghi "chưa đo trên điện thoại thật" cho tính năng chưa đo. **Chạy thật trên điện thoại Android (bạn báo):** cài APK OK; nạp `yui_q4.yui` (32,9 MB, d=256, 6 lớp, 16 expert, ngữ cảnh 128, q4) thành công; chat mượt; **≈ 186,6–240,4 token/s**; nội dung trả lời còn lan man (model nhỏ/chưa fine-tune kỹ). Mốc tốc độ để so khi làm P5. README đã ghi số này |
 | 2026-11-13 | P0-5 `[x]` | `yui_format.py` (đọc header + bảng tensor + sha256 tokenizer, chỉ dùng thư viện chuẩn, kiểm biên, từ chối ver ≠ 1/2) và `test_yui_format.py` (**14 test xanh**, có thêm kiểm `D % (2·heads)` cho khớp engine, ở môi trường mình: f32/int8/q4/q4all/t2, file cụt/thừa/magic/ver/cấu hình lạ, và nạp cùng file bằng `yui.cpp` qua ctypes khớp V/D/layers/E/heads/ctx). Tokenizer hash = sha256 của vocab+merges+eos (bỏ bảng khoảng Unicode vì phụ thuộc phiên bản Python) |
-| 2026-11-13 | P1-1 `[~]` | Giao `docs/YUI_FORMAT.md`: đặc tả v1/v2/t2 đã đối chiếu code thật + **v3 đề xuất** (META JSON + mục lục nhị phân + footer `YUIX`). Chưa code gì. Chờ bạn trả lời 6 câu ở mục 6.4 của file đó (license bắt buộc?, công thức `arch_id`, danh sách `domains`, `centroid` sớm hay muộn, mục lục nhị phân hay JSON, vị trí META) |
+| 2026-11-13 | P1-1 `[x]` (đã chốt 6/6) | Giao `docs/YUI_FORMAT.md`: đặc tả v1/v2/t2 đã đối chiếu code thật + **v3 đề xuất** (META JSON + mục lục nhị phân + footer `YUIX`). Chưa code gì. **Bạn chốt:** (1) `license` bắt buộc khoá, cho `"unknown"`; (2) `arch_id` = `amoe-d{D}-l{layers}-h{heads}-e{E}-s{n_shared}-f{F}`; (3) domains chuẩn `general, chat, code, math, vi-fiction, translate, tool, other`; (4) `centroid` để P5; (5) mục lục nhị phân; (6) **META ngay sau header** (spec đã sửa theo) |
+| 2026-11-13 | P1-2 `[~]` | `export_yui.py --fmt 3` (+ `--name --domains --lang --license --desc --base --source-url`), `yui_format.py` đọc/kiểm v3 (`read_meta` nhanh + `read_yui` kiểm toàn bộ: META khớp header, mục lục khớp bố cục, chân file `YUIX`), `docs/YUI_FORMAT.md` chốt v3. **Kiểm:** xuất v1/v2 mới == bản cũ **từng byte** (f32/int8/q4/q4all/t2); trọng số v3 == v2 từng byte; `test_yui_format.py` **46 test xanh** + 136 test yui khác xanh ở môi trường mình. Chưa chạy `main()` trên checkpoint thật (môi trường mình không có torch). **Bạn chạy giúp:** `python export_yui.py --out <thư_mục_model> --ckpt auto --quant q4 --fmt 3 --dst model_v3.yui --name yui-q4 --domains chat,general --lang vi,en --license unknown` rồi `python yui_format.py model_v3.yui`, dán 1 dòng kết quả. Engine C++ **chưa** đọc v3 (P1-3), nên đừng nạp file này vào app/`yui.cpp` hiện tại |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
