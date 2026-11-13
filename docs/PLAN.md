@@ -3,16 +3,16 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 8/45 (P0, P1-1, P1-2, P1-3 xong; P1-4 chờ bạn build app)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 9/45 (P0, P1-1…P1-4 xong; P1-5 chờ bạn chạy trên checkpoint thật)
 
-## ▶ TIẾP THEO: `P1-4` — bạn up 3 file Dart rồi chờ Actions build; sau đó `P1-5`
+## ▶ TIẾP THEO: `P1-5` — bạn up 3 file rồi chạy 2 lệnh `verify_cpp.py` trên checkpoint thật (Nhật ký); sau đó `P2-1`
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
 | P0 | Dọn nền, đo mốc ban đầu | 5/5 |
-| P1 | `.yui` v3: có meta + mục lục | 3/5 |
+| P1 | `.yui` v3: có meta + mục lục | 4/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
@@ -128,12 +128,12 @@ Thiết kế (chốt ở P1-1): giữ magic `YUI1`, `ver = 3`. Sau cấu hình/t
   ✎ `yui.cpp` (+ kiểm tra biên: trần độ dài META, trần số mục) + `test_yui_kernels.cpp` · 📥 `yui.cpp`, `test_yui_kernels.cpp` · 📤 `Adaptive-MoE/yui.cpp` **và** `Y-App/native/yui.cpp` (cùng nội dung), `Adaptive-MoE/test_yui_kernels.cpp`
   ✅ `make test` xanh; file v1/v2/t2 cũ chạy y hệt (so đầu ra); file v3 chạy đúng; file v3 bị cắt/hỏng báo lỗi, không crash.
 
-- [~] **P1-4 · Dart đọc META**
+- [x] **P1-4 · Dart đọc META**
   ✎ `lib/state.dart` (ModelStore.isYui → đọc ver + META qua FFI `yui_info` hoặc đọc đầu file), `lib/screens/models_screen.dart` hiển thị tên/miền/lượng tử · 📥 (đã nhận) · 📤 `Y-App/lib/yui_header.dart` (MỚI), `Y-App/lib/state.dart`, `Y-App/lib/screens/models_screen.dart` (không cần sửa `engine.dart`)
   ✅ Tab Model hiện miền/kích cỡ của file v3; file ver lạ bị từ chối với thông báo rõ. (`[~]` tới khi bạn build.)
 
-- [ ] **P1-5 · `verify_cpp.py` đối chiếu v3 với PyTorch**
-  ✎ `verify_cpp.py` · 📥 `verify_cpp.py`, `check_load.py` · 📤 `Adaptive-MoE/verify_cpp.py`
+- [~] **P1-5 · `verify_cpp.py` đối chiếu v3 với PyTorch**
+  ✎ `verify_cpp.py` · 📥 (đã nhận; `check_load.py` không cần đổi) · 📤 `Adaptive-MoE/verify_cpp.py`, `Adaptive-MoE/test_verify_cpp.py`, `Adaptive-MoE/.github/workflows/tests.yml`
   ✅ Đầu ra engine C++ với file v3 trùng PyTorch trong sai số của v2.
 
 ### P2 — Kho model (Model Hub) trong Y-App
@@ -336,6 +336,8 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-13 | P1-3 `[~]` | `yui.cpp` đọc v3: kiểm `meta_len` (1…65536) và META phải là `{…}`; giữ chuỗi META không phân tích; kiểm chân file `YUIX` + mục lục (số mục, nối tiếp, phủ đúng vùng trọng số) sau khi nạp; API mới `yui_meta`. **Lệch kế hoạch có chủ ý:** META **không** nằm trong `yui_info` vì app cấp buffer 1024 byte cho hàm đó (`engine.dart:393`), META tới 64 KiB sẽ làm nó lỗi `-2`; `yui_info` chỉ thêm `"ver"`. **Kiểm (môi trường mình):** `make test` OK; engine mới sinh chữ **giống hệt** engine cũ trên file f32/int8/q4/q4all/t2 (so đầu ra); v3 sinh giống hệt v2 (q4, t2) và giống v1 (f32, int8); v3 bị cắt ở 11 vị trí, sai chân/mục lục/META/ver đều báo lỗi gọn, không crash; engine **cũ** gặp v3 báo "phiên bản .yui không hỗ trợ" (đúng dự kiến). `test_yui_format.py` **55 test**, cả nhóm yui **148 passed, 1 skipped**. Không dùng `test_yui_kernels.cpp` cho phần này (test bằng ctypes trong pytest để chạy cả trên CI Python). **Lưu ý CI:** job `sync-yui` sẽ **đỏ tạm** giữa hai lần up `yui.cpp`; up xong cả 2 repo rồi bấm Re-run là xanh |
 | 2026-11-13 | P1-3 `[x]` | Kiểm trên repo: `yui.cpp` ở `Adaptive-MoE/` và `Y-App/native/` **trùng nhau và đúng bản P1-3** (so từng byte). Chưa nghe bạn báo CI, nếu `sync-yui` hoặc build đỏ thì báo mình |
 | 2026-11-13 | P1-4 `[~]` | **Cách làm:** đọc META bằng **Dart thuần** từ đầu file (`yui_header.dart`: 60 byte header + `u32` độ dài + JSON) thay vì gọi FFI, vì tab Model cần hiện thông tin **trước khi nạp** model và không muốn nạp cả file chỉ để xem tên. Vì vậy `engine.dart` giữ nguyên (và `yui_meta` của engine để dành cho dùng sau). **Tab Model:** mỗi file hiện kích cỡ · lượng tử · số tham số · `.yui vN`; file v3 thêm tên model, chip **miền** (tiếng Việt: Tổng quát, Trò chuyện, Lập trình, Toán, Truyện tiếng Việt, Dịch, Công cụ, Khác) và ngôn ngữ, giấy phép; thẻ "Đang dùng" hiện mô tả + miền. **Từ chối rõ:** phiên bản `.yui` lạ (≠ 1–3), lượng tử lạ, cấu hình hỏng, META hỏng/cụt đều báo tiếng Việt ở lúc nhập, tải link, và bấm "Dùng" (không gọi engine). Header được cache theo (đường dẫn, kích thước, ngày sửa) nên vẽ lại không đọc lại file. META chỉ để hiển thị: không chạy/tải/mở link từ META, ký tự điều khiển bị thay bằng dấu cách. **Kiểm:** môi trường mình **không có Dart/Flutter** nên **chưa biên dịch**; mình đối chiếu offset đọc header với `yui_format.py` trên file v1/v2/v3 thật (khớp) và rà cú pháp tay. Đánh `[x]` sau khi Actions build xanh và bạn thấy tab Model hiện đúng với `model_v3.yui` |
+| 2026-11-13 | P1-4 `[x]` | Bạn báo: Actions build **xanh 100%**. Tab Model hiện đúng `model_v3.yui`: `yui-q4`, `.yui v3`, 33,0 MB, q4, 49,9M tham số, chip "Trò chuyện" và "Tổng quát", ngôn ngữ vi/en, giấy phép unknown; file cũ nhận đúng nhãn `.yui v2`. Bấm "Dùng" nạp `model_v3.yui` ngay, chat bình thường, **≈ 174–230 token/s** (câu đầu 8 token: 49,4/s) trên Android — tương đương v2 (≈ 187–240), chưa thấy chậm đi |
+| 2026-11-13 | P1-5 `[~]` | `verify_cpp.py` nâng cấp: (0) đọc và kiểm toàn bộ file bằng `yui_format` (v3: META, mục lục, chân file) + đối chiếu `config.json` với header; (1) tokenizer như cũ; (2) logits so PyTorch như cũ nhưng có **phán quyết**: f32 cần `max|diff| < 1e-3` và argmax 100%, file lượng tử chỉ cảnh báo nếu argmax < 90% (nhanh vs `--exact` cũng được so); (3) **mới `--compare FILE.yui`** (không cần torch): so logits engine giữa 2 file, cùng quant/trọng số thì phải **giống hệt** (`max|diff| = 0`) và cùng `tokenizer_sha256`. Kết thúc in `KẾT QUẢ: ĐẠT/KHÔNG ĐẠT`, mã thoát 1 khi có lỗi cứng. `test_verify_cpp.py` (8 test, cần g++ + `tokenizers`): v3 == v2 từng bit ở q4/t2/f32 (k=1,2 × nhanh/exact), trọng số khác → KHÔNG ĐẠT, `config.json` lệch → KHÔNG ĐẠT, file hỏng/cụt → KHÔNG ĐẠT; `tests.yml` thêm `tokenizers` vào bước cài để test chạy trên CI (trước đây thiếu). **Chưa chạy được phần so với PyTorch** (môi trường mình không có torch; phần đó giữ logic cũ). **Bạn chạy giúp 3 lệnh** trên máy có torch, trong thư mục repo, với `<D>` là thư mục model (có `config.json`, `tokenizer.json`, `sft_best.pt`): `make` ; `python export_yui.py --out <D> --ckpt auto --quant q4 --dst model_v2.yui` ; `python export_yui.py --out <D> --ckpt auto --quant q4 --fmt 3 --name yui-q4 --domains chat,general --lang vi,en --dst model_v3.yui` ; rồi `python verify_cpp.py --out <D> --model model_v3.yui --yui ./yui` và `python verify_cpp.py --out <D> --model model_v3.yui --compare model_v2.yui --yui ./yui --skip_logits`. Dán 2 khối kết quả (nhất là dòng `KẾT QUẢ`) |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
