@@ -14,7 +14,7 @@ jobs:
       - name: Install
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy pytest
+          pip install numpy pytest tokenizers
       - name: Test
         run: pytest -q
   sync-yui:
