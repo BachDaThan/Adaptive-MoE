@@ -3,9 +3,9 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 11/45 (P0, P1 xong; P2 đang làm: P2-1 xong, P2-2 chờ bạn chạy thử)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 13/45 (P0, P1 xong; P2: P2-1, P2-2, P2-3 xong, tiếp theo P2-4)
 
-## ▶ TIẾP THEO: `P2-2` `[~]` — bạn up 3 file, chạy `make_manifest.py` trên thư mục chứa `model_v3.yui`, dán kết quả, rồi up `manifest.json` lên gốc repo `BachDaThan/Yui-Models`. Sau đó mình làm `P2-3` (`hub_service.dart`; cần bạn gửi phần ModelStore/Settings của `Y-App/lib/state.dart`)
+## ▶ TIẾP THEO: `P2-4` — tải model có tiếp tục (Range), kiểm sha256, trần dung lượng, kiểm arch_id. Mình tự lấy `lib/state.dart` từ repo public, bạn không cần gửi gì thêm. Việc của bạn sau P2-3: up 2 file Dart mới và `PLAN.md`; lưu ý **Kho mới có 1 model, chưa có model cho các ngành** (xem Câu hỏi mở)
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
@@ -13,7 +13,7 @@ Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử
 |---|---|---|
 | P0 | Dọn nền, đo mốc ban đầu | 5/5 |
 | P1 | `.yui` v3: có meta + mục lục | 5/5 |
-| P2 | Kho model (Model Hub) trong Y-App | 1/8 |
+| P2 | Kho model (Model Hub) trong Y-App | 3/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
 | P5 | Mượn model chuyên theo câu hỏi (cấp model) | 0/5 |
@@ -144,11 +144,11 @@ Mục tiêu: người dùng mở tab **Kho**, thấy danh sách model (từ `man
   ✎ ghi kết luận vào Sổ tay mục 4 · 📥 bạn dán kết quả lệnh `curl -I -H "Range: bytes=0-1023" <link resolve>` và thử hai khoảng byte một request (mình gửi lệnh) · 📤 `Adaptive-MoE/docs/PLAN.md`
   ✅ Biết chắc: hạn mức ẩn danh hiện hành, redirect sang CDN, có/không hỗ trợ multi-range.
 
-- [~] **P2-2 · Đặc tả `manifest.json` + `make_manifest.py`**
+- [x] **P2-2 · Đặc tả `manifest.json` + `make_manifest.py`**
   ✎ tạo `make_manifest.py` (quét `models/*/` hoặc thư mục `.yui`, đọc META bằng `yui_format.py`, ghi `manifest.json` gồm url, sha256, bytes, arch_id, domains, quant, tokenizer_sha256, license) · 📥 `model_registry.py`, `model_card.py` · 📤 `Adaptive-MoE/make_manifest.py`, `Adaptive-MoE/test_make_manifest.py`
   ✅ Chạy trên thư mục mẫu ra manifest hợp lệ; sha256 khớp file.
 
-- [ ] **P2-3 · `hub_service.dart`: lấy manifest, cache 24 giờ, nhiều nguồn có thứ tự**
+- [x] **P2-3 · `hub_service.dart`: lấy manifest, cache 24 giờ, nhiều nguồn có thứ tự**
   ✎ tạo `lib/services/hub_service.dart` · 📥 `lib/state.dart` (phần ModelStore/Settings) · 📤 `Y-App/lib/services/hub_service.dart`
   ✅ Hai nguồn → danh sách gộp; nguồn lỗi không làm hỏng nguồn kia; dùng cache khi mất mạng.
 
@@ -342,8 +342,11 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-13 | Trả lời câu hỏi mở số 3 (P2) | Repo model mặc định: **`BachDaThan/Yui-Models`** (đã tạo trên Hugging Face), chế độ **public** để app tải trực tiếp không cần token; vẫn giữ tuỳ chọn nhập token cho người dùng trỏ sang repo private (P2-7) |
 | 2026-11-13 | P2-1 `[x]` | Tài liệu HF: 500 API / 3 000 resolver / 100 trang mỗi 5 phút (ẩn danh, theo IP, cửa sổ cố định, bảng 9/2025, *có thể thay đổi*); quá hạn → 429 + header `RateLimit`. **Đo thật** trên `Yui-Models/model_v3.yui` (bạn báo): multi-range → `HTTP/2 206`, `multipart/byteranges` từ CloudFront, `size=506` ⇒ **hỗ trợ**. Hai lệnh `HEAD` chỉ cho `HTTP/2 200` (khối 2 có `content-length: 174230`), **không thấy** `location`, `ratelimit`, `accept-ranges`, `content-range`; vì vậy redirect và header hạn mức **chưa quan sát trực tiếp** (CDN được xác nhận gián tiếp qua khối 3). **Chưa giải thích được** `174230` (file là ≈ 33,0 MB): có thể `HEAD` ở HF khác `GET`, chưa kết luận. Không chặn P2: P2-4 kiểm `sha256` + `bytes` theo manifest nên tải sai sẽ bị phát hiện. **Quyết định thiết kế:** (a) tải bằng `/resolve/` (nhóm resolver có hạn mức cao nhất), (b) 429 → lùi dần, (c) manifest cache 24 giờ nên mỗi lần mở Kho tốn ≤ 1 resolver |
 | 2026-11-13 | P2-2 `[~]` | `make_manifest.py` (quét `*.yui` đệ quy, đọc + kiểm toàn bộ từng file bằng `yui_format.read_yui`, ghi `manifest.json` version 1: `id,name,file,url,bytes,sha256,yui_ver,quant,params,arch_id,tokenizer_sha256,domains,lang,license,ctx` + tuỳ chọn `description,created,base`; v1/v2 không META → id = tên file, `domains/lang` rỗng, `license = unknown`). Có `validate_manifest` (https, sha256 hex, không `..`, không trùng id, tối đa 500 model) và `--check` (so manifest với file thật). File hỏng bị bỏ qua + cảnh báo, `--strict` thì không ghi gì. Chỉ dùng thư viện chuẩn. **Kiểm (môi trường mình):** `test_make_manifest.py` **22 test xanh** (nội dung, q4all, thư mục con có dấu cách → `%20`, v2 không META, file cụt/rác, trùng id, base_url phải https, kết quả lặp lại byte-từng-byte, `--check` bắt đổi 1 byte, 13 kiểu manifest sai bị từ chối) + `test_yui_format.py` vẫn xanh (tổng 77). **Bạn chạy giúp:** đặt `model_v3.yui` vào một thư mục (vd `hub/`) rồi `python make_manifest.py hub --strict` và `python make_manifest.py hub --check hub/manifest.json`; dán 2 khối kết quả; sau đó up `hub/manifest.json` lên **gốc** repo `BachDaThan/Yui-Models` (cùng cấp `model_v3.yui`, vì `url` = base_url + đường dẫn file) |
+| 2026-11-13 | P2-2 `[x]` | Bạn chạy trên `hub/` chứa `model_v3.yui`: lệnh 1 ghi `manifest.json` 1 model (`yui-q4`, .yui v3, q4, 32,96 MB, domains chat+general); lệnh 2 `--check` **KHỚP**. Bạn đã up `model_v3.yui` và `manifest.json` lên gốc `BachDaThan/Yui-Models`. **Kho hiện chỉ có 1 model; chưa có model cho các ngành khác (code, toán, dịch, truyện…)** |
+| 2026-11-13 | P2-3 `[x]` | `lib/services/hub_service.dart` (Dart thuần, không phụ thuộc Flutter, chưa được app nào gọi nên **không thể làm hỏng bản build hiện tại**): `HubService.load(nguồn[], force)` gộp nhiều nguồn theo thứ tự (trùng id: nguồn trước thắng, có ghi chú), cache 24 giờ từng nguồn (đồng hồ lùi thì không tin cache), nguồn lỗi không ảnh hưởng nguồn khác, mất mạng dùng cache cũ có cờ `stale`, 429/5xx/mạng thử lại ≤ 3 lần (1s, 2s hoặc `Retry-After` tối đa 30s), chỉ nhận https (cả sau chuyển hướng), manifest ≤ 1 MB ≤ 500 mục, mục sai bị bỏ qua và đếm lại, chuỗi hiển thị bị làm sạch ký tự điều khiển. **Không tự nối mạng**: nơi gọi phải kiểm công tắc Kho (mặc định tắt, làm ở P2-6/P2-8). **Kiểm thật bằng Dart SDK 3.14 (không phải Flutter):** `dart analyze` 0 lỗi; `tools/hub_service_check.dart` **34 kiểm tra đạt** (gộp 2 nguồn, nguồn lỗi, cache TTL, mất mạng, thử lại, 18 kiểu mục sai, 5 kiểu manifest sai, trùng id, link nguồn không an toàn, cache hỏng, máy chủ cục bộ cho 200/429/quá lớn/chuyển hướng http) và **Dart đọc đúng manifest do Python sinh** (3 model, gồm cả thư mục có dấu cách `%20`). **Chưa kiểm:** build Flutter/Android thật (chờ GitHub Actions khi P2-6 nối vào app) |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
+- Kho mới có 1 model (`yui-q4`, chat+general). Muốn chọn model theo ngành (P5) thì cần có model `code`/`math`/`translate`… huấn luyện và xuất trước; việc này nằm ngoài P2 (hiện chưa có task) → **quyết khi tới P2-6 (giao diện cần trạng thái "chưa có model cho ngành này") và trước P5**.
 1. ~~P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?~~ → **đã chốt: lưu `docs/archive/`**
 2. ~~P1-1: META có cần trường `license` bắt buộc không?~~ → **đã chốt: bắt buộc có khoá, cho `"unknown"`**
 3. ~~P2: repo model mặc định là repo nào, public hay private?~~ → **đã chốt: `BachDaThan/Yui-Models`, public**
