@@ -2,7 +2,7 @@
 
 > Trạng thái: **v1/v2/t2 = đang dùng** (mô tả đúng theo `export_yui.py::write_yui` và `yui.cpp::Model::load`).
 > **v3 = ĐÃ CHỐT (6 quyết định ở mục 6.4), đã có bộ ghi (`export_yui.py --fmt 3`) và bộ đọc/kiểm (`yui_format.py`) bằng Python.**
-> Engine C++ (`yui.cpp`) **chưa** đọc v3 (task P1-3); app chưa dùng (P1-4).
+> Engine C++ (`yui.cpp`) đã đọc v3 (P1-3, mục 6.5); app chưa dùng (P1-4).
 
 Quy ước: little-endian; `u8/u16/u32/u64` = số nguyên không dấu; `i32` có dấu; `f32` IEEE-754; `f16` IEEE half. "Chuỗi" ở tokenizer = `u16 độ dài` + byte UTF-8.
 
@@ -114,7 +114,7 @@ Hết `head.weight` là hết file (v1/v2): `yui_format.py` báo lỗi nếu cò
 | Người đọc \ File | v1 | v2 (q4/t2) | v3 |
 |---|---|---|---|
 | `yui.cpp` hiện tại (1.3) | ✅ | ✅ | ❌ báo lỗi gọn về phiên bản không hỗ trợ (đã có sẵn) |
-| `yui.cpp` sau P1-3 | ✅ y hệt | ✅ y hệt | ✅ |
+| `yui.cpp` sau P1-3 | ✅ y hệt (đã so đầu ra với bản cũ) | ✅ y hệt | ✅ |
 | `yui_format.py` (sau P1-2) | ✅ | ✅ | ✅ (kiểm cả META, mục lục, chân file) |
 | App Y-App hiện tại | ✅ | ✅ | nhập được (`ModelStore.isYui` chỉ kiểm 4 byte `YUI1`) nhưng khi nạp engine cũ báo lỗi |
 
@@ -198,6 +198,11 @@ Không có `--fmt 3` thì xuất v1/v2 như cũ. Trong Python: `yui_format.read_
 5. Mục lục nhị phân.
 6. META đặt ngay sau header.
 
-### 6.5 Việc còn lại
-- **P1-3:** `yui.cpp` đọc v3 (đọc `meta_len`, kiểm trần, nạp trọng số y như v2, trả META trong `yui_info`, tuỳ chọn kiểm mục lục); đồng bộ sang `Y-App/native/yui.cpp` (CI `sync-yui` sẽ kiểm).
-- **P1-4:** app Y-App hiển thị META (qua `yui_info`).
+### 6.5 Engine C++ (P1-3, đã làm)
+- `yui.cpp` nhận `ver` 1, 2, 3. Với v3: đọc `meta_len` (1…65536, ngoài khoảng ⇒ lỗi), kiểm META là một đối tượng JSON (`{…}` sau khi bỏ khoảng trắng đầu/cuối), **giữ nguyên chuỗi để trả lại, không phân tích** (nên không có lỗ hổng phân tích JSON trong engine); nạp tokenizer và trọng số y như v2.
+- Sau `head.weight`, kiểm chân file + mục lục: `YUIX` đúng, `index_offset` đúng chỗ, số mục = `4 + layers·(9 + 3·(E + n_shared))`, các mục nối tiếp nhau phủ đúng vùng trọng số, mọi đọc đều có kiểm biên. Sai ⇒ `yui_load` trả lỗi tiếng Việt, không crash. Engine **không** nạp theo mục lục (vẫn tuần tự).
+- API mới: **`int yui_meta(void* h, char* out, int len)`** trả JSON META (v1/v2: trả 0 và chuỗi rỗng; `-1` handle/buffer sai; `-2` buffer nhỏ; dùng buffer ≥ 65537 byte).
+- `yui_info` chỉ thêm khoá `"ver"` (số nhỏ). **Cố ý không nhét META vào `yui_info`** vì app Y-App cấp buffer 1024 byte cho hàm này; META tới 64 KiB sẽ làm nó trả `-2`.
+
+### 6.6 Việc còn lại
+- **P1-4:** app Y-App gọi `yui_meta` (FFI) để hiển thị tên/miền/lượng tử.

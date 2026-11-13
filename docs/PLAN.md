@@ -3,16 +3,16 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
 
-**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 6/45 (P0 xong, P1-1 xong; P1-2 chờ bạn chạy thử trên checkpoint thật)
+**Cập nhật:** 2026-11-13 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 7/45 (P0, P1-1, P1-2 xong; P1-3 chờ bạn up + CI xanh)
 
-## ▶ TIẾP THEO: `P1-2` — bạn chạy thử xuất v3 trên checkpoint thật (lệnh trong Nhật ký), rồi tới `P1-3` (yui.cpp đọc v3)
+## ▶ TIẾP THEO: `P1-3` — bạn up `yui.cpp` vào **cả 2 repo** và báo CI; sau đó `P1-4` (app hiển thị META)
 
 Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử · `[x]` xong (chỉ đánh khi bạn báo OK) · `[!]` bị chặn (xem ghi chú) · `[-]` bỏ (có lý do trong Nhật ký)
 
 | Giai đoạn | Nội dung | Xong |
 |---|---|---|
 | P0 | Dọn nền, đo mốc ban đầu | 5/5 |
-| P1 | `.yui` v3: có meta + mục lục | 1/5 |
+| P1 | `.yui` v3: có meta + mục lục | 2/5 |
 | P2 | Kho model (Model Hub) trong Y-App | 0/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
@@ -120,11 +120,11 @@ Thiết kế (chốt ở P1-1): giữ magic `YUI1`, `ver = 3`. Sau cấu hình/t
   ✎ tạo `docs/YUI_FORMAT.md` · 📥 không (mình đã đọc `export_yui.py`/`yui.cpp`) · 📤 `Adaptive-MoE/docs/YUI_FORMAT.md`
   ✅ Bạn duyệt đặc tả (đặc biệt các trường META) trước khi code.
 
-- [~] **P1-2 · `export_yui.py --fmt 3` ghi META + mục lục**
+- [x] **P1-2 · `export_yui.py --fmt 3` ghi META + mục lục**
   ✎ `export_yui.py`, `yui_format.py`, `test_yui_format.py` · 📥 `export_yui.py`, `yui_format.py`, `model_card.py` · 📤 `Adaptive-MoE/export_yui.py`, `yui_format.py`, `test_yui_format.py`, `docs/YUI_FORMAT.md`
-  ✅ Xuất v3 từ model thử; đọc lại bằng `yui_format.py` khớp; mặc định vẫn xuất v2 (không phá thói quen). *Đã đạt trên model thử; còn chờ chạy trên checkpoint thật.*
+  ✅ Xuất v3 từ model thử; đọc lại bằng `yui_format.py` khớp; mặc định vẫn xuất v2 (không phá thói quen). *Xong: bạn chạy trên `sft_best.pt` thật, xuất OK.*
 
-- [ ] **P1-3 · `yui.cpp` đọc v3 (bỏ qua META an toàn, trả META trong `yui_info`)**
+- [~] **P1-3 · `yui.cpp` đọc v3 (bỏ qua META an toàn, trả META qua `yui_meta`)**
   ✎ `yui.cpp` (+ kiểm tra biên: trần độ dài META, trần số mục) + `test_yui_kernels.cpp` · 📥 `yui.cpp`, `test_yui_kernels.cpp` · 📤 `Adaptive-MoE/yui.cpp` **và** `Y-App/native/yui.cpp` (cùng nội dung), `Adaptive-MoE/test_yui_kernels.cpp`
   ✅ `make test` xanh; file v1/v2/t2 cũ chạy y hệt (so đầu ra); file v3 chạy đúng; file v3 bị cắt/hỏng báo lỗi, không crash.
 
@@ -293,8 +293,8 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 - Hệ quả: **không có mục lục byte**; muốn đọc 1 expert phải đi tuần tự (hoặc tự tính offset theo kiểu lượng tử) → lý do cần v3.
 - Engine từ chối `ver` ngoài {1,2}, `quant > 3`, `E > 256`, cấu hình lệch (`D % heads`…). Kiểm tra biên đọc: `Reader::need` (báo "file .yui bị cụt").
 
-### 4.2 Engine C++ (`yui.cpp`, version chuỗi `yui-engine 1.3-img`)
-- Hàm xuất (`YUI_API`): `yui_version, yui_set_threads, yui_get_threads, yui_cpu_features, yui_load, yui_free, yui_info (JSON), yui_chat_begin, yui_chat_begin_img, yui_complete_begin, yui_gen_next, yui_gen_tokens, yui_gen_end, yui_vision_load/run/free`.
+### 4.2 Engine C++ (`yui.cpp`, version chuỗi `yui-engine 1.3-img`; từ P1-3 đọc `.yui` v1/v2/v3 và có thêm `yui_meta`)
+- Hàm xuất (`YUI_API`): `yui_version, yui_set_threads, yui_get_threads, yui_cpu_features, yui_load, yui_free, yui_info, yui_meta (JSON), yui_chat_begin, yui_chat_begin_img, yui_complete_begin, yui_gen_next, yui_gen_tokens, yui_gen_end, yui_vision_load/run/free`.
 - Biên dịch thư viện: `-DYUI_LIB -shared -fPIC -std=c++17` (Android arm64 qua NDK trong `build-app.yml`); CLI: `make` / `make portable`; test: `make test`.
 - Có sẵn: SIMD (AVX2+FMA / NEON / NEON+dotprod), nhóm luồng riêng, mmap (Android; Windows đọc vào RAM), đoán trước token (`YUI_SPEC`), router cấp token theo từng lớp, KV cache trong `[0, L)`.
 
@@ -332,6 +332,8 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-13 | P0-5 `[x]` | `yui_format.py` (đọc header + bảng tensor + sha256 tokenizer, chỉ dùng thư viện chuẩn, kiểm biên, từ chối ver ≠ 1/2) và `test_yui_format.py` (**14 test xanh**, có thêm kiểm `D % (2·heads)` cho khớp engine, ở môi trường mình: f32/int8/q4/q4all/t2, file cụt/thừa/magic/ver/cấu hình lạ, và nạp cùng file bằng `yui.cpp` qua ctypes khớp V/D/layers/E/heads/ctx). Tokenizer hash = sha256 của vocab+merges+eos (bỏ bảng khoảng Unicode vì phụ thuộc phiên bản Python) |
 | 2026-11-13 | P1-1 `[x]` (đã chốt 6/6) | Giao `docs/YUI_FORMAT.md`: đặc tả v1/v2/t2 đã đối chiếu code thật + **v3 đề xuất** (META JSON + mục lục nhị phân + footer `YUIX`). Chưa code gì. **Bạn chốt:** (1) `license` bắt buộc khoá, cho `"unknown"`; (2) `arch_id` = `amoe-d{D}-l{layers}-h{heads}-e{E}-s{n_shared}-f{F}`; (3) domains chuẩn `general, chat, code, math, vi-fiction, translate, tool, other`; (4) `centroid` để P5; (5) mục lục nhị phân; (6) **META ngay sau header** (spec đã sửa theo) |
 | 2026-11-13 | P1-2 `[~]` | `export_yui.py --fmt 3` (+ `--name --domains --lang --license --desc --base --source-url`), `yui_format.py` đọc/kiểm v3 (`read_meta` nhanh + `read_yui` kiểm toàn bộ: META khớp header, mục lục khớp bố cục, chân file `YUIX`), `docs/YUI_FORMAT.md` chốt v3. **Kiểm:** xuất v1/v2 mới == bản cũ **từng byte** (f32/int8/q4/q4all/t2); trọng số v3 == v2 từng byte; `test_yui_format.py` **46 test xanh** + 136 test yui khác xanh ở môi trường mình. Chưa chạy `main()` trên checkpoint thật (môi trường mình không có torch). **Bạn chạy giúp:** `python export_yui.py --out <thư_mục_model> --ckpt auto --quant q4 --fmt 3 --dst model_v3.yui --name yui-q4 --domains chat,general --lang vi,en --license unknown` rồi `python yui_format.py model_v3.yui`, dán 1 dòng kết quả. Engine C++ **chưa** đọc v3 (P1-3), nên đừng nạp file này vào app/`yui.cpp` hiện tại |
+| 2026-11-13 | P1-2 `[x]` | Bạn chạy trên checkpoint thật `sft_best.pt` (49,91M tham số): `model_v3.yui` 33,0 MB, `yui_format.py` đọc lại OK: `v3 q4, V=16000 D=256 layers=6 heads=4 E=16 L=128`, tokenizer `b3c098768a48`, META `yui-q4`, domains `chat,general`, lang `vi,en`, license `unknown`. Sai số lượng tử q4 8,58% (moe 8,58%) |
+| 2026-11-13 | P1-3 `[~]` | `yui.cpp` đọc v3: kiểm `meta_len` (1…65536) và META phải là `{…}`; giữ chuỗi META không phân tích; kiểm chân file `YUIX` + mục lục (số mục, nối tiếp, phủ đúng vùng trọng số) sau khi nạp; API mới `yui_meta`. **Lệch kế hoạch có chủ ý:** META **không** nằm trong `yui_info` vì app cấp buffer 1024 byte cho hàm đó (`engine.dart:393`), META tới 64 KiB sẽ làm nó lỗi `-2`; `yui_info` chỉ thêm `"ver"`. **Kiểm (môi trường mình):** `make test` OK; engine mới sinh chữ **giống hệt** engine cũ trên file f32/int8/q4/q4all/t2 (so đầu ra); v3 sinh giống hệt v2 (q4, t2) và giống v1 (f32, int8); v3 bị cắt ở 11 vị trí, sai chân/mục lục/META/ver đều báo lỗi gọn, không crash; engine **cũ** gặp v3 báo "phiên bản .yui không hỗ trợ" (đúng dự kiến). `test_yui_format.py` **55 test**, cả nhóm yui **148 passed, 1 skipped**. Không dùng `test_yui_kernels.cpp` cho phần này (test bằng ctypes trong pytest để chạy cả trên CI Python). **Lưu ý CI:** job `sync-yui` sẽ **đỏ tạm** giữa hai lần up `yui.cpp`; up xong cả 2 repo rồi bấm Re-run là xanh |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 1. P0-2: xoá hẳn `provider-chain.patch` hay lưu vào `docs/archive/`?
