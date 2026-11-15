@@ -401,3 +401,17 @@ def test_brave_api_and_google_cse_keyed(monkeypatch):
     assert w.search("q") == "nội dung brave api (x.io)" and seen["b"][1]["X-Subscription-Token"] == "bk" and "count=3" in seen["b"][0]
     w, _ = web({"https://www.googleapis.com": gcse}, cache_s=0, order=["gcse"])
     assert w.search("q") == "nội dung google cse (y.io)" and "key=gk" in seen["g"] and "cx=cx123" in seen["g"]
+
+
+def test_clean_inline_tags_do_not_split_words():
+    """DuckDuckGo tô đậm từ khoá có thể cắt giữa từ ("Th<b>ủ</b> đô"): gỡ thẻ chữ KHÔNG được chèn dấu cách."""
+    assert yw._clean("Th<b>ủ</b> đô") == "Thủ đô"
+    assert yw._clean("<B>Thủ</B> <strong>đô</strong> Việt<em> </em>Nam") == "Thủ đô Việt Nam"
+    assert yw._clean('x<span class="y">z</span>') == "xz" and yw._clean('a<a href="u">b</a>c') == "abc" and yw._clean("ab<wbr>cd") == "abcd"
+    assert yw._clean("a<br>b") == "a b" and yw._clean("a<br/>b") == "a b" and yw._clean("<p>a</p><p>b</p>") == "a b"
+    assert yw._clean("a<foo>b") == "a b" and yw._clean("a<s>b</s>c<script>d</script>e") == "abc d e"
+    assert yw._clean("a &lt;b&gt; c") == "a <b> c" and yw._clean("x < y và y > z; a<5 và b>3") == "x < y và y > z; a<5 và b>3"
+    assert yw._clean("a<!-- ghi chú -->b") == "a b"
+    r = yw.parse_ddg('<a class="result__a" href="https://vi.example.org/x">Th<b>ủ</b> đô Việt Nam</a>'
+                     '<a class="result__snippet" href="x"><b>Thủ</b> đô <b>Việt</b> Nam hiện nay là Hà N<b>ộ</b>i.</a>')
+    assert r and r[0]["title"] == "Thủ đô Việt Nam" and r[0]["snippet"] == "Thủ đô Việt Nam hiện nay là Hà Nội."

@@ -102,9 +102,17 @@ def _domain(url):
         return ""
 
 
+# Thẻ định dạng CHỮ nằm giữa từ (vd DuckDuckGo tô đậm "Th<b>ủ</b> đô"): bỏ đi KHÔNG chèn dấu cách, nếu không sẽ thành "Th ủ đô".
+# Thẻ khối/xuống dòng (<br>, <p>, <li>...) và thẻ lạ vẫn thay bằng dấu cách để các từ không dính vào nhau.
+_INLINE_TAGS = r"b|strong|i|em|u|mark|span|a|abbr|cite|code|font|small|big|sub|sup|s|strike|wbr|bdi|bdo|q|dfn|kbd|samp|var|time"
+_INLINE_RE = re.compile(r"</?(?:%s)\b[^>]*>" % _INLINE_TAGS, re.I | re.S)
+# Chỉ coi là thẻ khi "<" đi liền chữ cái, "/", "!" hoặc "?": chữ như "1 < 2 và 3 > 2" (văn bản thuần) không bị nuốt mất.
+_TAG_RE = re.compile(r"<!--.*?-->|<[/!?]?[A-Za-z][^>]*>|<[!?][^>]*>", re.S)
+
+
 def _clean(s):
-    s = _html.unescape(re.sub(r"(?s)<[^>]+>", " ", str(s or "")))
-    return re.sub(r"\s+", " ", s).strip()
+    s = _TAG_RE.sub(" ", _INLINE_RE.sub("", str(s or "")))
+    return re.sub(r"\s+", " ", _html.unescape(s)).strip()
 
 
 def fmt_results(results, chars):
