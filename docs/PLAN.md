@@ -1,15 +1,18 @@
 # KẾ HOẠCH NÂNG CẤP Y-App + Adaptive-MoE
 
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
-> Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung).
+> Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung). Kế hoạch của hệ điều hành ở file riêng `YuiVieOSBeta/docs/PLAN.md` (xem mục 6).
 
-**Cập nhật:** 2026-11-15 · **Phiên bản kế hoạch:** v1 · **Tiến độ:** 18/52 (P0, P1 xong; P2: P2-1…P2-6 xong; P8-1, P8-6 xong; P8-7 `[~]` chờ bạn chạy notebook; kế tiếp P2-7)
+**Cập nhật:** 2026-11-16 · **Phiên bản kế hoạch:** v2 · **Tiến độ:** 18/70 (P0, P1 xong; P2: P2-1…P2-6 xong; P8-1, P8-6 xong; P8-7 `[~]` chờ bạn chạy notebook; kế tiếp P2-7). **v2 thêm 18 task chưa làm (P5-6, P9-1…P9-17), không đổi/bỏ task cũ nào**; tiến độ thật vẫn 18 task xong
 
-## ▶ TIẾP THEO (cập nhật 2026-11-15, để mở chat mới làm tiếp)
-1. **Bạn quyết "Chế độ Hybrid" nghĩa là gì** (Câu hỏi mở số 4 ở mục dưới; mình đã đề xuất: công tắc tổng, mặc định tắt, kèm ô Hugging Face token). Xong thì làm `P2-7`, sau đó `P2-8` (cập nhật chính sách quyền riêng tư).
-2. **Chạy notebook `yui_kaggle_4_cells.md` v6.6 với `PROFILE="thu"`** để có model đầu tiên (đặt `MODEL_LICENSE` sau khi đọc điều khoản data/teacher). Có model thì mới thử được cả chuỗi: tải từ Kho → nạp → hỏi Yui một câu cần tra web.
-3. Chưa xác nhận: tải `yui-q4` từ tab Kho và nạp được chưa; nút "Thử tìm web" với key/SearXNG thật.
-4. Sau đó: P3 (kho tri thức trong app) rồi P8-3…P8-5 (công cụ web `fetch`, chờ bạn duyệt đặc tả).
+## ▶ TIẾP THEO (cập nhật 2026-11-16, để mở chat mới làm tiếp)
+1. **Bạn quyết "Chế độ Hybrid" nghĩa là gì** (Câu hỏi mở số 4 ở mục dưới; mình đã đề xuất: công tắc tổng, mặc định tắt, kèm ô Hugging Face token). Xong thì làm `P2-7`, sau đó `P2-8` (cập nhật chính sách quyền riêng tư). *(Không đổi so với 2026-11-15; vẫn là việc đứng đầu.)*
+2. **Chạy notebook `yui_kaggle_4_cells.md` v6.6 với `PROFILE="thu"`** để có model đầu tiên (đặt `MODEL_LICENSE` sau khi đọc điều khoản data/teacher). Có model thì mới đo được P9-5, P9-6 và thử cả chuỗi: tải từ Kho → nạp → hỏi Yui một câu cần tra web.
+3. **Việc mới, không cần chờ quyết định nào, làm song song được** (từ đợt tư vấn 2026-11-16, xem mục 1b): `P9-4` (băm SHA-256 bằng lệnh phần cứng), `P9-8` (fuzz bộ đọc `.yui`), `P9-1` (đo mật độ số 0 của model t2), `P9-16` (đo tốc độ engine trên CPU không có AVX2). Cả bốn đều nhỏ, kiểm được ở máy mình (trừ phần ARM của P9-4), và không đổi hành vi nào của app.
+4. **Bạn trả lời 5 câu hỏi mới (Q6–Q10 ở cuối file)**; quan trọng nhất là **Q6** (kho tri thức P3 làm bằng Dart hay C++ dùng chung) vì nó quyết P3 đi hướng nào, nên **chưa làm P3-2/P3-3 cho tới khi bạn chọn**.
+5. Chưa xác nhận (giữ từ trước): tải `yui-q4` từ tab Kho và nạp được chưa; nút "Thử tìm web" với key/SearXNG thật.
+6. Sau đó: P3 (theo Q6) rồi P8-3…P8-5 (công cụ web `fetch`, chờ bạn duyệt đặc tả).
+7. **Về hệ điều hành:** kế hoạch của `YuiVieOSBeta` nằm ở file riêng (xem mục 6). Phase P5 của OS (tích hợp AI) vẫn **khoá** cho tới khi bạn nói đúng câu "Tích hợp AI vào hệ điều hành"; mình chưa kích hoạt và chưa kéo mã nào vào repo OS.
 
 **Mở chat mới:** gửi file này (`PLAN.md`) là đủ; mình tự lấy code từ hai repo public `BachDaThan/Y-App` và `BachDaThan/Adaptive-MoE`, chỉ xin thêm file khi một task thật sự cần. Báo mình: "làm tiếp từ mục ▶ TIẾP THEO".
 
@@ -22,10 +25,11 @@ Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử
 | P2 | Kho model (Model Hub) trong Y-App | 6/8 |
 | P3 | Kho tri thức ngay trong app (port RAG/Graphify) | 0/7 |
 | P4 | Tra Dataset đám mây (Cloud-Edge RAG) | 0/6 |
-| P5 | Mượn model chuyên theo câu hỏi (cấp model) | 0/5 |
+| P5 | Mượn model chuyên theo câu hỏi (cấp model) + thí nghiệm adapter | 0/6 |
 | P6 | Nghiên cứu ghép Expert (chưa cam kết) | 0/5 |
 | P7 | Phát hành + cập nhật tài liệu | 0/4 |
 | P8 | Phát sinh: sửa cài APK, tìm web nhiều nguồn, notebook huấn luyện, công cụ web (`fetch`) | 2/7 |
+| P9 | **Mới (2026-11-16, chờ bạn duyệt):** nâng cấp engine (băm phần cứng, khoá cú pháp công cụ, CAD, BITCOS), an toàn model, tiết kiệm pin, cổng nối hệ điều hành | 0/17 |
 
 ---
 
@@ -81,6 +85,36 @@ Mình đối chiếu từng ý với code thật. Kết luận chung: hướng �
 
 ---
 
+## 1b. ĐÁNH GIÁ ĐỢT TƯ VẤN THỨ HAI (2026-11-16)
+
+Gồm: 4 gợi ý "nâng cấp" đầu của Gemini (BITCOS, LoRA-MoE, CAD, SHA-256), bản Gemini phân tích Y-App + Adaptive-MoE, hai bản phân tích hợp nhất 3 dự án, và chuỗi tư vấn về hệ điều hành (shell POSIX, phần cứng thật, game, cập nhật A/B, phát hành ISO). Mình đối chiếu với **code thật của cả 3 repo (clone 2026-11-16)** và, với BITCOS, với nguồn công khai (arXiv 2609.16338 và bài The New Stack 2026-09-17). Phần chỉ liên quan hệ điều hành nằm ở `YuiVieOSBeta/docs/PLAN.md` §13; ở đây chỉ giữ cái chạm tới 2 repo này.
+
+**Cách đọc cột "Kiểm":** `đã kiểm` = mình tự đối chiếu code/nguồn; `tính tay` = mình tự tính, chưa đo; `chưa xác minh` = không tìm được nguồn hoặc không kiểm được, **đừng dựa vào**.
+
+| # | Ý được đề xuất | Đối chiếu thật | Quyết định |
+|---|---|---|---|
+| B1 | **BITCOS** thay cách đóng gói t2 (Gemini 1) | **Đã kiểm, có thật:** arXiv 2609.16338 (Intel, preprint 14/9/2026, chưa phản biện). Công thức: **2 − z bit/trọng số** (z = tỉ lệ số 0), lossless (giải ra đúng −1/0/+1). **1.485 là kết quả của checkpoint thưa nhất** trong 29 cái (z từ 29,7% đến 51,5%), không phải mức điển hình. Gemini sai/phóng đại ở 3 chỗ: (1) "số 0 chiếm 51,5%" là mức cao nhất đo được; (2) "nhanh hơn 1,28× trên CPU": nguồn tin ghi tới 18% trên CPU và 27% trên GPU Intel Xe2, toàn bộ trên phần cứng Intel, **chưa thử Arm**, và trên CPU Lunar Lake kernel 2-bit cố định còn **nhanh hơn** BITCOS; (3) "570 → 420 MB" không suy ra được từ công thức vì chỉ phần ma trận 2-bit nhỏ đi (tối đa z/2), scale/embedding/router giữ nguyên; model 1B BitNet của bạn chưa train (P8-7 cần 8–24 phiên) nên chưa có z thật. | **Giữ, làm thí nghiệm lưu trữ/tải** (P9-1 → P9-2 → P9-3). **Không hứa tăng tốc.** NEON không có lệnh `pdep` như AVX-512 nên giải mã dòng dấu nén trên điện thoại khó nhanh; vì vậy đề xuất dùng như định dạng truyền tải, giữ 2-bit + mmap lúc chạy |
+| B2 | **LoRA-MoE / adapter** thay P5/P6 (Gemini 2) | Hướng đúng và an toàn hơn P6-2 vì **cùng gốc**. Nhưng "mục lục v3 đã sẵn sàng nạp đè theo tên tensor" chỉ đúng một nửa: mục lục cho biết **vị trí**, engine hiện **không có đường nào cộng delta LoRA** (và gộp vào trọng số q4 thì phải lượng tử lại, mất chính xác ⇒ phải cộng song song lúc chạy). Kích thước "1,5–3 MB": **tính tay** cho profile hiện tại (d=256, 6 lớp, rank 16 trên qkv+o): r·(4D+2D)·6 ≈ 0,15 triệu tham số ≈ 0,3 MB fp16, nhỏ hơn Gemini nói. Tên "Route-Aware Adapter" **chưa xác minh được nguồn**. | **Thêm P5-6** (thí nghiệm Python trước, Go/No-Go so với mượn model nguyên và với lõi+RAG). Không đổi P5-3 |
+| B3 | **Context-Aware Decoding (CAD)** (Gemini 3) | Kỹ thuật có thật (theo hiểu biết của mình là bài 2023 của Shi và cộng sự; chưa tra lại), công thức của Gemini tương đương (1+α)·ctx − α·base. Gemini bỏ sót: (1) mỗi token chạy **2 lượt forward + 2 KV cache** ⇒ tốc độ giảm gần một nửa (mốc 187–240 tok/s ⇒ khoảng 100–120, **tính tay**); (2) bản gốc có ràng buộc "chỉ xét token có xác suất ≥ β·max" (thiếu nó dễ ra chữ vô nghĩa); (3) chưa có bằng chứng cho model 50M; (4) "không tốn một giây huấn luyện" đúng, nhưng tốn tốc độ chạy. | **Thêm P9-6**, tuỳ chọn mặc định TẮT, chỉ bật nếu đo thật có lợi |
+| B4 | **SHA-256 bằng lệnh phần cứng** (Gemini 4) | Đúng, rẻ, khớp hạn chế bạn tự ghi ở P2-4 (≈ 1 s/100 MB trên máy chủ, điện thoại chậm 3–5×). "Dưới 0,3 s cho 500 MB" hợp lý nếu có lệnh SHA2 phần cứng nhưng **sẽ bị giới hạn bởi tốc độ đọc đĩa**: cần đo trên điện thoại. Thêm: băm **sau khi tải xong** (thay vì vừa tải vừa băm bằng Dart) còn bỏ luôn việc băm lại phần dở khi tải tiếp. | **Thêm P9-4, làm sớm** |
+| B5 | Nối **Elastic k/W** với pin và nhiệt (Gemini bản 2, ý 2) | Engine **đã có `kcap`** (giới hạn k theo lần gọi). **Chưa có cửa sổ trượt W** (KV cố định trong [0, L); `elastic_ctx.py` chỉ phía Python/huấn luyện). Phía OS đã có `yui_telemetry_advise` (471 check) đưa khuyến nghị k/W. Ở Y-App chưa có cảm biến pin/nhiệt (thêm gói = rủi ro build như P8-2). | **P9-9** (chính sách thuần Dart + công tắc tay), **P9-10** (cảm biến thật, cần bạn đồng ý), **P9-11** (W trong engine, ưu tiên thấp vì L hiện chỉ 128–256) |
+| B6 | Model ML 5–10M tham số làm **bộ lập lịch qua `sched_ext`** (Gemini ý 3) | "09–10/2026 sched_ext đã hoàn thiện sub-scheduler": **chưa xác minh**. YuiVieOS dùng bộ lập lịch Rust tự viết (`yui-sched`), không dựa vào `sched_ext`; chưa có dữ liệu vết để huấn luyện; chạy suy luận trong đường lập lịch tăng độ trễ. | **Hoãn** (ghi ở OS §13) |
+| B7 | Công cụ `sys_*` gắn vào `yui_agent.py` (Gemini ý 4) | OS đã có thiết kế đúng chỗ: 5 công cụ OS MCP nằm trong `yuid` (C++) với thẻ năng lực HMAC + xác nhận + audit. Cài thẳng `sys_power/sys_proc` trong Python sẽ **vòng qua lớp năng lực**. | `yui_agent.py` chỉ là **client** gọi `yuid` qua `/run/yuid.sock`; không tự cài công cụ hệ thống |
+| B8 | **RISC-V RVV** + `libyui.a` gọi từ nhân Rust (Gemini ý 5) | riscv64 đã là target của OS; `yui.cpp` hiện có AVX2+FMA và NEON/dotprod, **còn lại là mã thuần** (đã kiểm: `detect_isa` chỉ chọn AVX2 hoặc scalar trên x86). RVV là tối ưu, không phải điều kiện chạy. Nhân Rust `no_std` **không link được** `libyui` (cần libc, luồng, mmap): engine chỉ chạy ở user-space qua `yuid`. | Chưa lập task; làm khi có QEMU `-cpu rv64,v=true` để đo |
+| B9 | **Khoá cú pháp `<tool>` ngay trong vòng sinh** (bản phân tích #1) | Hay, rẻ. Nhưng ép **cú pháp**, không ép **lựa chọn đúng**: "chính xác tuyệt đối 100%" là overclaim (model vẫn có thể gọi sai công cụ/sai đối số, và vẫn cần dạy nó **khi nào** gọi: P8-5). Phải áp mặt nạ cả ở bước kiểm của đoán trước token (`YUI_SPEC`). | **Thêm P9-5** |
+| B10 | **Chữ ký Ed25519 trong chân file `.yui`** (bản phân tích #2) | Mối đe doạ có thật nhưng nhỏ ở Y-App hiện tại: sha256/bytes/`arch_id` trong manifest chỉ bảo vệ khi **nguồn manifest đáng tin**, mà P2-6 cho người dùng **thêm nguồn tự chọn**. "Tiêm lệnh qua trọng số" không có cơ chế như mô tả; rủi ro thật là (1) lỗi bộ đọc file ⇒ **fuzz**, (2) model độc dùng công cụ: ở app chỉ có calc/time/search nên nhẹ, ở OS mới nặng và OS xử lý bằng thẻ năng lực **độc lập model**. **Đề xuất sửa:** chữ ký **tách rời trong manifest**, không đổi định dạng `.yui`; tái dùng Ed25519 đã qua vector RFC 8032 của YuiVieOSBeta; cùng một cách ký dùng được cho **bản cập nhật OS** (xem B17). | **Thêm P9-7** (chờ Q8) và **P9-8** (fuzz) |
+| B11 | **Nén KV-cache bằng ZRAM / "Zero-reload"** (bản phân tích #3) | Với model hiện tại KV chỉ ≈ 0,8–1,6 MB (L=128, d=256, 6 lớp: 2·128·256·6 số; **tính tay**), nên nén vô nghĩa; thứ tốn khi đổi model là **nạp trọng số** (33 MB). KV của model A **không dùng được** cho model B (khác trọng số). ZRAM là tính năng của nhân, app Android không có. Chỉ có giá trị ở OS với model cỡ 7B. | **Không đưa vào kế hoạch app**; chuyển backlog OS. Giữ lõi trong RAM khi mượn model đã nằm trong P5-3 |
+| B12 | **Graphify + BM25 + Vault thành thư viện C++17 dùng chung** (bản phân tích #4) | Lý do đúng (tránh duy trì 2 bản như `yui.cpp` từng bị: P0-1); C++ là thứ mình **chạy test được** (Dart/Flutter thì không); OS đã có bản tham chiếu đồ thị/vault ở `ai-bridge-yuid/reference/`. Cái giá: Graphify Python là mô-đun lớn (ứng viên → chấm sự kiện → thay cũ bằng mới → MMR), và phải sửa CI Y-App để biên dịch thêm file C++. **Bộ test vàng sinh từ Python (P3-1, P3-7) dùng chung được cho cả hai hướng nên làm trước.** | **Chờ Q6**; đã lập sẵn P9-12…P9-14 |
+| B13 | **Tự chưng cất khi máy nhàn rỗi** (bản phân tích #5) | Phần "gom trí nhớ vào đồ thị, dọn nhánh trùng" làm được rẻ. Phần "tự tạo cặp SFT để fine-tune ngay trên máy 2 GB" **không khả thi** (huấn luyện cần RAM/năng lực gấp nhiều lần chạy). Rủi ro: dữ liệu web bị tiêm lệnh có thể **nhiễm vào trí nhớ dài hạn**. | Backlog OS, chưa lập task |
+| B14 | **Chuyển Qwen 0.8B / Gemma 4 E2B / Phi-4-mini sang `.yui` bằng một "converter"** (Gemini, chuỗi cuối) | **Đánh giá thấp độ khó rất nhiều.** Engine chỉ chạy kiến trúc Adaptive-MoE: LayerNorm có bias, qkv gộp, router theo từng lớp, **`F = 2·D` cố định** (đã kiểm ở Sổ tay 4.1). Qwen/Gemma/Phi là họ dense kiểu Llama (RMSNorm, RoPE, GQA, SwiGLU, từ vựng ~150k, tokenizer khác): không phải việc của một script chuyển trọng số, mà là **thêm kiến trúc mới vào `yui.cpp`** (kèm kiểm đối chiếu PyTorch như P1-5). Tên/cỡ model Gemini nêu **chưa xác minh**; giấy phép từng model phải đọc. | **Không làm "converter".** Lập P9-17: khảo sát 3 đường (A chưng cất vào kiến trúc của bạn, đã có pipeline; B thêm kiến trúc dense vào engine, việc lớn; C backend GGUF thứ hai, ít việc nhất) rồi **bạn chọn** (Q11) |
+| B15 | "Máy yếu đời cũ": HP Compaq 800/8200 (Gemini) | Haswell (đời 4, ví dụ 800 G1) **có** AVX2+FMA ⇒ engine dùng đường nhanh. Sandy Bridge (đời 2, ví dụ 8200) **không có AVX2** ⇒ engine rơi xuống **mã thuần (`scalar`)**, chưa có đường SSE/AVX1. Chưa ai đo tốc độ đó. | **Thêm P9-16** (đo; chỉ viết đường SSE4.1/AVX1 nếu số đo cho thấy không đủ dùng) |
+| B16 | Shell POSIX lai AI, driver thật, TPM/Secure Boot, PQC, game/upscaler, A/B update, ISO bằng GitHub Actions | Thuộc hệ điều hành. Đã đối chiếu từng ý với `YuiVieOSBeta` (mã + kế hoạch): xem `YuiVieOSBeta/docs/PLAN.md` §13 (Đánh giá) và §14 (Phase P6 + backlog). Con số "độ hoàn thiện 45%/75%/90%/100%" và "sẵn sàng 50%/40%/10%/15%" của Gemini **không có phương pháp đo**, bỏ. | Xem file OS |
+| B17 | Ký manifest bản cập nhật OS bằng Ed25519, chung định dạng `make_manifest.py` (Gemini, chuỗi cuối) | Ý hay: **một cách ký cho cả Kho model lẫn bản cập nhật OS.** Lưu ý an ninh: Gemini đề xuất để khoá ký trong GitHub Secrets; kế hoạch OS (P4.7) nói khoá **ngoại tuyến**. Với một hệ điều hành đặt nặng bảo mật nên giữ khoá ngoại tuyến (xem OS §13). | P9-7 thiết kế **tổng quát** (không gắn cứng với model) để OS dùng lại |
+
+**Việc mình đã tự kiểm lần này (để bạn khỏi nghi):** clone 3 repo; `docs/PLAN.md` trên GitHub **trùng từng byte** file bạn gửi; biên dịch `yui.cpp` thành thư viện và liệt kê hàm xuất (**17 hàm** `yui_*`); tìm trong `yui.cpp` các từ khoá sha256/riscv/rvv/grammar/cad/sink: **không có**; đọc `detect_isa`; đọc `ARCHITECTURE`/`PLAN` và C-ABI của OS. **Chưa làm được:** chạy Flutter, chạy trên điện thoại, đo tốc độ trên CPU cụ thể.
+
+---
+
 ## 2. NGUYÊN TẮC THIẾT KẾ
 
 1. **Offline-first:** không mạng thì app chạy y như bây giờ. Mọi thứ mới chỉ là "tăng cường".
@@ -90,6 +124,8 @@ Mình đối chiếu từng ý với code thật. Kết luận chung: hướng �
 5. **Riêng tư:** không gửi nguyên văn chat ra mạng; chỉ từ khoá trung tính, hiện cho người dùng xem trước.
 6. **Tương thích ngược:** engine mới đọc v1/v2/v3; engine cũ gặp v3 phải báo lỗi gọn (đã có sẵn `die("phiên bản .yui không hỗ trợ")`).
 7. **Mỗi bước nhỏ, kiểm được, hoàn tác được.**
+8. **Đo trước, cam kết sau:** con số từ tư vấn bên ngoài (BITCOS, CAD, tốc độ băm…) phải có ô "đo trên máy bạn" và ngưỡng Go/No-Go **trước khi** vào README/app. Tính năng engine mới đều **mặc định TẮT** và khi tắt phải cho đầu ra **y hệt** bản cũ (so từng token).
+9. **Cú pháp công cụ có thể ép bằng engine; quyền công cụ do lớp hệ thống quyết, không do model.** Dù model tin cậy đến đâu, nội dung web/tệp có thể tiêm lệnh vào nó; vì vậy quyền gọi `sys_*` luôn đến từ thẻ năng lực của `yuid`, không từ việc model "muốn" gọi.
 
 ---
 
@@ -187,6 +223,8 @@ Mục tiêu: người dùng mở tab **Kho**, thấy danh sách model (từ `man
 
 Lý do: Cloud-Edge RAG cần "tra kho nội bộ trước" nhưng app hiện **không có** kho nào. Port bản **gọn**, tương thích định dạng thư mục của `yui_vault.py` để đổi máy chép là chạy.
 
+> **⚠ P3 đang chờ quyết định Q6 (cuối file).** Hai nhánh: **(a) Dart** như các task P3-2/P3-3 dưới đây, hoặc **(c) C++17 lõi chung** (P9-12…P9-14) dùng cho cả Y-App (qua FFI) và `yuid` của hệ điều hành. **P3-1 (đặc tả) và P3-7 (bộ test vàng sinh từ Python) dùng chung cho cả hai nhánh, nên làm trước.** Nếu chọn C++ thì P3-2, P3-3 đánh `[-]` (lý do: thay bằng P9-13) và phần Dart của P3-4/P3-5 chỉ còn là lớp nối FFI (P9-14). Mình nghiêng về C++ (lý do ở mục B12), nhưng đây là quyết định của bạn.
+
 - [ ] **P3-1 · Đặc tả kho trong app (thư mục `chat/ notes/ kb/ index/`, định dạng jsonl)**
   ✎ `docs/APP_KB.md` · 📥 `yui_vault.py` · 📤 `Adaptive-MoE/docs/APP_KB.md`
   ✅ Bạn duyệt; chốt có mã hoá ở bản đầu hay để P3-6.
@@ -264,6 +302,10 @@ Lý do: Cloud-Edge RAG cần "tra kho nội bộ trước" nhưng app hiện **k
   ✎ `bench_swarm.py` (bộ câu hỏi + chấm) · 📥 `bench.py`, `compare.py` · 📤 `Adaptive-MoE/bench_swarm.py`
   ✅ Bảng số: lõi / lõi+RAG / lõi+model chuyên. Nếu lõi+model chuyên không hơn lõi+RAG rõ rệt → đánh `[-]` phần mượn model và ghi lý do.
 
+- [ ] **P5-6 · Thí nghiệm adapter chuyên ngành cùng gốc (LoRA), thay thế/bổ sung P5-3 nếu Go** *(đề xuất 2026-11-16, mục B2)*
+  ✎ `exp_lora_domain.py` (adapter rank 8/16 trên qkv+o của checkpoint nền; huấn luyện trên một ngành nhỏ; đo loss/perplexity ngành đó và ngành chung) · 📥 `train_sft.py`, `adaptive_moe.py` · 📤 `Adaptive-MoE/exp_lora_domain.py`
+  ✅ Python/Kaggle thôi, không đụng `yui.cpp`/app. **Go (đề xuất)** khi adapter ≤ 1 MB đạt ≥ 90% mức cải thiện của model chuyên ngành nguyên (cùng bộ câu của P5-5) VÀ ngành chung xấu đi ≤ 2%. Nếu Go mới lập task mới: định dạng adapter riêng (magic `YUIA`, ràng buộc `tokenizer_sha256` + `arch_id` + hash checkpoint nền để không áp nhầm; engine **cộng song song** `x·Aᵀ·Bᵀ` ở f32, không gộp vào q4). Nếu No-Go đánh `[-]` và ghi lý do. Cần có model đầu tiên (P8-7) trước.
+
 ### P6 — Nghiên cứu ghép Expert (CHƯA CAM KẾT; chỉ làm sau khi P2–P5 ổn)
 
 Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới khi Go.
@@ -314,6 +356,77 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
   (1) `PROFILE` ở Ô1: `thu` (50M, 3 giờ) để có model đầu tiên sớm; `chinh` (150M, 12 giờ); `lon` (1B + BitNet, nhiều phiên). (2) Ô4 xuất `.yui` v3 có META + `manifest.json` (gộp model đang có trên repo Kho), tự đẩy lên Kho chỉ khi `PUBLISH_TO_HUB = True` (mặc định tắt, không tự tạo repo). (3) Chống tạo nhầm model mới khi repo đã có checkpoint (`FORCE_NEW` để ép). (4) Batch lấy từ profile thay vì cố định B=2. (5) App: độ dài kết quả công cụ theo ngữ cảnh model đang nạp (`toolResultCharsForCtx`: ≤128 → 120, lớn hơn → 300, khớp `TOOL_RESULT_CHARS` lúc tạo data). (6) Cài đặt: nút **Thử tìm web** chạy công cụ tìm web ngay trên máy, không cần model.
   ✅ Chạy Ô1→Ô4 với `PROFILE="thu"` ra file trong `hub/`; up lên Kho; trong app tải và nạp được; hỏi một câu cần tra web thì Yui gọi công cụ.
 
+### P9 — Nâng cấp engine, an toàn model, cổng nối hệ điều hành (đề xuất 2026-11-16)
+
+Phát sinh từ đợt tư vấn thứ hai (mục 1b). **Mọi task đều `[ ]` và chờ bạn duyệt.** Quy tắc chung: (1) không task nào đổi hành vi file `.yui` v1/v2/v3 cũ; (2) tính năng engine mới **mặc định TẮT** và khi tắt thì đầu ra **y hệt** bản cũ; (3) task nào sửa `yui.cpp` phải up **cả 2 repo cùng nội dung** (`Adaptive-MoE/yui.cpp` và `Y-App/native/yui.cpp`; job `sync-yui` đỏ tạm giữa hai lần up, up xong bấm Re-run); (4) ngưỡng Go/No-Go ghi "đề xuất" là mình tự đặt, bạn chỉnh được.
+
+**Nhóm A, làm ngay được, không chờ quyết định (nhỏ, an toàn):**
+
+- [ ] **P9-1 · Đo mật độ số 0 của model t2** (nền để quyết BITCOS)
+  ✎ `tools/t2_zero_stats.py` + `test_t2_zero_stats.py` (đọc `.yui` t2 bằng `yui_format.py` và `bitnet_pack.unpack_t2`; in z từng ma trận, z tổng, và số byte tiết kiệm ước tính ≈ z/2 trên phần 2-bit so với cả file) · 📥 `bitnet_pack.py`, `yui_format.py` · 📤 `Adaptive-MoE/tools/t2_zero_stats.py`, `Adaptive-MoE/test_t2_zero_stats.py`
+  ✅ Test với ma trận tổng hợp có z biết trước ra đúng z; bạn chạy trên **một model t2 thật** (kể cả model nhỏ thử) và dán bảng. **Go P9-2 khi** file nhỏ đi ≥ 10% sau khi trừ phần không đổi (đề xuất).
+
+- [ ] **P9-4 · `yui_sha256_file(path, out_hex)` bằng lệnh phần cứng (ARMv8 SHA2 / SHA-NI) + gọi qua FFI** *(mục B4)*
+  ✎ `yui.cpp` (cả 2 repo), `Y-App/lib/engine.dart` (binding), `Y-App/lib/services/hub_download.dart` (gọi trong isolate nền, băm **sau khi tải xong**), `Y-App/tools/hub_download_check.dart` · 📥 `yui.cpp`, `lib/engine.dart`, `lib/services/hub_download.dart` · 📤 các file trên
+  ✅ Khớp `hashlib` ở các độ dài biên (0, 1, 55, 56, 57, 63, 64, 65 byte; 1 triệu chữ `a`; file ≥ 100 MB) trên đường **thuần C** và (nếu máy mình có SHA-NI) đường SHA-NI. **Đường ARMv8 mình không chạy được** (không có phần cứng ở đây): chỉ kiểm trên CI/điện thoại của bạn, ghi rõ. Dò lệnh lúc chạy, không có thì dùng bản thuần C; không băm trên luồng giao diện; bạn đo 500 MB trên điện thoại (mốc hiện tại ≈ 15–20 s theo ghi chú P2-4 nhân 3–5). Giữ `Sha256` Dart làm dự phòng nếu FFI lỗi. **Chưa hứa con số "dưới 0,3 s"**: bị giới hạn bởi đọc đĩa.
+
+- [ ] **P9-8 · Fuzz bộ đọc `.yui`** *(mục B10)*
+  ✎ `tools/fuzz_yui.py` (+ test nhỏ cho CI): lấy file v1/v2/v3/t2 nhỏ, đột biến byte/cắt cụt/đổi độ dài/phá chân file `YUIX`, nạp bằng `yui.cpp` dựng với ASan+UBSan (g++) · 📥 `yui.cpp`, `yui_format.py` · 📤 `Adaptive-MoE/tools/fuzz_yui.py`, `Adaptive-MoE/test_fuzz_yui.py`, và `yui.cpp` (cả 2 repo) nếu tìm ra lỗi
+  ✅ 20 000 đột biến: không crash, không lỗi sanitizer (file hỏng chỉ được báo lỗi gọn); lỗi nào tìm ra thì sửa kèm test hồi quy. Mình chạy được ở máy mình. Đây là cách **trực tiếp** nhất để trả lời nỗi lo "file `.yui` giả khai thác tràn bộ đệm".
+
+- [ ] **P9-16 · Đo tốc độ engine trên CPU không có AVX2 (đường `scalar`)** *(mục B15)*
+  ✎ `tools/bench_isa.py` (ép `isa` bằng biến môi trường hoặc cờ thử nghiệm, chạy cùng model q4 ở `scalar` và `avx2+fma`, in tok/s) · 📥 `yui.cpp` (hàm `detect_isa`) · 📤 `Adaptive-MoE/tools/bench_isa.py`
+  ✅ Có bảng tok/s `scalar` so với `avx2+fma` trên máy mình, và **bạn chạy 1 lần trên máy thật không có AVX2** (ví dụ Sandy Bridge). **Chỉ khi** `scalar` < 20 tok/s trên model 50M q4 (đề xuất) thì lập task viết đường SSE4.1/AVX1; nếu không thì ghi `[-]`.
+
+**Nhóm B, engine (mặc định tắt):**
+
+- [ ] **P9-5 · Ràng buộc cú pháp `<tool>` ngay trong vòng sinh** *(mục B9)*
+  ✎ `yui.cpp` (cả 2 repo) + `test_yui_kernels.cpp`; `opts_json` thêm `"grammar":"tool"` + danh sách tên công cụ được phép (lấy từ `AgentTools`); `Y-App/lib/agent.dart` truyền danh sách · 📥 `yui.cpp`, `lib/agent.dart`, `test_yui_kernels.cpp` · 📤 các file trên
+  ✅ Tắt ⇒ đầu ra **y hệt** cũ (so từng token); bật ⇒ với logits ngẫu nhiên 10 000 lượt luôn ra chuỗi `<tool>tên đối số</tool>` hợp lệ hoặc không mở thẻ; chạy đúng khi đoán trước token bật; chậm thêm ≤ 5%. Ghi rõ trong tài liệu: chỉ bảo đảm **cú pháp**, không bảo đảm chọn đúng công cụ.
+
+- [ ] **P9-6 · Context-aware decoding (CAD) tuỳ chọn** *(mục B3)*
+  ✎ `yui.cpp` (cả 2 repo): `opts_json` thêm `cad_alpha` (mặc định 0) và `cad_beta` (mặc định 0,1; chỉ xét token có xác suất ≥ β·max), `bench_cad.py` (bộ ~50 câu tiếng Việt "đọc kết quả công cụ rồi trả lời" + chấm tự động xem câu trả lời có chứa đúng sự kiện không) · 📥 `yui.cpp`, `bench.py` · 📤 các file trên
+  ✅ α=0 ⇒ y hệt cũ; bảng α ∈ {0; 0,25; 0,5; 1} × tỉ lệ bám đúng sự kiện × tốc độ. **Go (đề xuất):** tăng ≥ 10 điểm % số câu bám đúng kết quả công cụ và tốc độ ≥ 0,45× mốc; không thì đánh `[-]`. **Cần model thật (sau P8-7)** thì số đo mới có nghĩa.
+
+- [ ] **P9-2 · (Nếu Go ở P9-1) Đặc tả `t2c` (BITCOS) trong `docs/YUI_FORMAT.md`** *(mục B1)*
+  ✎ `docs/YUI_FORMAT.md`: kiểu ma trận mới = bitmap vị trí khác 0 + dòng dấu nén, scale giữ nguyên. **Chốt:** dùng làm **định dạng truyền tải** (Kho: nhỏ hơn; app giải về t2 2-bit sau khi tải, giữ mmap) hay **định dạng chạy** (engine giải lúc nạp, mất mmap cho phần t2). Mình đề xuất truyền tải trước. Manifest có thể cần thêm `sha256_local` nếu file lưu trên máy khác file trên Kho. · 📤 `Adaptive-MoE/docs/YUI_FORMAT.md`
+  ✅ Bạn duyệt đặc tả.
+
+- [ ] **P9-3 · (Nếu Go) Cài `t2c`**
+  ✎ `bitnet_pack.py`/`export_yui.py` (`--quant t2c`), hàm chuyển t2c→t2 nằm trong `yui.cpp` (`yui_expand_t2c`), test · 📥 `bitnet_pack.py`, `export_yui.py`, `yui.cpp`, `yui_format.py` · 📤 các file trên (cả 2 repo cho `yui.cpp`)
+  ✅ Chuyển ngược ra **đúng từng bit** t2 gốc (nạp ra logits `max|diff| = 0`); dung lượng khớp 2 − z; file v1/v2/v3 cũ không đổi. Tốc độ chỉ **đo**, không cam kết.
+
+**Nhóm C, an toàn model và tiết kiệm pin:**
+
+- [ ] **P9-7 · Chữ ký Ed25519 tách rời trong manifest** *(mục B10, B17; chờ Q8)*
+  ✎ `make_manifest.py` (`--sign KEY`, trường `sig` = chữ ký trên chuỗi chuẩn hoá `sha256+bytes+arch_id`; thiết kế **tổng quát** để OS dùng lại cho bản cập nhật), `Y-App/lib/services/hub_service.dart` và `hub_download.dart` (kiểm), khoá công khai gắn trong app + cho người dùng thêm khoá của nguồn tự chọn; model không chữ ký vẫn tải được nhưng **cảnh báo rõ trên thẻ** · 📥 `make_manifest.py`, `hub_service.dart`, `hub_download.dart`; tái dùng mã Ed25519 đã qua RFC 8032 của YuiVieOSBeta (`kernel-services/ed25519.cpp`) nếu chọn đường C++ (thêm file vào build native ⇒ sửa `build-app.yml`); đường Dart thêm gói mật mã = rủi ro build · 📤 các file trên
+  ✅ Vector RFC 8032 khớp; manifest sửa 1 byte ⇒ từ chối; khoá lạ ⇒ cảnh báo; bản không ký dùng được khi người dùng xác nhận. **Khoá bí mật không bao giờ commit lên repo**, giữ ngoại tuyến.
+
+- [ ] **P9-9 · Chính sách "Tiết kiệm" cho k (theo pin/nhiệt) thuần Dart + công tắc tay** *(mục B5)*
+  ✎ `lib/services/power_policy.dart` (mới, Dart thuần), `lib/state.dart`, `lib/screens/settings_screen.dart`, `tools/power_policy_check.dart`; dùng `kcap` sẵn có · 📥 `lib/state.dart`, `lib/screens/settings_screen.dart` · 📤 các file trên
+  ✅ Bảng chân trị (pin < 20% **hoặc** nóng > 75 °C **hoặc** bật "Tiết kiệm" ⇒ k = 1; cắm sạc và mát ⇒ k tối đa của model) khớp ngưỡng của `ARCHITECTURE.md` §6.3 bên YuiVieOSBeta (cùng 20%/75 °C); đầu vào là tham số nên kiểm được bằng Dart SDK; chưa có cảm biến thì dùng công tắc tay.
+
+- [ ] **P9-10 · Cảm biến pin/nhiệt thật (Android + Windows)** — **chỉ khi bạn đồng ý (Q9)**: cần thêm gói hoặc MethodChannel trong CI (rủi ro build như P8-2). Nối vào `power_policy.dart` của P9-9.
+
+- [ ] **P9-11 · (ưu tiên thấp) Cửa sổ trượt W (sink + W) trong `yui.cpp`** — engine hiện giữ KV cố định trong [0, L); chỉ đáng làm nếu bạn huấn luyện model có L lớn hơn 256. 📥 `elastic_ctx.py`, `yui.cpp`. ✅ mô phỏng Python = engine từng logit.
+
+**Nhóm D, kho tri thức C++ (chỉ nếu Q6 = C++; ngược lại đánh `[-]` cả ba):**
+
+- [ ] **P9-12 · Đặc tả lõi kho tri thức C++17 (`kb_core`)**: gộp với P3-1 (một đặc tả cho cả Python, C++ và Dart) · 📤 `Adaptive-MoE/docs/APP_KB.md`
+- [ ] **P9-13 · `kb_core.cpp`: fold tiếng Việt + BM25 + Graphify** (thay P3-2/P3-3) · ✅ chạy đúng với bộ vàng sinh từ Python (P3-7), sai khác nhỏ được ghi lại; `make test` + pytest (ctypes) xanh; ngân sách ký tự được tôn trọng. Có thể tham khảo bản `fold` và đồ thị C++ đã có ở YuiVieOSBeta (`userspace-vi/text.cpp`, `ai-bridge-yuid/reference/graph.cpp`) nhưng **không giả định cùng định dạng**.
+- [ ] **P9-14 · Nối FFI Dart + `recall`/`note`** · ✎ `Y-App/native/…`, `lib/kb/kb_ffi.dart`, `lib/agent.dart`, `build-app.yml` (biên dịch thêm file) · ✅ `[~]` tới khi bạn build.
+
+**Nhóm E, cổng nối hệ điều hành và model lớn hơn:**
+
+- [ ] **P9-15 · Cổng gắn hệ điều hành (phía engine)** *(mục 6)*
+  ✎ `Makefile` (thêm mục tiêu `libyui_engine.so`/`.a`: đổi **tên file**, không đổi tên hàm, để không đụng `libyui` của OS), `yui.cpp` (cả 2 repo: thêm `yui_features()` trả JSON `{"sha256":…,"grammar":…,"cad":…,"abi":N}` để `yuid` biết engine có gì), `docs/OS_BRIDGE.md` · 📥 `Makefile`, `yui.cpp` · 📤 các file trên
+  ✅ `nm -D` liệt kê đủ **17 hàm hiện có** + `yui_features`; test C nhỏ nạp **cả hai thư viện** (`libyui` của OS và `libyui_engine`) trong một tiến trình bằng `dlopen(RTLD_LOCAL)` mà không đụng nhau (2 tên đang trùng: `yui_version`, `yui_free`; **cùng chữ ký, khác ngữ nghĩa** nên lỗi sẽ âm thầm).
+
+- [ ] **P9-17 · Khảo sát đường lên model lớn hơn** *(mục B14)*
+  ✎ `docs/BIG_MODEL_PATHS.md`: so 3 đường (A chưng cất vào kiến trúc Adaptive-MoE; B thêm kiến trúc dense vào `yui.cpp`; C backend GGUF thứ hai) theo: việc phải viết, rủi ro, RAM/tốc độ ước lượng cho máy 2–4 GB, giấy phép từng model ứng viên (phải đọc điều khoản, không đoán) · 📤 `Adaptive-MoE/docs/BIG_MODEL_PATHS.md`
+  ✅ Bạn chọn (Q11). Chưa viết dòng mã nào trước khi chọn.
+
+
 ---
 
 ---
@@ -332,6 +445,9 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 - Hàm xuất (`YUI_API`): `yui_version, yui_set_threads, yui_get_threads, yui_cpu_features, yui_load, yui_free, yui_info, yui_meta (JSON), yui_chat_begin, yui_chat_begin_img, yui_complete_begin, yui_gen_next, yui_gen_tokens, yui_gen_end, yui_vision_load/run/free`.
 - Biên dịch thư viện: `-DYUI_LIB -shared -fPIC -std=c++17` (Android arm64 qua NDK trong `build-app.yml`); CLI: `make` / `make portable`; test: `make test`.
 - Có sẵn: SIMD (AVX2+FMA / NEON / NEON+dotprod), nhóm luồng riêng, mmap (Android; Windows đọc vào RAM), đoán trước token (`YUI_SPEC`), router cấp token theo từng lớp, KV cache trong `[0, L)`.
+- **Chưa có** (đã grep `yui.cpp` ngày 2026-11-16): SHA-256 (băm đang làm bằng Dart ở `hub_download.dart`), nhánh RISC-V Vector, ràng buộc cú pháp lúc sinh, context-aware decoding, cửa sổ trượt W. **Đã có:** `kcap` (giới hạn k theo lần gọi). Trên x86 `detect_isa` chỉ chọn **AVX2+FMA hoặc `scalar`** (không có đường SSE/AVX1): CPU đời 2 trở về trước chạy mã thuần.
+- **Hàm xuất: đúng 17 hàm `yui_*`** (đã liệt kê bằng `nm -D` trên bản biên dịch thật): `version, set_threads, get_threads, cpu_features, load, free, info, meta, chat_begin, chat_begin_img, complete_begin, gen_next, gen_tokens, gen_end, vision_load, vision_run, vision_free`.
+- **Va chạm tên với hệ điều hành:** `libyui` của YuiVieOSBeta (`include/yui/yui.h`: pack/graph/telex/vault/telemetry/sandbox) là một thư viện **khác**, nhưng trùng hai tên hàm với engine này (`yui_version`, `yui_free`). Hai tên đó **cùng chữ ký nhưng khác ngữ nghĩa** (`yui_free` của OS giải phóng bộ nhớ malloc, của engine xoá `Model`), nên nếu hai thư viện cùng nằm trong một không gian ký hiệu thì **không có lỗi liên kết nào báo trước**, chỉ sai âm thầm. Xem P9-15.
 
 ### 4.3 Y-App (Flutter)
 - 4 tab: Chat · Lịch sử · Model · Cài đặt. `lib/engine.dart` = isolate nền + FFI. `lib/state.dart` = `ChatStore`, `ModelStore` (nhập file, tải link + token, xoá), `Settings`, `AppState`, kiểm tra cập nhật qua GitHub Releases (`kRepo = BachDaThan/Y-App`).
@@ -351,6 +467,11 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 - ~~Multi-range của CDN HF~~ → **đo thật (P2-1): CÓ.** `Range: bytes=0-99,1000-1099` trả `206` + `multipart/byteranges` từ CloudFront (506 byte cho 2×100 byte dữ liệu). Range đơn (tải tiếp khi đứt) cũng nằm trong khả năng đó. Lưu ý: P2 chỉ cần tải nguyên file + tải tiếp, **chưa cần** multi-range.
 - `datasets-server /search` dùng được trên dataset nào → **P4-1**.
 - Mọi tên bài báo/giảm độ trễ do Gemini nêu (Symphony-MoE, HARC, ADEPT, FineMoE, DynaExq…) → **P6**, coi là gợi ý đọc, không phải bằng chứng.
+- **BITCOS (cập nhật 2026-11-16, đã kiểm nguồn):** có thật (arXiv 2609.16338, Intel, preprint chưa phản biện). Công thức 2 − z bit/trọng số; z đo được 29,7%–51,5% trên 29 checkpoint; 1.485 là mức của checkpoint thưa nhất. Tăng tốc ghi nhận: tới 18% CPU / 27% GPU, **chỉ trên phần cứng Intel**, chưa thử Arm; trên một CPU Intel kernel 2-bit cố định còn nhanh hơn. **z của model của bạn: chưa đo (P9-1).**
+- Kích thước adapter LoRA ≈ 0,3 MB fp16 (d=256, 6 lớp, rank 16, qkv+o): **tính tay**, chưa đo (P5-6).
+- Kích thước KV cache ≈ 0,8 MB fp16 / 1,6 MB f32 (L=128, d=256, 6 lớp): **tính tay**.
+- Tốc độ khi bật CAD ≈ 0,5× (2 lượt forward): **ước lượng**, chưa đo (P9-6).
+- "`sched_ext` có sub-scheduler hoàn thiện 09–10/2026", "Route-Aware Adapter chứng minh trên 50–150M", tên/cỡ model Gemma 4 E2B / Qwen 3 Small / Phi-4-mini: **chưa xác minh**.
 
 ---
 
@@ -394,6 +515,7 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 | 2026-11-15 | P2-6 `[x]` | Bạn báo build xanh và **tab Kho quét được danh sách** sau bản sửa chuyển hướng tương đối |
 | 2026-11-15 | P8-6b lỗi chữ "Th ủ đô" | Bạn gửi kết quả "Thử tìm web": "Th ủ đô Việt Nam hiện nay là thành phố Hà Nội. Sau đây là danh sách… (vi.wikipedia.org)" (**tầng DuckDuckGo đã chạy thật**, vì đoạn trích kiểu "… hiểu theo n…" là của DuckDuckGo). **Nguyên nhân:** DuckDuckGo tô đậm từ khoá bằng `<b>` và có thể cắt giữa chữ (`Th<b>ủ</b> đô`); hàm làm sạch thay MỌI thẻ bằng dấu cách nên thành "Th ủ đô". Lỗi này mình mang nguyên từ `yui_web._clean` của Python sang Dart nên **cả bản PC lẫn app đều bị**. **Sửa cả hai:** thẻ định dạng chữ (`b, strong, i, em, u, mark, span, a, abbr, …`) được gỡ KHÔNG chèn dấu cách; thẻ khối/xuống dòng (`br, p, li…`) và thẻ lạ vẫn thành dấu cách; `<` chỉ coi là thẻ khi đi liền chữ cái/`/`/`!`/`?` nên chữ như `x < y và y > z` không còn bị nuốt (lỗi phụ mình tìm thấy khi viết test). **Kiểm:** Dart `web_search_check` **126 đạt** (thêm 9 ca, có ca đúng chuỗi tô đậm của DuckDuckGo), Python `test_yui_extra.py` **22 đạt** (thêm 1 test); thử đột biến quay lại cách cũ thì cả hai bộ kiểm báo hỏng. **Chưa kiểm:** trên máy bạn sau khi build (hãy hỏi lại cùng câu). 📤 `Y-App/lib/services/web_search.dart`, `Y-App/tools/web_search_check.dart`, `Adaptive-MoE/yui_web.py`, `Adaptive-MoE/test_yui_extra.py`, `Adaptive-MoE/docs/PLAN.md` |
 | 2026-11-15 | P8-6b `[x]` | Bạn xác nhận sau khi build: "Thử tìm web" trả "Thủ đô Việt Nam hiện nay là thành phố Hà Nội. Sau đây là danh sách các kinh đô/thủ đô - hiểu theo ng… (vi.wikipedia.org)", **chữ liền, hết lỗi "Th ủ"**. Bạn tạm dừng chat này để mở chat mới làm tiếp |
+| 2026-11-16 | Kế hoạch v2: đánh giá đợt tư vấn thứ hai + P5-6 + P9 + mục 6 | Đối chiếu 4 gợi ý của Gemini + 2 bản phân tích hợp nhất + chuỗi tư vấn hệ điều hành với code thật của 3 repo (xem mục 1b, 17 dòng đánh giá). **Kết luận chính:** (1) BITCOS **có thật** nhưng 1.485 bit là mức tốt nhất của 29 model và tăng tốc chỉ đo trên Intel, nên chỉ làm thí nghiệm sau khi **đo z của model bạn** (P9-1); (2) "converter Qwen/Gemma → .yui" **không phải việc của một script**: engine chỉ chạy kiến trúc Adaptive-MoE (`F = 2·D`, LayerNorm có bias…), cần chọn đường (P9-17, Q11); (3) nén KV-cache bằng ZRAM **vô nghĩa ở app** (KV ≈ 1 MB); (4) khoá cú pháp công cụ: tốt nhưng chỉ bảo đảm **cú pháp**; (5) **phát hiện thật ở code:** engine không có đường SSE/AVX1, máy CPU đời 2 chạy mã thuần (P9-16); và `libyui` của OS **trùng tên** (và 2 tên hàm, cùng chữ ký, khác ngữ nghĩa) với engine này (P9-15). **Thêm:** P5-6 (1 task), P9 (17 task); tổng 52 ⇒ 70 task. Không task nào cũ bị đổi mã hay bỏ; **P3-2/P3-3 treo chờ Q6**. 📤 `Adaptive-MoE/docs/PLAN.md`, `YuiVieOSBeta/docs/PLAN.md` |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 - **(4) "Chế độ Hybrid" của P2-7 nghĩa là gì?** Kho (`Settings.hubOn`) và "Tìm web nhiều nguồn" (`Settings.webMulti`) hiện đã có công tắc riêng. Đề xuất của mình: Hybrid là **một công tắc tổng** "Cho phép app dùng dịch vụ ngoài máy" ở Cài đặt (mặc định TẮT cho người mới; người dùng hiện có được giữ nguyên các lựa chọn đã bật): tắt = không gọi máy chủ nào ngoài mục đã nêu trong chính sách (cập nhật app, Wikipedia); bật = cho phép bật riêng Kho, tìm web nhiều nguồn và các mục sau này (P4). Kèm ô nhập Hugging Face token (tuỳ chọn, chỉ gửi tới máy chủ huggingface.co, lưu trên máy). **Chờ bạn xác nhận hoặc sửa.**
@@ -403,3 +525,24 @@ Chỉ chạy bằng Python trên Kaggle. Không đụng `yui.cpp`/app cho tới 
 3. ~~P2: repo model mặc định là repo nào, public hay private?~~ → **đã chốt: `BachDaThan/Yui-Models`, public**
 4. P3-6: có cần mã hoá kho ngay bản đầu không?
 5. P4-3: danh sách dataset cho phép ban đầu gồm những dataset nào?
+
+**Câu hỏi mới (2026-11-16, trả lời khi tới task liên quan; mình đã nêu nghiêng về đâu):**
+- **(6) P3: kho tri thức bằng Dart hay C++17 lõi chung?** Mình **nghiêng về C++** (P9-12…14): test được ở máy mình, OS dùng chung, không duy trì 2 bản. Đổi lại: viết lại Graphify (lớn) và sửa CI Y-App. Dart thì không đổi CI nhưng mình không biên dịch được. Làm P3-1 và P3-7 trước đều đúng cho cả hai.
+- **(7) P5-6: có làm thí nghiệm adapter LoRA không?** Đề xuất: có, nhưng **sau** khi có model đầu tiên (P8-7); chỉ Python.
+- **(8) Ký model Kho (P9-7):** chữ ký **tách rời trong manifest** (mình đề xuất, không đổi `.yui`) hay trong chân file `.yui` (như bản phân tích)? Và Ed25519 đường **C++** (tái dùng mã đã qua RFC 8032 của OS) hay **Dart** (thêm gói)? Mình nghiêng về C++ nếu Q6 cũng là C++.
+- **(9) Cảm biến pin/nhiệt (P9-10):** cho phép thêm gói/MethodChannel không? (rủi ro build như P8-2). Nếu chưa, chỉ làm công tắc tay (P9-9).
+- **(10) BITCOS:** đồng ý chỉ làm tiếp (P9-2, P9-3) **sau khi** P9-1 cho thấy file nhỏ đi ≥ 10%?
+- **(11) Model lớn hơn (P9-17):** sau khi đọc bản khảo sát mới chọn A (chưng cất vào kiến trúc của bạn), B (thêm kiến trúc dense vào engine) hay C (backend GGUF thứ hai). Chưa cần trả lời ngay.
+
+---
+
+## 6. CẦU NỐI VỚI HỆ ĐIỀU HÀNH YuiVieOS
+
+- **Repo OS:** `BachDaThan/YuiVieOSBeta`, nhánh `arena/17570fa8-yuivieos`. Kế hoạch riêng: `YuiVieOSBeta/docs/PLAN.md` (phase P0–P6). Hai file không trộn vào nhau; file này chỉ ghi phần chạm tới Y-App/Adaptive-MoE.
+- **Phase P5 của OS ("Tích hợp AI vào hệ điều hành") đang KHOÁ** theo quy định của chính file đó: chỉ chạy khi bạn nói đúng câu **"Tích hợp AI vào hệ điều hành"**. Mình chưa kích hoạt, chưa kéo mã nào vào repo OS; ở đây chỉ **chuẩn bị phía engine** để khi bạn ra lệnh thì không vướng.
+- **OS sẽ lấy gì từ 2 repo này:** `yui.cpp` (thành engine), định dạng `.yui` v3 (mmap), `yui_agent.py` (làm **client** gọi `yuid`), và (nếu Q6 = C++) `kb_core`.
+- **Hai phát hiện cần xử lý trước khi OS cắm engine vào (đã kiểm bằng code):**
+  1. **Hai thư viện cùng tên `libyui`.** Của OS (graph/vault/telex/telemetry/sandbox) và engine này (load/chat/gen) trùng tên file và trùng hai tên hàm (cùng chữ ký, **khác ngữ nghĩa**, nên sai sẽ âm thầm). Cách xử lý nhẹ nhất: engine build ra **`libyui_engine.so`** (đổi tên file, không đổi tên hàm, nên Y-App không phải sửa) và `yuid` nạp nó bằng `dlopen(RTLD_LOCAL)` + `dlsym` theo tên. Là task **P9-15**.
+  2. **Chạy tệp mô hình lạ ở dịch vụ nền.** Trong app, file `.yui` lỗi chỉ làm app sập; trong `yuid` (dịch vụ nền) hệ quả nặng hơn. Vì vậy **P9-8 (fuzz)** nên xong trước khi P5 của OS chạy.
+- **Điều kiện đề xuất từ phía repo này trước khi OS kích hoạt P5:** P9-15 xong; P9-8 xong; (khuyến nghị) P9-4 và P9-7 xong; ghim commit SHA của cả 2 repo vào `vendor/VERSIONS.lock` (đã có trong P5.2 của OS).
+- **Công cụ hệ thống (`sys_power`, `sys_proc`…) không nằm trong repo này.** Chúng ở `yuid` (C++) với thẻ năng lực; `yui_agent.py` chỉ gọi qua `/run/yuid.sock` (nguyên tắc 9).
