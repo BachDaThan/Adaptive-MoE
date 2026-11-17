@@ -234,7 +234,7 @@ class Graphify:
                     ents = entities(s)
                     # thực thể khái niệm: từ khoá hiếm (idf cao) trong câu, dạng không dấu
                     toks = [t for t in tokens(s, bigrams=False) if t.isascii() and len(t) >= 3 and not t.isdigit()]
-                    ents += ["c:" + t for t in sorted(set(toks), key=lambda t: len(rag.inv.get(t, ())))[:5]]
+                    ents += ["c:" + t for t in sorted(set(toks), key=lambda t: (len(rag.inv.get(t, ())), t))[:5]]
                     self._add(cid, s, ch["r"], ch["ts"], list(dict.fromkeys(ents)), fact_key(s) if ch["r"] in ("user", "note", "kb") else None, ch["c"], ch["p"])
                     n_new += 1
             self.mark = len(rag.chunks)
@@ -324,13 +324,14 @@ class Graphify:
             if not qset or not self.facts:
                 return {"context": "không tìm thấy trong lịch sử", "facts": [], "conf": 0.0, "intent": it}
             N = max(2, rag.N)
-            idf = {t: math.log(1 + N / (1 + len(rag.inv.get(t, ())))) for t in qset}
+            idf = {t: math.log(1 + N / (1 + len(rag.inv.get(t, ())))) for t in sorted(qset)}   # sắp xếp: kết quả giống nhau mọi lần chạy (không phụ thuộc PYTHONHASHSEED)
+            isum = lambda ts: sum(idf[t] for t in sorted(ts))   # cộng theo thứ tự cố định (số thực cộng khác thứ tự có thể lệch ở bit cuối)
             typed = {fold(w): w for w in _WORD.findall(q.lower()) if fold(w) != w}   # từ người dùng gõ CÓ DẤU: khi khớp phải đúng dấu ("hiệu" ≠ "hiểu")
 
             def covers(text):
                 ft = set(tokens(text, bigrams=False))
                 return {t for t in qset if (typed[t] in ft if t in typed else t in ft)}
-            qents = [e for e in entities(q)] + ["c:" + t for t in qset if ("c:" + t) in self.ent]
+            qents = [e for e in entities(q)] + ["c:" + t for t in sorted(qset) if ("c:" + t) in self.ent]
             # ---- 1. ứng viên ----
             cand = {}
             bm_chunks = {h["cid"]: h["score"] for h in rag.search(q, k=12)}
@@ -357,8 +358,8 @@ class Graphify:
             # ---- nhiều bước: sự kiện giai đoạn 1 (khớp từ trong câu hỏi) cho TÊN RIÊNG làm "cầu nối" sang sự kiện đích ----
             def lex_of(fid):
                 ft = set(t for t in tokens(self.facts[fid]["text"], bigrams=False) if t.isascii())
-                return sum(idf[t] for t in qset & ft) / (sum(idf.values()) or 1), ft
-            rare = sorted((t for t in qset if t in rag.inv), key=lambda t: -idf[t])[:2]   # từ HIẾM nhất của câu hỏi thường là từ chỉ quan hệ ("thân", "yêu", "đồng nghiệp")
+                return isum(qset & ft) / (sum(idf.values()) or 1), ft
+            rare = sorted((t for t in qset if t in rag.inv), key=lambda t: (-idf[t], t))[:2]   # từ HIẾM nhất của câu hỏi thường là từ chỉ quan hệ ("thân", "yêu", "đồng nghiệp")
             stage1 = sorted((fid for fid in cand if any(t in lex_of(fid)[1] for t in rare)) or cand, key=lambda fid: -(lex_of(fid)[0] + 0.5 * bm_chunks.get(self.facts[fid]["cid"], 0.0) / bm_max))[:6]
             bridges = {}
             for fid in stage1:
@@ -381,7 +382,7 @@ class Graphify:
             for fid in cand:
                 f = self.facts[fid]
                 ft = set(t for t in tokens(f["text"], bigrams=False) if t.isascii())
-                lex = sum(idf[t] for t in covers(f["text"])) / (sum(idf.values()) or 1)
+                lex = isum(covers(f["text"])) / (sum(idf.values()) or 1)
                 eo = sum(1.0 / math.sqrt(1 + len(self.ent.get(e, ()))) for e in f["ents"] if e in qents) / (len(qents) or 1) if qents else 0.0
                 gr = sum(ppr.get(e, 0.0) for e in f["ents"]) / math.sqrt(1 + len(f["ents"]))
                 bm = bm_chunks.get(f["cid"], 0.0) / bm_max
@@ -435,7 +436,7 @@ class Graphify:
                     break
                 chosen.append(best)
                 covered |= covers(self.facts[best]["text"])
-                cov = sum(idf[t] for t in covered) / (sum(idf.values()) or 1)
+                cov = isum(covered) / (sum(idf.values()) or 1)
                 if cov >= 0.9 and len(chosen) >= (2 if it in ("list", "history") else 1) and it != "list":
                     break
             if it == "history":   # hỏi về quá khứ: thêm giá trị CŨ NHẤT của thuộc tính (lúc đầu/ban đầu), giữ cả bản hiện tại để model thấy diễn tiến
@@ -455,7 +456,7 @@ class Graphify:
             # ---- 4. độ tự tin ----
             cov_ents = {e for fid in chosen for e in self.facts[fid]["ents"]}
             got = {t for fid in chosen for t in covers(self.facts[fid]["text"])}
-            cov = sum(idf[t] for t in got) / (sum(idf.values()) or 1)
+            cov = isum(got) / (sum(idf.values()) or 1)
             cov = max(cov, 0.5 * len(set(qents) & cov_ents) / (len(qents) or 1) if qents else 0)
             conf = round(min(1.0, 0.7 * cov + 0.3 * min(1.0, top)), 2)
             # từ khoá phân biệt nhất của câu hỏi ("cáo", "căn cước", "xe máy") mà KHÔNG sự kiện nào chứa -> thông tin chưa từng được kể: từ chối thay vì đưa nhiễu cho model bịa
