@@ -108,7 +108,23 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 
 ---
 
-## G. Cổng "Public" (nối OS P7.4)
+## G0. Hai mức áp dụng: Lite (dự án đam mê, miễn phí) và Full
+
+Bạn làm để chia sẻ miễn phí, không thương mại: rủi ro và nghĩa vụ **thấp hơn nhiều** so với một công ty bán dịch vụ AI. Nhưng mình **không kiểm chứng được** câu "được miễn gần hết" hay "bỏ qua NĐ 330", và có một điểm cụ thể làm câu "không cầm dữ liệu của ai" chưa đúng (§E3). Phần rủi ro lớn nhất còn lại là điều khoản của **dịch vụ bên thứ ba** (§C), không phụ thuộc bạn có thương mại hay không.
+
+**Lite, làm trước lần Public đầu (mỗi việc nhỏ):**
+1. P9-21: cài mới thì mạng ngoài mặc định TẮT (sửa `webMulti`, đổi dòng chính sách cho khớp).
+2. P9-19 (phần nhẹ): **không đăng model lên Kho công khai** nếu dữ liệu train sinh từ Gemini/Cohere/OpenRouter/Mistral mà bạn chưa đọc điều khoản hiện hành cho phép; model train từ nguồn mở (Wikipedia, fineweb-2) thì đăng được kèm `license` + `DATA_SOURCES.md`. Dùng 9 khoá Gemini để làm model riêng của bạn thì không đụng việc này.
+3. P9-23: tầng cào web không API và `curl_cffi` chỉ bật bằng cờ môi trường.
+4. P9-22 (phần nhẹ): thay chỗ dẫn Nghị định 13/2023 đã lỗi thời; ghi rõ "bản mẫu, chưa luật sư rà".
+5. P9-24/OS P7.3: quét bí mật; OS P7.9: dòng "AS-IS, mục đích học tập/nghiên cứu, không dùng cho y tế/pháp lý/tài chính" ở đầu README.
+6. Giữ giấy phép MIT (không cần đổi; xem OS `PLAN.md` C58).
+
+**Full, chỉ khi thương mại hoá, đóng ISO/thiết bị, có người dùng lớn hoặc có khiếu nại:** hỏi luật sư theo §F, OS P7.6–P7.8, toàn bộ §G.
+
+---
+
+## G. Cổng "Public" đầy đủ (mức Full; nối OS P7.4)
 
 Chỉ bấm Public (repo, Releases, Kho model, store) khi **tất cả** đúng và có bằng chứng:
 
