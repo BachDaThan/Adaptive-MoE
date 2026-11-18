@@ -22,7 +22,8 @@ from yui_vault import Workspace  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def fresh():
+def fresh(monkeypatch):
+    monkeypatch.setenv("YUI_ALLOW_SCRAPE", "1")   # các test cũ kiểm tầng cào HTML; chính sách mặc định có test riêng ở test_yui_web_policy.py
     yw.reset_state()
     for k in list(os.environ):
         if k.split("_")[0] in ("TAVILY", "EXA", "LINKUP", "FIRECRAWL") or k == "YUI_SEARXNG":

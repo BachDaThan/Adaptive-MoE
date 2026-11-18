@@ -22,12 +22,25 @@ import os
 import random
 import re
 import threading
+import sys
 import time
 import urllib.parse
 
 PROVIDERS = ("tavily", "exa", "linkup", "firecrawl", "braveapi", "gcse")
 ENV = {"braveapi": "BRAVE_SEARCH", "gcse": "GOOGLE_CSE"}   # tiền tố biến môi trường nếu khác tên tầng
 SCRAPERS = ("ddg", "brave", "bing", "google")
+_WARNED = []
+
+
+def scrape_allowed(cfg=None):
+    """Tầng đọc HTML công cụ tìm kiếm KHÔNG qua API (DuckDuckGo/Brave/Bing/Google) và việc giả dấu vân tay TLS (curl_cffi)
+    có thể trái điều khoản của các trang đó. Mặc định TẮT: chỉ chạy khi đặt YUI_ALLOW_SCRAPE=1 (hoặc cfg allow_scrape=true).
+    Khi bật, in cảnh báo một lần. Bản dùng cá nhân của bạn vẫn chạy được bằng cờ này."""
+    on = os.environ.get("YUI_ALLOW_SCRAPE") == "1" or bool((cfg or {}).get("allow_scrape"))
+    if on and not _WARNED:
+        _WARNED.append(1)
+        print("[yui_web] CẢNH BÁO: đang bật tầng đọc HTML không API; có thể trái điều khoản của DuckDuckGo/Brave/Bing/Google. Bạn tự chịu trách nhiệm.", file=sys.stderr)
+    return on
 DEFAULT_ORDER = ["tavily", "exa", "linkup", "firecrawl", "braveapi", "gcse", "ddg", "brave", "bing", "searxng", "wikipedia", "kb"]   # google: bật bằng web.google=true hoặc thêm vào web.order
 BASES = {"braveapi": "https://api.search.brave.com", "gcse": "https://www.googleapis.com", "brave": "https://search.brave.com", "bing": "https://www.bing.com", "google": "https://www.google.com",
          "tavily": "https://api.tavily.com", "exa": "https://api.exa.ai", "linkup": "https://api.linkup.so", "firecrawl": "https://api.firecrawl.dev",
@@ -482,6 +495,8 @@ class WebSearch:
         for tier in order:
             if time.monotonic() - t0 > budget:
                 break
+            if tier in SCRAPERS and not scrape_allowed(self.cfg):
+                continue   # tắt mặc định (xem scrape_allowed); không ghi vào "tried" vì chưa hề thử
             try:
                 if tier in PROVIDERS:
                     res = self._keyed(tier, q, n)
