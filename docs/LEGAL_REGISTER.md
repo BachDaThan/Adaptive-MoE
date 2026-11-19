@@ -5,6 +5,8 @@
 > Đặt tại `Adaptive-MoE/docs/LEGAL_REGISTER.md` (một bản duy nhất, như `PLAN.md`). Kế hoạch: `docs/PLAN.md` nhóm P9-F (phía AI) và `YuiVieOSBeta/docs/PLAN.md` Phase P7 (phía OS).
 >
 > **Tạo:** 2026-11-17 · **Quy tắc tuổi bản kiểm:** luật ở Việt Nam đổi nhanh (Nghị định xử phạt 330/2026 ra đời tháng 8/2026, sau hai nghị định hướng dẫn). Một dòng "đã kiểm" chỉ có giá trị nếu **ngày đọc ≤ 90 ngày** tại thời điểm bấm Public; quá hạn thì đọc lại.
+>
+> **Cập nhật 2026-11-19:** thêm **§I** (Android/Windows tương thích, game, nhiều phiên, Kho Ứng Dụng, lọc quảng cáo, server/NAS — từ hai tệp tư vấn mới của Gemini), 6 dòng ở §C, 1 dòng ở §D, câu hỏi 11–14 ở §F, mục 7 ở §G0 và 3 ô ở §G. **Không dòng nào ở §A–§E cũ bị đổi.**
 
 Ký hiệu trạng thái: ✅ đã kiểm (có nguồn + ngày) · 🟡 đã thấy văn bản tồn tại nhưng **chưa đọc điều khoản gốc** · ❓ chưa kiểm · ⚖️ phải hỏi luật sư.
 
@@ -64,6 +66,12 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 | Wikipedia (vi) | `search`, dữ liệu train | CC BY-SA 4.0, ghi công bằng tên miền nguồn (đã có) | ✅ | Giấy phép **chia sẻ tương tự** có thể ảnh hưởng nhãn giấy phép của model/dữ liệu dẫn xuất: ⚖️ |
 | fineweb-2 / Common Crawl | Dữ liệu pre-train | Chưa đọc giấy phép dataset và điều khoản nguồn | ❓ | Ghi vào `DATA_SOURCES.md` từng model (P9-19) |
 | Model giáo viên/nền (Qwen, Gemma, Phi…) nếu dùng | Chưng cất (P9-17, chưa chọn) | Chưa đọc | ❓ | **Đọc điều khoản trước khi chọn đường**, không đoán |
+| **Google Play / Play Integrity API** | Ứng dụng Android trong Waydroid-lite (OS P3.4); nguồn APK | Tư vấn nói Google dùng thêm tín hiệu thiết bị (`recentDeviceActivity`, `deviceRecall`) và chứng thực phần cứng; **chưa đọc bản gốc** | ❓ | Đọc điều khoản Google Play + Play Integrity; OS **không** giả mạo (OS P7.10) |
+| **Minecraft (Mojang/Microsoft): EULA và hướng dẫn sử dụng** | OS P6.27 (Bedrock APK); server Bedrock/Java (backlog) | Chưa đọc. Cần xác nhận: sửa bản chạy (bản vá/MB Loader), tải bản vá của bên thứ ba, vận hành server công khai/thu phí | ❓ ⚖️ | Đọc bản hiện hành, ghi ngày; OS không bundle và không trỏ bản vá |
+| **mcpelauncher** (minecraft-linux) | OS P6.27: mốc so sánh trên Linux host | Giấy phép chưa kiểm; cách nó lấy APK bằng đăng nhập Google Play: **chưa đọc** điều khoản | ❓ | Chỉ tham chiếu/đo; không tích hợp |
+| **Danh sách chặn tên miền** (StevenBlack/hosts, OISD, AdGuard…) | OS P4.18 | StevenBlack: MIT theo hiểu biết của mình, chưa kiểm hôm nay; danh sách khác chưa biết | ❓ | Đọc từng cái; mặc định TẮT; không đóng gói |
+| **Ứng dụng trong Kho Ứng Dụng** (trình duyệt, Zalo, …) | OS P4.15 | Mỗi ứng dụng một điều khoản/nhãn hiệu; chưa đọc | ❓ | Ghi vào manifest: nguồn chính thức, giấy phép, ngày đọc (OS P7.11) |
+| **Điều khoản của game/ứng dụng bạn chạy** (đa tài khoản, giả vùng, công cụ ngoài, chạy trên máy ảo) | Người dùng chạy trong OS | Thường cấm; từng game khác nhau; chưa đọc cụ thể | ❓ | README không quảng bá; người dùng tự theo (OS P7.10) |
 
 ---
 
@@ -75,6 +83,7 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 | Lõi OS Tầng 1–2: không dependency ngoài, **máy giữ** (`scripts/verify.py::check_kernel_dependencies`, OS P0.14) | ✅ |
 | Thư viện Dart/Flutter của Y-App | `legal/THIRD_PARTY_NOTICES.md` có; đối chiếu với `pubspec.lock` khi phát hành (P9-22) |
 | Thành phần ngoài dự kiến ở OS Phase P3/P6: Wine, VKD3D-Proton, DXVK, Waydroid, Box64, FEX-Emu, MangoHud | ❓ **chưa đọc giấy phép** (OS P7.2). Quy tắc: chưa có dòng trong `THIRD-PARTY.md` thì không được vào bản build nào. Không đóng gói bản Windows, Google Mobile Services hay thành phần đóng nguồn không được phép phân phối lại |
+| Thành phần dự kiến thêm (OS, 2026-11-19): bộ dịch mã ARM64→x86_64 (libhoudini độc quyền; libndk_translation chưa kiểm), SDL_GameControllerDB, Samba, WireGuard (module nhân Linux khách), danh sách chặn tên miền | ❓ chưa đọc giấy phép; ghi ở OS `THIRD-PARTY.md` §5. Quy tắc cứng: **bộ dịch mã đóng nguồn, Google Mobile Services và bản vá game không bao giờ nằm trong ISO hay manifest mặc định** |
 | Phần mềm gọt bởi Smart App Stripper | Chỉ gọt **cục bộ trên bản người dùng đã có**; không phân phối lại (OS §3 lưu ý P1) |
 
 ---
@@ -105,6 +114,10 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 8. Đóng gói/liên kết thành phần (L)GPL (Wine, VKD3D-Proton, Waydroid) cùng ISO: nghĩa vụ cung cấp mã nguồn.
 9. Điều khoản miễn trừ trách nhiệm có hiệu lực đến đâu khi AI điều khiển hệ thống và gây mất dữ liệu?
 10. Nhãn hiệu "Yui", "YuiVieOS" (tra cứu trước khi dùng thương mại).
+11. Một OS cho chạy nhiều phiên Android cách ly + mạng riêng từng phiên (không có giả mạo thiết bị): nhà phát hành game thường cấm đa tài khoản/giả vùng/chạy trên máy ảo. Tác giả có rủi ro gì khi là bên cung cấp công cụ quản trị chung này không?
+12. Kho Ứng Dụng chỉ trỏ tới nguồn chính thức (trình duyệt, Zalo, Minecraft…) và `yui-trim` gọt cục bộ bản người dùng vừa tải: có vấn đề giấy phép/nhãn hiệu không?
+13. Mở server/NAS cho người ngoài nhà (trò chơi, chia sẻ tệp): nghĩa vụ theo quy định về dịch vụ trò chơi điện tử trên mạng (mình biết có, chưa đọc) và về dữ liệu cá nhân của người khác lưu trên máy bạn?
+14. Lọc tên miền quảng cáo ở cấp hệ điều hành (mặc định tắt) và nạp danh sách của bên thứ ba: giấy phép từng danh sách; có rủi ro điều khoản từ các dịch vụ bị chặn không?
 
 ---
 
@@ -119,6 +132,7 @@ Bạn làm để chia sẻ miễn phí, không thương mại: rủi ro và ngh�
 4. P9-22 (phần nhẹ): thay chỗ dẫn Nghị định 13/2023 đã lỗi thời; ghi rõ "bản mẫu, chưa luật sư rà".
 5. P9-24/OS P7.3: quét bí mật; OS P7.9: dòng "AS-IS, mục đích học tập/nghiên cứu, không dùng cho y tế/pháp lý/tài chính" ở đầu README.
 6. Giữ giấy phép MIT (không cần đổi; xem OS `PLAN.md` C58).
+7. OS P7.10 + P7.11: README/điều khoản nêu rõ **không giả mạo/không né kiểm tra**, không quảng bá "treo/cày acc"; Kho Ứng Dụng chỉ trỏ nguồn chính thức; danh sách chặn mặc định TẮT và đã đọc giấy phép.
 
 **Full, chỉ khi thương mại hoá, đóng ISO/thiết bị, có người dùng lớn hoặc có khiếu nại:** hỏi luật sư theo §F, OS P7.6–P7.8, toàn bộ §G.
 
@@ -136,6 +150,9 @@ Chỉ bấm Public (repo, Releases, Kho model, store) khi **tất cả** đúng 
 - [ ] Nhãn "do AI tạo" + cảnh báo rủi ro cao hiển thị (P9-20, OS P7.6).
 - [ ] `THIRD-PARTY.md`/`THIRD_PARTY_NOTICES.md` khớp thành phần thật trong bản phát hành (OS P7.2).
 - [ ] Trang tải giải thích cảnh báo SmartScreen/Android do khoá tự ký.
+- [ ] Không có tính năng/tài liệu nào quảng bá giả mạo thiết bị, né kiểm tra hay treo/cày nhiều tài khoản; máy kiểm trong `verify.py` đã chạy xanh (OS P7.10).
+- [ ] Kho Ứng Dụng: mỗi mục có nguồn chính thức + giấy phép + ngày đọc (≤ 90 ngày); không mirror; danh sách chặn mặc định TẮT (OS P7.11).
+- [ ] Nếu mở dịch vụ ra Internet: OS P7.12 đã có ý kiến bằng văn bản (mức Full).
 - [ ] Câu hỏi §F đã có câu trả lời bằng văn bản hoặc được ghi rõ "chấp nhận rủi ro".
 
 ---
@@ -143,3 +160,20 @@ Chỉ bấm Public (repo, Releases, Kho model, store) khi **tất cả** đúng 
 ## H. Ngoài phạm vi 3 repo nhưng cùng rủi ro (bot Yui trên Discord, HF free tier)
 
 Bot Yui là dự án riêng, không thuộc kế hoạch này, nhưng: (1) nếu dùng Gemini API thì điều khoản ở §C (người dưới 18, model cạnh tranh, dịch vụ miễn phí dùng nội dung để cải thiện sản phẩm) áp dụng nguyên si, và Discord có người dùng nhỏ tuổi; (2) lịch sử chat nằm trên máy chủ ở nước ngoài ⇒ chuyển dữ liệu ra ngoài lãnh thổ; (3) NĐ 330/2026 có hiệu lực ngay. Nếu bạn muốn, mình lập kế hoạch pháp lý riêng cho bot.
+
+---
+
+## I. Tương thích Android/Windows, game, nhiều phiên, Kho Ứng Dụng, lọc quảng cáo, server/NAS (thêm 2026-11-19)
+
+Nguồn: hai tệp tư vấn mới của Gemini (xem OS `PLAN.md` §13 C60–C79). **Mình không kiểm chứng các câu "hoàn toàn hợp pháp / không vi phạm điều luật nào" của Gemini** (cùng lý do ở cuối §A).
+
+| # | Chủ đề | Đã biết / chưa kiểm | Trạng thái | Việc cần làm | Task |
+|---|---|---|---|---|---|
+| I1 | Nhiều tài khoản, giả vùng, né kiểm tra thiết bị | Gemini tự nói: container/VM trên PC **không** qua được Play Integrity và **không nên** giả IMEI/ID/anti-cheat. Điều khoản game thường cấm đa tài khoản/giả vùng/chạy trên máy ảo; **chưa đọc từng game** | ⚖️ | OS không có tính năng giả mạo (máy kiểm); README không quảng bá; người dùng tự theo điều khoản | OS P7.10 |
+| I2 | Bộ dịch mã ARM64→x86_64 và Google Mobile Services | libhoudini: độc quyền; Google Mobile Services: độc quyền; libndk_translation: **chưa kiểm**. Quy tắc "không đóng gói" đã khoá ở OS `THIRD-PARTY.md` §1 | ✅ quy tắc · ❓ giấy phép gốc | Chỉ cung cấp cơ chế nạp; người dùng tự tải | OS P3.20, P7.2 |
+| I3 | Minecraft và bản vá (Patched APK/MB Loader, shader) | Bản Microsoft Store là gói Windows (tư vấn; chưa kiểm). APK: người dùng tự mua. Điều khoản Minecraft về sửa bản chạy/bản vá bên thứ ba: **chưa đọc** | ❓ ⚖️ | Đọc EULA hiện hành; OS không bundle, không trỏ bản vá; không nói "an toàn tuyệt đối" | OS P6.27 |
+| I4 | Kho Ứng Dụng 1 chạm | Chỉ trỏ tới nguồn chính thức, không mirror; gọt cục bộ (đã nêu ở §D); tên/logo thương hiệu chỉ dùng để chỉ đúng sản phẩm; ví dụ Zalo: chưa kiểm | ❓ ⚖️ (F12) | Ghi nguồn + giấy phép + ngày đọc vào manifest | OS P4.15, P7.11 |
+| I5 | Lọc tên miền quảng cáo/theo dõi ở cấp OS | Tính năng phổ biến, nhưng rủi ro thật là: giấy phép từng danh sách, làm hỏng trang, trình duyệt đi vòng bằng DoH. Không giải mã HTTPS (không MITM). Mặc định TẮT, tắt được (tổng / ứng dụng / tên miền / tạm tắt) | ❓ (F14) | Đọc giấy phép danh sách; ghi trong `terms_vi.md` (đã thêm) | OS P4.18, P7.11 |
+| I6 | Server / NAS / mở cổng ra Internet | Ràng buộc nhà mạng (cổng, CGNAT), điều khoản phần mềm máy chủ, quy định về dịch vụ trò chơi điện tử trên mạng (**chưa đọc**), dữ liệu của người khác lưu trên máy bạn (Luật BVDLCN). Mặc định từ chối vào, không UPnP tự động | ⚖️ (F13) | Chỉ làm khi bạn mở dịch vụ cho người ngoài nhà | OS P6.29, P7.12 |
+| I7 | Lập chỉ mục AI trên NAS (`yui_kb`) | Nếu thư mục chứa tệp của người khác trong nhà: đây là xử lý dữ liệu cá nhân của họ | ⚖️ | **Theo thư mục/từng người, mặc định TẮT**, có nút xoá chỉ mục; hỏi lại sau khi có luật sư | Backlog OS §14.2 |
+| I8 | Tác tử AI điều khiển phiên Android/cài app/mở cổng | Luật AI 134/2025 có điều khoản về giám sát của con người (đã ghi ở §A). Thiết kế: Yui chỉ tạo **yêu cầu**, người dùng bấm xác nhận (P4.13); không macro/tự bấm trong game | 🟡 | Giữ nguyên thiết kế khi P5 mở | OS P5.18 |
