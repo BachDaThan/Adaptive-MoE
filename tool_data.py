@@ -163,7 +163,7 @@ def main():
     ap.add_argument("--direct", default=None)
     ap.add_argument("--result_chars", type=int, default=300, help="độ dài tối đa kết quả công cụ (khớp result_chars của yui_agent)")
     import tool_data_x
-    ap.add_argument("--mix", default=tool_data_x.DEFAULT_MIX, help="tỉ lệ các loại (calc,time,search,direct,py,recall,note,skill,mkskill,chain; 0 = tắt)")
+    ap.add_argument("--mix", default=tool_data_x.DEFAULT_MIX, help="tỉ lệ các loại (calc,time,search,direct,py,recall,note,skill,mkskill,chain,os; 0 = tắt)")
     ap.add_argument("--ctx", type=int, default=0, help="số token ngữ cảnh --L của model: bỏ hội thoại dài hơn ≈ ctx × 2,4 ký tự (0 = không lọc)")
     ap.add_argument("--out_dir", default="tool_out")
     ap.add_argument("--tag", default=None, help="cỡ model (vd 50M): up vào Fine-tune/<tag>/ theo số kế tiếp")

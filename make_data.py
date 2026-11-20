@@ -1160,7 +1160,7 @@ def make_plan(params, have_pairs, have_tokens, tokens_per_file):
 
 _TOOL_HAVE = 0   # số hội thoại công cụ đã có (count_existing điền)
 _NEW_HAVE = 0    # trong đó số hội thoại thuộc loại MỚI (py/recall/note/skill/mkskill): data v5 chỉ có calc/time/search nên cần bù riêng
-_NEW_TOOL_RE = re.compile(r"<tool>(py|recall|note|skill|mkskill|kb|graph) ")
+_NEW_TOOL_RE = re.compile(r"<tool>(py|recall|note|skill|mkskill|kb|graph|sys_\w+|droid_\w+|store_\w+|server_preset|sh_goi_y) ")
 
 
 def count_existing(remote, tag):
@@ -1217,6 +1217,12 @@ def auto(args, build_parser):
     if "pretrain" in kinds:
         print(f"   Data train: đang có ~{fmt_n(have_tokens)} token ({pre_files} file) -> mục tiêu {fmt_n(plan['pre_target'])} -> cần thêm ~{fmt_n(plan['pre_need'])} token "
               f"= {plan['pre_files']} file (không cần đặt 'cặp'; mỗi file ~{plan['pre_per_file']} đoạn văn)")
+    if getattr(args, "data_mode", "llm") != "llm":
+        import web_corpus
+        for kd, fl, per in (("finetune", plan["ft_files"], plan["ft_per_file"]), ("pretrain", plan["pre_files"], plan["pre_per_file"])):
+            if kd in kinds:
+                e = web_corpus.estimate_credits(min(cap, fl), per, kd)
+                print(f"   web_only {kd}: ~{e['docs']} tài liệu, ~{e['queries']} lượt search, ước tính ~{e['credits']} credit Tavily (chưa đo; theo tài liệu Tavily, gói của bạn có thể khác)")
     if args.plan:
         return
     web = env("WEB_SEARCH", "both")
@@ -1256,6 +1262,7 @@ def auto(args, build_parser):
                 "--out_dir", args.out_dir]
         if repo_dir:
             argv += ["--repo_dir", repo_dir]
+        argv += ["--data_mode", getattr(args, "data_mode", "llm")]
         if env("LLM_MODEL"):   # ép đúng 1 model "provider::model" (tắt chuỗi dự phòng); GEMINI_MODEL chỉ ép phần Gemini, xem build_pool
             argv += ["--model", env("LLM_MODEL")]
         if env("WEB_TOPICS"):
@@ -1309,6 +1316,11 @@ def _run(args):
         check(args, LocalRepo(args.repo_dir) if args.repo_dir else (None if args.source_file else HFRepo(args.repo, args.repo_type)))
         return
     load_kaggle_secrets()   # trên Kaggle: tự lấy secret; ngoài Kaggle không làm gì
+    if args.mode in ("finetune", "pretrain") and getattr(args, "data_mode", "llm") in ("web_only", "hybrid"):
+        import web_corpus   # web_only: không cần key LLM; hybrid: chạy xong web_only rồi mới sang đường LLM bên dưới
+        web_corpus.run_web_only(args, sys.modules[__name__])
+        if args.data_mode == "web_only":
+            return
     gem, llm_parts = build_llm(args)   # gem = LLMRouter: Cohere -> OpenRouter -> Mistral -> Gemini (theo LLM_ORDER), provider không có key bị bỏ qua
     if gem is None:
         sys.exit("Thiếu key LLM: đặt ít nhất một loại COHERE_API_KEY1 / OPENROUTER_API_KEY1 / MISTRAL_API_KEY1 / GEMINI_API_KEY1 (bao nhiêu key cũng được; hoặc NAME_KEYS cách nhau dấu phẩy; Gemini còn có --keys)")
@@ -1462,6 +1474,8 @@ def build_parser():
     ap.add_argument("--topics", default=None, help="chủ đề riêng cho --web, cách nhau dấu ; (mặc định: danh sách có sẵn + bài ngẫu nhiên)")
     ap.add_argument("--wiki_base", default=env("WIKI_BASE", WIKI_BASE))
     ap.add_argument("--tag", default=None, help="cỡ model, vd 50M: file vào Fine-tune/<tag>/N.txt hoặc data/<tag>/N.txt (tự tạo thư mục). Bỏ trống = kiểu cũ")
+    ap.add_argument("--data_mode", choices=["llm", "web_only", "hybrid"], default=env("DATA_MODE", "llm"),
+                    help="llm = như cũ (LLM tạo data); web_only = CHỈ cào web (Tavily search->extract, lọc, MinHash, Markdown->SFT), không LLM/Wikipedia/HF; hybrid = web_only trước rồi LLM (hoặc biến DATA_MODE)")
     ap.add_argument("--plan", action="store_true", help="mode auto: chỉ in kế hoạch, không tạo gì")
     ap.add_argument("--source", default=None, help="restyle/check: tên file nguồn trên repo (vd yui_chat.jsonl)")
     ap.add_argument("--source_file", default=None, help="restyle/check: đường dẫn file nguồn trên máy")

@@ -15,8 +15,9 @@ sys.path.insert(0, HERE)
 import yui_sandbox as ys  # noqa: E402
 from yui_orch import fmt_progress, fmt_summary  # noqa: E402
 from yui_vault import slug  # noqa: E402
+from tool_data_os import gen_os  # noqa: E402  (công cụ điều khiển hệ điều hành YuiVieOS: sys_power, store_*, droid_*, server_preset…)
 
-EXTRA_KINDS = ["py", "recall", "note", "skill", "mkskill", "chain"]
+EXTRA_KINDS = ["py", "recall", "note", "skill", "mkskill", "chain", "os"]
 SIT = ["", "", "", "ê ", "cho mik hỏi ", "bạn ơi ", "xin hỏi ", "giúp mik: "]
 OK_A = ["{r} nha", "ra {r} á", "kết quả là {r} đó", "{r} nè Boss", "được {r} nha", "là {r} đó"]
 
@@ -276,8 +277,8 @@ def gen_chain(rng, max_snip):
             ("assistant", f"số may mắn {x} " + ("là số nguyên tố" if steps[1]["res"] == "True" else f"không nguyên tố, phân tích: {last['res']}"))]
 
 
-GENS = {"py": gen_py, "recall": gen_recall, "note": gen_note, "skill": gen_skill, "mkskill": gen_mkskill, "chain": gen_chain}
-DEFAULT_MIX = "calc=3,time=1,search=3,direct=3,py=4,recall=3,note=1,skill=1,mkskill=1,chain=2"
+GENS = {"py": gen_py, "recall": gen_recall, "note": gen_note, "skill": gen_skill, "mkskill": gen_mkskill, "chain": gen_chain, "os": gen_os}
+DEFAULT_MIX = "calc=3,time=1,search=3,direct=3,py=4,recall=3,note=1,skill=1,mkskill=1,chain=2,os=3"
 
 
 def make_one(kind, rng, max_snip, max_chars=None):
