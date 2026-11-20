@@ -7,6 +7,8 @@
 > **Tạo:** 2026-11-17 · **Quy tắc tuổi bản kiểm:** luật ở Việt Nam đổi nhanh (Nghị định xử phạt 330/2026 ra đời tháng 8/2026, sau hai nghị định hướng dẫn). Một dòng "đã kiểm" chỉ có giá trị nếu **ngày đọc ≤ 90 ngày** tại thời điểm bấm Public; quá hạn thì đọc lại.
 >
 > **Cập nhật 2026-11-19:** thêm **§I** (Android/Windows tương thích, game, nhiều phiên, Kho Ứng Dụng, lọc quảng cáo, server/NAS — từ hai tệp tư vấn mới của Gemini), 6 dòng ở §C, 1 dòng ở §D, câu hỏi 11–14 ở §F, mục 7 ở §G0 và 3 ô ở §G. **Không dòng nào ở §A–§E cũ bị đổi.**
+>
+> **Cập nhật 2026-11-19 (đợt 2: đợt tư vấn 6–8):** thêm **§J** (cài song song/ghi đĩa, Secure Boot, firmware, ISO/GPL, nhãn hiệu, Yui Store, dữ liệu `web_only`, gói ngôn ngữ/LoRA, giao thức kết nối, điều khiển từ xa, giọng nói), câu hỏi 15–22 ở §F, mục 8 ở §G0 và 4 ô ở §G. **Không dòng nào ở §A–§I bị đổi.** Hôm nay mình đã tra (có nguồn): chứng chỉ Secure Boot của Microsoft hết hạn 2026, sự cố cập nhật Windows làm hỏng dual boot (08/2024), tài liệu Ventoy, tài liệu Tavily, Wine 11. **Mình không đọc điều khoản dịch vụ nào trong §J9–§J13** — các dòng đó vẫn ❓.
 
 Ký hiệu trạng thái: ✅ đã kiểm (có nguồn + ngày) · 🟡 đã thấy văn bản tồn tại nhưng **chưa đọc điều khoản gốc** · ❓ chưa kiểm · ⚖️ phải hỏi luật sư.
 
@@ -118,6 +120,14 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 12. Kho Ứng Dụng chỉ trỏ tới nguồn chính thức (trình duyệt, Zalo, Minecraft…) và `yui-trim` gọt cục bộ bản người dùng vừa tải: có vấn đề giấy phép/nhãn hiệu không?
 13. Mở server/NAS cho người ngoài nhà (trò chơi, chia sẻ tệp): nghĩa vụ theo quy định về dịch vụ trò chơi điện tử trên mạng (mình biết có, chưa đọc) và về dữ liệu cá nhân của người khác lưu trên máy bạn?
 14. Lọc tên miền quảng cáo ở cấp hệ điều hành (mặc định tắt) và nạp danh sách của bên thứ ba: giấy phép từng danh sách; có rủi ro điều khoản từ các dịch vụ bị chặn không?
+15. Điều khoản "nguyên trạng, tối đa trong phạm vi pháp luật cho phép" (`YuiVieOSBeta/docs/terms_vi.md`): với người dùng ghi đĩa/cài song song theo hướng dẫn của dự án rồi mất dữ liệu hoặc bị khoá ổ mã hoá, phần nào **không** loại trừ được (lỗi cố ý/lỗi nặng, quyền người tiêu dùng, dữ liệu cá nhân)? Có cần xác nhận/cảnh báo riêng ngoài việc bắt gõ câu xác nhận không?
+16. Phân phối ISO chứa thành phần GPL (GRUB, nhân Linux của bản Lite) và firmware nhị phân: nghĩa vụ cung cấp mã nguồn, cách đáp ứng "đề nghị bằng văn bản", và việc kèm firmware có giấy phép chỉ-nhị-phân.
+17. Dùng tên/nhãn hiệu của bên khác trong tài liệu so sánh/tương thích ("Windows", "BitLocker", "Android", "AirPrint", "DLNA", "Chromecast", "WireGuard", "Synergy"): giới hạn.
+18. Nếu khuyến khích người dùng đăng ký **khoá công khai của dự án** vào firmware (Secure Boot): trách nhiệm khi khoá riêng bị lộ/bị lạm dụng; có nên chỉ cho người dùng tự chịu rủi ro hay cần thêm cơ chế thu hồi bắt buộc?
+19. Lời so sánh hiệu năng/độ ổn định với sản phẩm khác ("như Windows", "hơn Windows") khi chưa đo, trong tài liệu miễn phí: quy định quảng cáo/cạnh tranh nào áp dụng?
+20. Huấn luyện mô hình trên nội dung web cào bằng dịch vụ thứ ba (Tavily/Exa/Firecrawl) rồi công bố mô hình: điều khoản của dịch vụ cào, của từng nguồn, và quyền tác giả đối với việc dùng **trích nguyên văn** làm câu trả lời SFT.
+21. Triển khai giao thức tương thích (KDE Connect, Input Leap/Synergy, RFB, UPnP AV, IPP, ADB) theo **mô tả công khai** mà không dùng mã GPL; và nhận hình/nhạc từ thiết bị Apple (AirPlay) hoặc chiếu Miracast/HDCP, giải mã H.264/H.265, AAC/aptX/LDAC, RAR: phần nào cần giấy phép/có rủi ro bằng sáng chế hoặc vượt cơ chế bảo vệ?
+22. Tính năng điều khiển từ xa, nhận thông báo/tin nhắn điện thoại và nhập giọng nói: xử lý dữ liệu cá nhân (kể cả của người khác hiện trên màn hình), âm thanh giọng nói có thuộc dữ liệu cá nhân nhạy cảm không, và cần đồng ý/thông báo gì?
 
 ---
 
@@ -133,6 +143,7 @@ Bạn làm để chia sẻ miễn phí, không thương mại: rủi ro và ngh�
 5. P9-24/OS P7.3: quét bí mật; OS P7.9: dòng "AS-IS, mục đích học tập/nghiên cứu, không dùng cho y tế/pháp lý/tài chính" ở đầu README.
 6. Giữ giấy phép MIT (không cần đổi; xem OS `PLAN.md` C58).
 7. OS P7.10 + P7.11: README/điều khoản nêu rõ **không giả mạo/không né kiểm tra**, không quảng bá "treo/cày acc"; Kho Ứng Dụng chỉ trỏ nguồn chính thức; danh sách chặn mặc định TẮT và đã đọc giấy phép.
+8. (đợt 6–8) OS P7.13: điều khoản có mục **ghi đĩa/cài song song** và installer bắt gõ câu xác nhận; câu "tối đa trong phạm vi pháp luật cho phép" thay vì "miễn mọi trách nhiệm"; OS P7.14/P7.18/P7.19: mỗi firmware/bộ nạp/giao thức/codec/gói ngôn ngữ/nguồn dữ liệu web có dòng ở §J **trước khi** vào bản build hoặc Kho.
 
 **Full, chỉ khi thương mại hoá, đóng ISO/thiết bị, có người dùng lớn hoặc có khiếu nại:** hỏi luật sư theo §F, OS P7.6–P7.8, toàn bộ §G.
 
@@ -153,6 +164,10 @@ Chỉ bấm Public (repo, Releases, Kho model, store) khi **tất cả** đúng 
 - [ ] Không có tính năng/tài liệu nào quảng bá giả mạo thiết bị, né kiểm tra hay treo/cày nhiều tài khoản; máy kiểm trong `verify.py` đã chạy xanh (OS P7.10).
 - [ ] Kho Ứng Dụng: mỗi mục có nguồn chính thức + giấy phép + ngày đọc (≤ 90 ngày); không mirror; danh sách chặn mặc định TẮT (OS P7.11).
 - [ ] Nếu mở dịch vụ ra Internet: OS P7.12 đã có ý kiến bằng văn bản (mức Full).
+- [ ] (đợt 6–8) Điều khoản có mục ghi đĩa/cài song song + installer chặn ghi khi chưa xác nhận (OS P7.13); mọi firmware/bộ nạp/ISO/giao thức/codec có dòng §J và THIRD-PARTY khớp danh mục ISO (OS P7.14, P7.18).
+- [ ] (đợt 6–8) Yui Store: mỗi nguồn (F-Droid, Flathub, Winget, GitHub/GitLab) đã đọc điều khoản + ngày; không lưu lại tệp bên thứ ba; ảnh bên thứ ba chỉ hiện khi nguồn cho phép (OS P7.17).
+- [ ] (đợt 6–8) Dữ liệu/mô hình từ `web_only` (P9-25): có `DATA_SOURCES.md`, đã đọc điều khoản Tavily/nguồn, **không** đăng Kho công khai khi chưa xong; gói ngôn ngữ/LoRA có nguồn + giấy phép (OS P7.19, P9-27/P9-28).
+- [ ] (đợt 6–8) Không có lời so sánh/tuyệt đối chưa đo ("hơn Windows", "an toàn tuyệt đối", "% phần cứng hỗ trợ") trong README/tài liệu (OS P7.15).
 - [ ] Câu hỏi §F đã có câu trả lời bằng văn bản hoặc được ghi rõ "chấp nhận rủi ro".
 
 ---
@@ -177,3 +192,25 @@ Nguồn: hai tệp tư vấn mới của Gemini (xem OS `PLAN.md` §13 C60–C79
 | I6 | Server / NAS / mở cổng ra Internet | Ràng buộc nhà mạng (cổng, CGNAT), điều khoản phần mềm máy chủ, quy định về dịch vụ trò chơi điện tử trên mạng (**chưa đọc**), dữ liệu của người khác lưu trên máy bạn (Luật BVDLCN). Mặc định từ chối vào, không UPnP tự động | ⚖️ (F13) | Chỉ làm khi bạn mở dịch vụ cho người ngoài nhà | OS P6.29, P7.12 |
 | I7 | Lập chỉ mục AI trên NAS (`yui_kb`) | Nếu thư mục chứa tệp của người khác trong nhà: đây là xử lý dữ liệu cá nhân của họ | ⚖️ | **Theo thư mục/từng người, mặc định TẮT**, có nút xoá chỉ mục; hỏi lại sau khi có luật sư | Backlog OS §14.2 |
 | I8 | Tác tử AI điều khiển phiên Android/cài app/mở cổng | Luật AI 134/2025 có điều khoản về giám sát của con người (đã ghi ở §A). Thiết kế: Yui chỉ tạo **yêu cầu**, người dùng bấm xác nhận (P4.13); không macro/tự bấm trong game | 🟡 | Giữ nguyên thiết kế khi P5 mở | OS P5.18 |
+
+---
+
+## J. Cài song song, Secure Boot, firmware/ISO, nhãn hiệu, Yui Store, dữ liệu web, gói ngôn ngữ, giao thức kết nối (thêm 2026-11-19, đợt 6–8)
+
+Nguồn: ba tệp tư vấn mới của Gemini (xem OS `PLAN.md` §13 C80–C135). Dòng nào ghi "đã tra" có nguồn và ngày 2026-11-19; **dòng ❓ là chưa đọc điều khoản gốc**.
+
+| # | Chủ đề | Đã biết / chưa kiểm | Trạng thái | Việc cần làm | Task |
+|---|---|---|---|---|---|
+| J1 | Điều khoản "miễn mọi trách nhiệm" | Viết theo hướng "tối đa trong phạm vi pháp luật cho phép" + tách điều khoản; **không** viết tuyệt đối vì có phần luật bắt buộc và có nguy cơ làm cả điều khoản mất hiệu lực. Chưa luật sư rà | ⚖️ (F9, F15) | Hỏi luật sư; giữ câu không tuyệt đối | OS P7.13 |
+| J2 | Ghi đĩa/cài song song, BitLocker | Rủi ro dữ liệu thật (mất dữ liệu, khoá ổ mã hoá, hỏng khởi động). Thiết kế: không đụng bộ nạp của hệ khác, chạy thử USB là mặc định, bắt gõ câu xác nhận, bản sao bảng phân vùng | 🟡 (thiết kế, chưa có mã) | Điều khoản mục ghi đĩa; installer chặn ghi khi chưa xác nhận | OS P4.20, P7.13 |
+| J3 | Secure Boot, khoá ký | **Đã tra:** Microsoft UEFI CA 2011 hết hạn cuối 06/2026 (nguồn ghi 26 hoặc 27/06), KEK CA 2011 ngày 24/06/2026, Windows Production PCA 2011 vào 10/2026; shim mới chỉ ký bằng CA 2023; shim-review là cổng để được ký. Chi phí/thời gian đường "shim do Microsoft ký": **chưa biết**. Tự đăng ký khoá ⇒ lộ khoá riêng là rủi ro cho máy người dùng | ✅ sự kiện · ❓ chi phí · ⚖️ (F18) | Mặc định hai bậc (tắt Secure Boot có cảnh báo; tự đăng ký khoá); chính sách khoá ký + thu hồi | OS P6.8, P7.16 |
+| J4 | Firmware/khối nhị phân của nhà sản xuất | Mỗi khối một giấy phép, có khối chỉ cho phân phối nhị phân; **chưa đọc từng khối** | ❓ | Không đóng gói trong ISO; tải theo nhu cầu; đọc giấy phép từng khối | OS P7.14 |
+| J5 | ISO chứa GPL (GRUB, nhân Linux, runtime container) | Nghĩa vụ mã nguồn khi **đóng gói**; GRUB GPLv3 (theo hiểu biết); chưa chọn bản Linux nền cho bản Lite và **chưa đọc** chính sách nhãn hiệu/bản phái sinh của bản đó | ❓ ⚖️ (F8, F16) | Chọn nền → đọc chính sách → kèm đề nghị mã nguồn | OS P1.13, P7.14 |
+| J6 | Nhãn hiệu của bên khác | Windows, BitLocker, Android, AirPrint, DLNA (nhãn chứng nhận), Chromecast, WireGuard, Synergy, Roblox, Minecraft: chỉ dùng để chỉ đúng sản phẩm, không logo, không đặt tên tính năng bằng tên đó | ❓ ⚖️ (F17) | Máy kiểm nhỏ + rà tài liệu | OS P7.15 |
+| J7 | Lời so sánh/quảng cáo | Câu "như Windows", "hơn Windows", "% phần cứng hỗ trợ" khi chưa đo: quy định quảng cáo/cạnh tranh **chưa đọc** | ❓ ⚖️ (F19) | Mọi so sánh cần dòng đo `real`; không dùng câu tuyệt đối | OS P7.15 |
+| J8 | Yui Store: F-Droid, Flathub, Winget, GitHub/GitLab Releases | Chỉ metadata + chuyển luồng tải từ máy chủ gốc, không lưu lại tệp, có bộ nhớ đệm + giới hạn lượt gọi; **điều khoản API/chỉ mục từng nguồn chưa đọc**; ảnh/biểu tượng bên thứ ba có bản quyền riêng | ❓ | Đọc từng nguồn, ghi ngày (≤ 90 ngày); bật nguồn chưa đọc ⇒ từ chối | OS P4.29, P7.17 |
+| J9 | **Dữ liệu web cho `web_only`** (Tavily + nguồn) | Bỏ Teacher-LLM chỉ loại rủi ro F5; nội dung web vẫn có bản quyền; **điều khoản Tavily/Exa/Linkup/Firecrawl về lưu cache, huấn luyện, tái phân phối: chưa đọc**; câu trả lời SFT là trích nguyên văn. Đã chặn Wikipedia/Hugging Face theo mặc định (chọn kỹ thuật, không phải kết luận pháp lý) | ❓ ⚖️ (F20) | `DATA_SOURCES.md`; **không đăng Kho công khai** khi chưa đọc; ngày thu thập từng tài liệu | P9-25, OS P5.19 |
+| J10 | Gói ngôn ngữ cổ/ít dữ liệu, thẻ LoRA | Từ điển/ngữ pháp/chú giải/văn bản cổ có giấy phép khác nhau (nhiều kho dùng giấy phép chia sẻ-tương-tự); bản số hoá/biên tập hiện đại có thể có quyền của người biên tập; LoRA là dữ liệu dẫn xuất | ❓ ⚖️ (F6) | Mỗi gói `meta.json` có nguồn + giấy phép + ngày; thiếu ⇒ không vào Kho công khai | P9-27, P9-28, OS P7.19 |
+| J11 | Giao thức kết nối (KDE Connect, Input Leap/Synergy, RFB, UPnP AV, IPP, ADB, SSH, WireGuard) | Viết theo mô tả công khai, không đọc/chép mã GPL; tên nhãn hiệu không dùng làm tên sản phẩm; scrcpy (Apache-2.0) chỉ học cách làm; ứng dụng phía điện thoại do người dùng tự cài. **Chưa đối chiếu chi tiết từng giao thức** | ❓ ⚖️ (F21) | Một dòng pháp lý mỗi giao thức trước khi `[~]` | OS P6.38–P6.45, P7.18 |
+| J12 | Thành phần độc quyền: AirPlay (xác thực của Apple), Miracast/HDCP, RAR, AAC/aptX/LDAC, H.264/H.265 | Bản mở của AirPlay dựa vào kỹ thuật đảo ngược; codec có bằng sáng chế/phí; RAR là định dạng đóng. **Chưa có ý kiến luật sư** | ❓ ⚖️ (F21) | AirPlay **không đưa vào phạm vi**; không bundle codec; RAR bỏ khỏi phạm vi đầu | OS P6.44, P6.46, P6.47, P4.33 |
+| J13 | Điều khiển từ xa, thông báo/tin nhắn điện thoại, micro/giọng nói | Có thể xử lý dữ liệu cá nhân của người khác (hiện trên màn hình, tin nhắn); âm thanh giọng nói có thuộc nhóm nhạy cảm không: **chưa kiểm**. Thiết kế: mặc định tắt, xác nhận vật lý, viền đỏ/đèn báo do host vẽ, không ghi nội dung vào nhật ký, bấm-để-nói | ❓ ⚖️ (F22; nối I7, I8) | Điều khoản nêu cần sự đồng ý khi xem/ghi hình máy người khác | OS P6.40, P6.43, P6.49 |
