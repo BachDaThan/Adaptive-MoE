@@ -3,7 +3,7 @@
 > File này là **bộ nhớ chung** giữa các cuộc chat. Mở chat mới chỉ cần gửi file này + nói "làm tiếp".
 > Đặt tại: `Adaptive-MoE/docs/PLAN.md` (một bản duy nhất, cả 2 repo dùng chung). Kế hoạch của hệ điều hành ở file riêng `YuiVieOSBeta/docs/PLAN.md` (xem mục 6).
 
-**Cập nhật:** 2026-11-19 · **Phiên bản kế hoạch:** v7 (v7: thêm **nhóm G — P9-25…P9-30** và mục 1e, từ đợt tư vấn 6–8 của hệ điều hành, ưu tiên phần liên quan OS trước, Y-App sau; v6 chỉ thêm ghi chú; phần v5) · **Tiến độ:** 20/84 (P0, P1 xong; P2: P2-1…P2-6 xong; P8-1, P8-6 xong; P8-7 `[~]` chờ bạn chạy notebook; kế tiếp P2-7). **v4: P3-1, P3-7, P9-12, P9-13 đã giao `[~]` (chờ bạn up + chạy `make test-kb`), thêm P3-8.** **v5 (2026-11-17): bạn chạy `pytest tests/test_kb_core.py` = 13 passed (mình chạy lại độc lập: 13 passed) ⇒ P3-7 và P9-13 → `[x]`; P3-1/P9-12 vẫn `[~]` vì DoD là *bạn duyệt đặc tả*. Thêm nhóm F của P9 (P9-19…P9-24: pháp lý/điều khoản, 6 task, tất cả `[ ]`, chờ bạn duyệt), file mới `docs/LEGAL_REGISTER.md`, mục 1c. Không đổi mã/trạng thái task nào khác. **Cùng ngày, sau khi bạn bảo "làm tiếp": P9-21…P9-24 giao một phần, đánh `[~]` (xem từng task).** **v2 thêm 18 task chưa làm (P5-6, P9-1…P9-17); v3 thêm 1 task (P9-18) và ghi quyết định Q6 = C++17 (P3-2, P3-3 đánh `[-]`)**; không đổi/bỏ task nào khác; tiến độ thật trước v5 là 18 task xong
+**Cập nhật:** 2026-11-21 · **Phiên bản kế hoạch:** v8 (v8: thêm **nhóm H — P9-31…P9-36** và mục 1f từ tệp tư vấn "Yui-Genesis" của hệ điều hành; P9-30 → `[~]` đã giao điều khoản Y-App; v7: thêm **nhóm G — P9-25…P9-30** và mục 1e, từ đợt tư vấn 6–8 của hệ điều hành, ưu tiên phần liên quan OS trước, Y-App sau; v6 chỉ thêm ghi chú; phần v5) · **Tiến độ:** 20/90 (P0, P1 xong; P2: P2-1…P2-6 xong; P8-1, P8-6 xong; P8-7 `[~]` chờ bạn chạy notebook; kế tiếp P2-7). **v4: P3-1, P3-7, P9-12, P9-13 đã giao `[~]` (chờ bạn up + chạy `make test-kb`), thêm P3-8.** **v5 (2026-11-17): bạn chạy `pytest tests/test_kb_core.py` = 13 passed (mình chạy lại độc lập: 13 passed) ⇒ P3-7 và P9-13 → `[x]`; P3-1/P9-12 vẫn `[~]` vì DoD là *bạn duyệt đặc tả*. Thêm nhóm F của P9 (P9-19…P9-24: pháp lý/điều khoản, 6 task, tất cả `[ ]`, chờ bạn duyệt), file mới `docs/LEGAL_REGISTER.md`, mục 1c. Không đổi mã/trạng thái task nào khác. **Cùng ngày, sau khi bạn bảo "làm tiếp": P9-21…P9-24 giao một phần, đánh `[~]` (xem từng task).** **v2 thêm 18 task chưa làm (P5-6, P9-1…P9-17); v3 thêm 1 task (P9-18) và ghi quyết định Q6 = C++17 (P3-2, P3-3 đánh `[-]`)**; không đổi/bỏ task nào khác; tiến độ thật trước v5 là 18 task xong
 
 ## ▶ TIẾP THEO (cập nhật 2026-11-17, để mở chat mới làm tiếp)
 1. **Bạn quyết "Chế độ Hybrid" nghĩa là gì** (Câu hỏi mở số 4 ở mục dưới; mình đã đề xuất: công tắc tổng, mặc định tắt, kèm ô Hugging Face token). Xong thì làm `P2-7`, sau đó `P2-8` (cập nhật chính sách quyền riêng tư). *(Không đổi so với 2026-11-15; vẫn là việc đứng đầu.)*
@@ -16,6 +16,7 @@
 8. **Trước khi bấm Public (mới 2026-11-17, từ đợt tư vấn thứ tư; xem mục 1c và `docs/LEGAL_REGISTER.md`):** nhóm pháp lý **P9-19…P9-24**, làm cùng P2-7/P2-8. Ba việc rẻ, làm được ngay, không chờ quyết định: **P9-21** (cài mới thì mạng ngoài mặc định TẮT: hiện `webMulti` mặc định `true` nên DuckDuckGo chạy ngay khi cài, trái với dòng "chỉ khi bạn cấu hình" trong chính sách), **P9-22** (bản mẫu pháp lý còn dẫn Nghị định 13/2023 đã bị thay từ 01/01/2026) và **P9-24** (quét bí mật tự động). **Phía OS:** Phase P7 của `YuiVieOSBeta/docs/PLAN.md` (§15).
 9. **Hệ điều hành — đợt 5 (2026-11-19):** `YuiVieOSBeta/docs/PLAN.md` thêm 22 task (P3.17–P3.23, P4.15–P4.19, P5.18 🔒, P6.25–P6.30, P7.10–P7.12) và sổ `docs/LEGAL_REGISTER.md` §I. **Chạm repo này ở 3 chỗ, không có task mới:** (a) `P4-4` (port `clean` sang C++) nay là điều kiện của OS P4.19 "Đọc sạch"; (b) `P9-16` (đo engine trên CPU không AVX2) có máy đo cụ thể: **HP Compaq 8000 Elite USDT** (đời 2009; theo hiểu biết của mình CPU Core 2, không có AVX — **bạn xác nhận bằng `yui-profiler`**), và mọi số tok/s phải ghi máy + lệnh + cờ CPU để OS P6.26 so sánh được; (c) OS P5.18 (công cụ MCP `droid_*`/`store_*`/`ingress_*`): model nhỏ chỉ **chọn từ danh sách**, không nhận chuỗi tự do — đo độ chính xác ở phía agent khi P5 mở. Không cần bạn up thêm file nào lên repo này ngoài các tệp tài liệu.
 10. **Thứ tự mới theo yêu cầu của bạn (2026-11-19): phần liên quan hệ điều hành ở Adaptive-MoE TRƯỚC, rồi mới tới Y-App.** (a) **Adaptive-MoE/OS:** `P9-25` (`DATA_MODE=web_only`) và `P9-26` (dữ liệu gọi công cụ điều khiển OS) **đã giao mã + test** — việc của bạn: chạy `DATA_MODE=web_only DATA_KINDS=finetune,pretrain,tools python make_data.py auto --plan` (không cần key LLM), rồi một lượt thật `finetune --data_mode web_only --files 1` với key Tavily, dán log + 20 dòng ngẫu nhiên của file ra; sau đó huấn luyện lại SFT với `TOOL_PAIRS` có `os=3` (cách chạy ở P9-26). `P9-27`/`P9-28` (gói ngôn ngữ cổ + adapter LoRA) mới là **kế hoạch**, chỉ làm sau khi có model đầu tiên (P8-7) và khi OS P5 mở khoá. (b) **Y-App (sau):** `P9-29` (nhãn nguồn dữ liệu/giấy phép trong tab Kho) và `P9-30` (đồng bộ câu giới hạn trách nhiệm của điều khoản; tăng `kLegalVersion` nên buộc đồng ý lại — chờ bạn duyệt), rồi quay lại `P2-7`/`P2-8` như mục 1.
+11. **Đợt 9 (2026-11-21, tệp tư vấn "Yui-Genesis"):** kế hoạch OS thêm 28 task (xem `YuiVieOSBeta/docs/PLAN.md` đầu tệp). **Phía repo này: nhóm H (P9-31…P9-36), mục 1f.** Việc rẻ, làm được ngay, thuần C++17/tài liệu: **P9-31** (lõi tường lửa nhận thức 5 trạm, có test ASan/UBSan), **P9-34** (khảo sát có nguồn các tên kỹ thuật tư vấn dùng). **Y-App:** `P9-30` đã giao `assets/legal/terms_vi.md`, `terms_en.md` và tăng `kLegalVersion` (bạn có thể hoàn nguyên 1 dòng nếu chưa muốn bắt người dùng đồng ý lại). Đợt này **chỉ tài liệu + điều khoản**, chưa viết mã lõi.
 
 **Mở chat mới:** gửi file này (`PLAN.md`) là đủ; mình tự lấy code từ hai repo public `BachDaThan/Y-App` và `BachDaThan/Adaptive-MoE`, chỉ xin thêm file khi một task thật sự cần. Báo mình: "làm tiếp từ mục ▶ TIẾP THEO".
 
@@ -32,7 +33,7 @@ Ký hiệu: `[ ]` chưa làm · `[~]` mình đã giao file, chờ bạn up/thử
 | P6 | Nghiên cứu ghép Expert (chưa cam kết) | 0/5 |
 | P7 | Phát hành + cập nhật tài liệu | 0/4 |
 | P8 | Phát sinh: sửa cài APK, tìm web nhiều nguồn, notebook huấn luyện, công cụ web (`fetch`) | 2/7 |
-| P9 | **Mới (2026-11-16, chờ bạn duyệt; v3 thêm P9-18):** nâng cấp engine (băm phần cứng, khoá cú pháp công cụ, CAD, BITCOS), an toàn model, tiết kiệm pin, cổng nối hệ điều hành, công cụ web qua broker | 1/30 (P9-13 `[x]`; P9-12 `[~]`; nhóm F P9-19…P9-24; **nhóm G P9-25…P9-30 mới 2026-11-19: P9-25, P9-26 `[~]` đã giao mã + test**) |
+| P9 | **Mới (2026-11-16, chờ bạn duyệt; v3 thêm P9-18):** nâng cấp engine (băm phần cứng, khoá cú pháp công cụ, CAD, BITCOS), an toàn model, tiết kiệm pin, cổng nối hệ điều hành, công cụ web qua broker | 1/36 (**nhóm H P9-31…P9-36 mới 2026-11-21**; P9-13 `[x]`; P9-12 `[~]`; nhóm F P9-19…P9-24; **nhóm G P9-25…P9-30 mới 2026-11-19: P9-25, P9-26 `[~]` đã giao mã + test**) |
 
 ---
 
@@ -174,6 +175,29 @@ Toàn bộ đánh giá (C80–C135) ở `YuiVieOSBeta/docs/PLAN.md` §13. Ở đ
 | E13 | Ngôn ngữ cổ/ít dữ liệu: `kb/lang_<mã>/` + thẻ LoRA "~0,3 MB" | Xem OS C133. **"0,3 MB" chỉ đúng cỡ `small`** (6 lớp, d=256, LoRA q+v, r=24 ≈ 0,28 MiB); `medium` r=8 ≈ 0,19 MiB; `large` r=8 ≈ 0,25 MiB; **1B (giả định d≈2048, 20 lớp) r=8 ≈ 2,5 MB**. `yui.cpp` **chưa có LoRA**. Kết quả ICL trong bài báo là với LLM lớn: mô hình nhỏ **phải đo**, nên làm công cụ tra cứu xác định trước | **P9-27, P9-28** (kế hoạch) |
 | E14 | "Chỉ cập nhật kế hoạch, chưa viết code" (P5.20) | Đúng cho P9-27/P9-28. Riêng P9-25/P9-26 (đã yêu cầu ở đợt 7) mình **đã viết mã + test** | — |
 | E15 | Ưu tiên cập nhật Adaptive-MoE (phần liên quan OS) trước, Y-App sau | Đã đặt thứ tự ở ▶ mục 10 | Thực hiện |
+
+---
+
+## 1f. ĐÁNH GIÁ ĐỢT TƯ VẤN THỨ CHÍN (2026-11-21): tệp "Yui-Genesis `.yuit v18`" — phần chạm tới repo này
+
+Đánh giá đầy đủ (C136–C171) ở `YuiVieOSBeta/docs/PLAN.md` §13. Tệp là lời nhắc giao việc cho AI khác, có hai bản trộn (v18 + đuôi v11 cắt dở).
+
+| # | Gợi ý của Gemini | Đối chiếu (đã kiểm) | Quyết định |
+|---|---|---|---|
+| E16 | Một `yuit_core.cpp` chứa mọi thứ (container, tường lửa, bộ nhớ, phòng riêng, lớp phủ, livestream, PTS, đọc `.yuic`…) | Trộn **bảo mật**, **định dạng dữ liệu** và **điều phối giao diện** vào một tệp ⇒ khó kiểm, khó fuzz | **Tách:** P9-31 (tường lửa), P9-32 (đặc tả container), P9-36 (gói); điều phối giao diện nằm ở Y-App/OS |
+| E17 | C++17 chuẩn, 0 dependency | Đồng ý (như `kb_core`). Nhưng **NFKC đầy đủ cần bảng Unicode**: sinh bảng từ dữ liệu Unicode bằng script (kiểm giấy phép) hoặc bản rút gọn (Latin/Việt + đồng hình chính) | Ghi rõ phạm vi; không nhận "NFKC đầy đủ" nếu chưa có bảng |
+| E18 | Giải mã lồng ≤ 2–3 vòng, buffer ≤ 4 KB | Đồng ý; thêm trần thời gian/bước và test "50 lớp lồng ⇒ dừng sau ≤ 3 vòng" | P9-31 |
+| E19 | Taint `TAINT_EXTERNAL_UNTRUSTED` + `CapTable = NONE` là biến của máy trạng thái C++ ngoài trọng số | **Đồng ý — phần tốt nhất.** Mô hình không có đường gỡ taint | P9-31 ↔ OS P5.21 |
+| E20 | `AudienceIntentCard`: chủ đề ≤ 64 byte văn bản | **Sửa:** 64 byte đủ chứa câu tiêm lệnh ⇒ dùng **từ điển đóng (mã số)**; bộ phân loại là luật/từ điển, không phải LLM nhỏ | P9-31 |
+| E21 | Crescendo: cửa sổ trượt 20 tương tác | Dễ né bằng nhiều phiên ⇒ điểm trôi theo khoá người gửi, hết hạn | P9-31 |
+| E22 | Input Folding (Map-Reduce) + sinh theo dàn ý 2 pha | **Không cần huấn luyện ⇒ giữ**, đo bằng bộ test (giữ số/thực thể) | P9-33 |
+| E23 | Coconut (vector ẩn liên tục) | **Cần huấn luyện model** ⇒ mâu thuẫn "không cần train"; chưa có chứng cứ ở 50M–1B | Nghiên cứu sau bộ đo (P9-33) |
+| E24 | NeSyS, MAGMA, NeuSymMS/NS-Mem, ERRAND, LION/CRSI, PSC | **Chưa tra được bài gốc từng tên**; coi là nhãn của tư vấn | P9-34 |
+| E25 | Trí nhớ Tiến trình + Khả thi: hàm kiểm tổng hợp từ thất bại, "trực tiếp hiệu chỉnh xác suất token" | Giữ ý; đổi thành **kiểm sau sinh + thử lại**; chỉnh logit chỉ khi đo cho thấy lợi | P9-35 |
+| E26 | `.yuik` thẻ nguyên tử `[API/Lỗi]+[Cú pháp]+[Ví dụ ≤ 150 ký tự]` + BM25 + đồ thị; `.yuic` 1 tệp | Hợp với `kb_core`; trình đọc phải **fuzz**; gói là bản phái sinh ⇒ cục bộ | P9-36 ↔ OS P5.26, P7.24 |
+| E27 | "Không cần dữ liệu âm/ảnh để huấn luyện" (dùng ASR/TTS/VLM có sẵn) | Đúng về train; nhưng giấy phép/chất lượng tiếng Việt **chưa kiểm**; VieNeu 0.3B là CC BY-NC | Không thêm task train; OS THIRD-PARTY §11 |
+| E28 | Mô hình 50M–1B, ngữ cảnh `L=128..256`, "ngữ cảnh vô hạn" | Giới hạn thật: là kỹ thuật chia nhỏ + truy hồi, không phải nhớ vô hạn; tool-use cần dữ liệu dạy (P9-26) | Ghi rõ trong P9-33 |
+| E29 | Y-App "Chibi/giọng nói/lớp phủ" | Phụ thuộc OS P5 (🔒) | **Không lập task Y-App mới** ngoài P9-30 (điều khoản) |
 
 ---
 
@@ -553,10 +577,33 @@ Phát sinh từ đợt tư vấn thứ hai (mục 1b). **Mọi task đều `[ ]`
   ✎ màn Kho model của Y-App (mình sẽ xác định đúng file khi làm, không đoán tên ở đây): hiện `license` từ META (đã có) và, nếu có, dòng "Dữ liệu: web — chưa kiểm giấy phép từng nguồn (`DATA_SOURCES.md`)"; cảnh báo trước khi tải model có `license: unknown` · 📥 file màn Kho + `lib/` model META · 📤 các file trên
   ✅ test Dart thuần: META `unknown` ⇒ có cảnh báo; có `DATA_SOURCES` ⇒ có nhãn; `[~]` tới khi bạn build.
 
-- [ ] **P9-30 · (Y-App) Đồng bộ câu "nguyên trạng / giới hạn trách nhiệm" với điều khoản mới của OS** *(chờ bạn duyệt: tăng `kLegalVersion` buộc mọi người dùng đồng ý lại)*
+- [~] **P9-30 · (Y-App) Đồng bộ câu "nguyên trạng / giới hạn trách nhiệm" với điều khoản mới của OS** *(chờ bạn duyệt: tăng `kLegalVersion` buộc mọi người dùng đồng ý lại)*
   ✎ `assets/legal/terms_vi.md`, `terms_en.md`, `lib/widgets/legal_gate.dart` (`kLegalVersion`): Y-App **đã có** mục "Không bảo đảm" và "Giới hạn trách nhiệm" (mình đọc 2026-11-19) nên đây là **chỉnh nhỏ**: thêm "trong phạm vi tối đa pháp luật cho phép", tách điều khoản, phần không loại trừ được (như `YuiVieOSBeta/docs/terms_vi.md` §9–§10)
+  **Giao 2026-11-21 (`[~]`):** `assets/legal/terms_vi.md`, `terms_en.md` thêm mục "Tính năng thử nghiệm, AI tự chủ, giọng nói, lớp phủ, phát trực tiếp, gói bạn nạp" + "phạm vi miễn trừ"; `kLegalVersion` → `2026-11-21` (**buộc mọi người dùng đồng ý lại**; hoàn nguyên 1 dòng nếu chưa muốn). `[x]` khi bạn build xanh và thấy màn đồng ý.
   ✅ chuỗi mới có trong tài sản pháp lý, `kLegalVersion` đã tăng. **Mình không viết "miễn mọi trách nhiệm" tuyệt đối** vì pháp luật có phần không loại trừ được (sổ pháp lý F9, F15).
 
+- [ ] **P9-31 · Lõi tường lửa nhận thức 5 trạm (`native/aegis_core.{h,cpp}`, C++17, 0 dependency)** (↔ OS P5.21 🔒) — *kế hoạch, chưa viết mã*
+  ✎ `native/aegis_core.h`, `native/aegis_core.cpp`, `tests/test_aegis_core.cpp`. Trạm 1: loại ký tự điều khiển/zero-width/bidi, bảng đồng hình (phạm vi ghi rõ), giải mã Base64/Hex **tối đa 3 vòng, ≤ 4 KB, có trần bước**. Trạm 2: ý định → **mã số từ từ điển đóng** (không văn bản tự do). Trạm 3: máy trạng thái taint + `CapTable = NONE` **ngoài trọng số**; không có hàm gỡ taint cho mô hình. Trạm 4: điểm trôi theo khoá người gửi nhiều phiên + gom cụm. Trạm 5: chặn đầu ra theo danh sách đường dẫn/khoá chính xác của máy.
+  ✅ `g++ -std=c++17 -fsanitize=address,undefined` 0 lỗi; ≥ 60 test: đồng hình, zero-width, Base64 lồng 50 lớp (dừng ≤ 3 vòng), buffer > 4 KB, tiêm lệnh, Crescendo qua nhiều phiên, ngộ độc ký ức (taint chặn ghi `yui_vault`), rò đường dẫn. Thời gian xử lý chỉ ghi nhãn `real` khi đo.
+
+- [ ] **P9-32 · Đặc tả container `.yuit` + ký ức 3 tầng (`docs/YUIT_SPEC.md`)** (↔ OS P5.21–P5.22 🔒) — *chỉ tài liệu*
+  ✎ tên trung tính (tư vấn đề xuất `YUI_GENESIS_ARCHITECTURE.md`; mình chọn tên khác để tránh nhãn — OS §16 mục 20). Nội dung: tiêu đề + mục lục + `mmap`, phiên bản (**do repo này định**, tư vấn lẫn v11/v18), ký ức episodic → semantic → quy tắc với **tiêu chí thăng hạng/phân hủy đo được**, ngân sách bộ nhớ, nhãn nguồn gốc, C-ABI nối `yuid`.
+  ✅ có mục "giới hạn đã biết"; không số hiệu năng chưa đo.
+
+- [ ] **P9-33 · Ngữ cảnh dài cho model nhỏ không cần huấn luyện: chia khối + truy hồi + sinh theo dàn ý** (↔ OS C155) — *kế hoạch*
+  ✎ `yui_condense.py`/`yui_orch.py` (đã có) hoặc mô-đun mới: khối ≤ 128 token, thẻ ràng buộc giữ số/thực thể, sinh 2 pha (dàn ý → mở rộng từng ý, giải phóng KV giữa nhánh, chống lặp n-gram). **Coconut chỉ là nghiên cứu sau khi có bộ đo.**
+  ✅ bộ test đo độ giữ số/thực thể và trả lời câu hỏi dài; phụ thuộc có model đã train (P9-5/P9-6) để so trước/sau; trước đó chỉ ghi nhãn `mock`.
+
+- [ ] **P9-34 · Khảo sát có nguồn các tên kỹ thuật trong tư vấn (NeSyS, MAGMA, NS-Mem, ERRAND, LION/CRSI, PSC, Provenance Semirings)** — *chỉ tài liệu*
+  ✅ mỗi tên: bài gốc (hoặc "không tìm thấy"), ngày đọc, có đúng như tư vấn mô tả không; kết quả lưu ở mục 4.5. Không tên nào dùng làm tên công khai/số liệu khi chưa có dòng này.
+
+- [ ] **P9-35 · Trí nhớ "khả thi": nhật ký thất bại sandbox → luật kiểm sau sinh + thử lại** (↔ E25) — *kế hoạch*
+  ✎ `yui_sandbox.py`/`yui_agent.py`: lưu mẫu lỗi (có băm, hết hạn), kiểm đầu ra trước khi dùng, thử lại tối đa N lần; chỉnh logit chỉ khi đo cho thấy lợi.
+  ✅ test: lỗi đã gặp không lặp lại ở lượt thử kế; nhật ký xoá được; dữ liệu bẩn (taint) không vào nhật ký.
+
+- [ ] **P9-36 · Định dạng gói `.yuik` (thẻ tri thức nguyên tử) và trình đọc `.yuic` kiểm biên** (↔ OS P5.26, P7.24 🔒) — *kế hoạch*
+  ✎ `native/kb_core.cpp` mở rộng nhập gói `.yuik` (thẻ + BM25 + đồ thị); trình đọc `.yuic` **chỉ-dữ-liệu** (cấm mã, chống traversal, trần kích thước/số mục); metadata nguồn/giấy phép/ngày bắt buộc.
+  ✅ fuzz ≥ 1 giờ không sập (nhãn `real`); gói thiếu metadata bị từ chối; gói chứa `..`/ký tự điều khiển bị từ chối; tải gói không chia sẻ lại mặc định.
 
 ---
 
@@ -652,6 +699,7 @@ Phát sinh từ đợt tư vấn thứ hai (mục 1b). **Mọi task đều `[ ]`
 | 2026-11-17 | kb_core: P3-7, P9-13 `[x]` | Bạn chạy `python3 -m pytest -q tests/test_kb_core.py` → `13 passed in 16.45s`; mình chạy lại độc lập trên `main` (HEAD `c9c79d0`) → `13 passed in 13.53s`. `P3-1`/`P9-12` **vẫn `[~]`**: DoD của chúng là *bạn duyệt đặc tả* `docs/APP_KB.md`, mình không tự coi là đã duyệt. Câu cần bạn trả lời: bản đầu không mã hoá và để P3-6, đúng không? |
 | 2026-11-17 | Kế hoạch v5: pháp lý + điều khoản | Đối chiếu đợt tư vấn thứ tư của Gemini (xem mục 1c, D1–D15) với văn bản luật (tra lại), điều khoản Gemini API (bản lưu trữ), code và văn bản pháp lý của Y-App, và lịch sử git 3 repo. **Phát hiện thật:** (1) `webMulti = true` ⇒ DuckDuckGo chạy mặc định, lệch dòng "chỉ khi bạn cấu hình" của `privacy_vi.md` (P9-21); (2) bản mẫu pháp lý dẫn NĐ 13/2023, đã bị thay từ 01/01/2026 (P9-22); (3) điều khoản Gemini API (bản lưu trữ) có câu cấm dùng Dịch vụ phát triển model cạnh tranh ⇒ cần đọc bản hiện hành trước khi công bố model (P9-19); (4) lịch sử git 3 repo **sạch** với regex sơ bộ (P9-24 để làm bằng công cụ thật). **Thêm** P9-19…P9-24 (6 task `[ ]`), mục 1c, `docs/LEGAL_REGISTER.md`. **Không đổi mã/trạng thái task cũ** ngoài P3-7, P9-13 theo bằng chứng trên. |
 | 2026-11-19 | Kế hoạch v6: đợt tư vấn thứ năm (OS) | Đối chiếu hai tệp tư vấn mới (nhiều phiên Android, Kho Ứng Dụng, benchmark, Minecraft, ánh xạ phím, server/NAS, driver, gọt web) với mã thật. **Phát hiện:** `yui_kb.clean` có ở Python nhưng bản C++ vẫn là P4-4 `[ ]`; Gemini ghi sai số P2.8/P2.7 và nói Ed25519 "mã hoá" (là chữ ký). Chỉ thêm ghi chú (▶ mục 9, §1d, §6); sổ pháp lý thêm §I. Không đổi task/tiến độ. |
+| 2026-11-21 | Kế hoạch v8: đợt tư vấn thứ chín ("Yui-Genesis") | Đối chiếu tệp tư vấn với mã thật của OS (chạy lại `make test`: 15593 check, 0 fail; `verify.sh` xanh) và tra giấy phép VieNeu-TTS/Cubiomes. Thêm mục 1f (E16–E29), nhóm H P9-31…P9-36 (tất cả `[ ]`, chỉ tài liệu), P9-30 → `[~]`; sổ pháp lý §K + câu hỏi F23–F28. **Không đổi mã.** |
 
 **Câu hỏi mở (trả lời khi tới task liên quan):**
 - **(4) "Chế độ Hybrid" của P2-7 nghĩa là gì?** Kho (`Settings.hubOn`) và "Tìm web nhiều nguồn" (`Settings.webMulti`) hiện đã có công tắc riêng. Đề xuất của mình: Hybrid là **một công tắc tổng** "Cho phép app dùng dịch vụ ngoài máy" ở Cài đặt (mặc định TẮT cho người mới; người dùng hiện có được giữ nguyên các lựa chọn đã bật): tắt = không gọi máy chủ nào ngoài mục đã nêu trong chính sách (cập nhật app, Wikipedia); bật = cho phép bật riêng Kho, tìm web nhiều nguồn và các mục sau này (P4). Kèm ô nhập Hugging Face token (tuỳ chọn, chỉ gửi tới máy chủ huggingface.co, lưu trên máy). **Chờ bạn xác nhận hoặc sửa.**

@@ -128,6 +128,12 @@ Cột "Đã biết" chỉ ghi điều mình **thực sự đọc được hôm n
 20. Huấn luyện mô hình trên nội dung web cào bằng dịch vụ thứ ba (Tavily/Exa/Firecrawl) rồi công bố mô hình: điều khoản của dịch vụ cào, của từng nguồn, và quyền tác giả đối với việc dùng **trích nguyên văn** làm câu trả lời SFT.
 21. Triển khai giao thức tương thích (KDE Connect, Input Leap/Synergy, RFB, UPnP AV, IPP, ADB) theo **mô tả công khai** mà không dùng mã GPL; và nhận hình/nhạc từ thiết bị Apple (AirPlay) hoặc chiếu Miracast/HDCP, giải mã H.264/H.265, AAC/aptX/LDAC, RAR: phần nào cần giấy phép/có rủi ro bằng sáng chế hoặc vượt cơ chế bảo vệ?
 22. Tính năng điều khiển từ xa, nhận thông báo/tin nhắn điện thoại và nhập giọng nói: xử lý dữ liệu cá nhân (kể cả của người khác hiện trên màn hình), âm thanh giọng nói có thuộc dữ liệu cá nhân nhạy cảm không, và cần đồng ý/thông báo gì?
+23. Giọng nói và nhân bản giọng (mẫu 3–5 giây): có thuộc dữ liệu nhạy cảm/sinh trắc theo Luật BVDLCN 91/2025 không; cần đồng ý bằng văn bản của chủ giọng đến mức nào; nghĩa vụ gắn nhãn nội dung do AI tạo khi phát công khai; việc giữ/không gỡ watermark của mô hình.
+24. Phát trực tiếp có AI trả lời bình luận: bình luận và tên khán giả là dữ liệu cá nhân của bên thứ ba — người phát có nghĩa vụ gì; điều khoản bot/giọng tổng hợp của từng nền tảng.
+25. Lớp phủ trợ giúp khi chơi game (đọc ảnh màn hình/cây trợ năng, không đọc bộ nhớ): rủi ro vi phạm điều khoản trò chơi/chống gian lận; trách nhiệm của tác giả nếu người dùng bị khoá tài khoản dù đã có cảnh báo và chế độ "Chơi sạch".
+26. Gói tri thức `.yuik` chắt lọc từ tài liệu có bản quyền, lưu cục bộ không chia sẻ: có là bản sao/phái sinh vi phạm không; ranh giới cho phép nghiên cứu cá nhân.
+27. AI tự chủ chạy lúc rảnh và tự vi chỉnh: miễn trừ có hiệu lực đến đâu khi AI tạo nội dung/hành động sau khi người dùng đã bật và đã xác nhận; ai chịu trách nhiệm khi người dùng đã bấm xác nhận theo đề xuất của AI.
+28. Suy luận cảm xúc/tải nhận thức từ giọng và nhịp gõ (cục bộ, mặc định tắt): có bị hạn chế theo Luật AI 134/2025 hay luật dữ liệu không.
 
 ---
 
@@ -214,3 +220,18 @@ Nguồn: ba tệp tư vấn mới của Gemini (xem OS `PLAN.md` §13 C80–C135
 | J11 | Giao thức kết nối (KDE Connect, Input Leap/Synergy, RFB, UPnP AV, IPP, ADB, SSH, WireGuard) | Viết theo mô tả công khai, không đọc/chép mã GPL; tên nhãn hiệu không dùng làm tên sản phẩm; scrcpy (Apache-2.0) chỉ học cách làm; ứng dụng phía điện thoại do người dùng tự cài. **Chưa đối chiếu chi tiết từng giao thức** | ❓ ⚖️ (F21) | Một dòng pháp lý mỗi giao thức trước khi `[~]` | OS P6.38–P6.45, P7.18 |
 | J12 | Thành phần độc quyền: AirPlay (xác thực của Apple), Miracast/HDCP, RAR, AAC/aptX/LDAC, H.264/H.265 | Bản mở của AirPlay dựa vào kỹ thuật đảo ngược; codec có bằng sáng chế/phí; RAR là định dạng đóng. **Chưa có ý kiến luật sư** | ❓ ⚖️ (F21) | AirPlay **không đưa vào phạm vi**; không bundle codec; RAR bỏ khỏi phạm vi đầu | OS P6.44, P6.46, P6.47, P4.33 |
 | J13 | Điều khiển từ xa, thông báo/tin nhắn điện thoại, micro/giọng nói | Có thể xử lý dữ liệu cá nhân của người khác (hiện trên màn hình, tin nhắn); âm thanh giọng nói có thuộc nhóm nhạy cảm không: **chưa kiểm**. Thiết kế: mặc định tắt, xác nhận vật lý, viền đỏ/đèn báo do host vẽ, không ghi nội dung vào nhật ký, bấm-để-nói | ❓ ⚖️ (F22; nối I7, I8) | Điều khoản nêu cần sự đồng ý khi xem/ghi hình máy người khác | OS P6.40, P6.43, P6.49 |
+
+
+## K. AI tự chủ, giọng nói, phát trực tiếp, lớp phủ game, gói người dùng (thêm 2026-11-21, đợt 9)
+
+Nguồn: tệp tư vấn Gemini "Yui-Genesis Symbiotic OS" (OS `PLAN.md` §13 C136–C171). Dòng "đã tra" có nguồn + ngày 2026-11-21; **❓ là chưa đọc điều khoản gốc**; ⚖️ là phải hỏi luật sư (câu hỏi F23–F28 ở §F). Mọi lời miễn trừ viết "tối đa trong phạm vi pháp luật cho phép"; **không có văn bản nào miễn được mọi trách nhiệm trong mọi trường hợp** (xem J1, F9, F15).
+
+| # | Chủ đề | Đã biết / chưa kiểm | Trạng thái | Việc cần làm | Task |
+|---|---|---|---|---|---|
+| K1 | Nhân bản giọng, watermark | **Đã tra:** VieNeu-TTS 0.5B Apache-2.0; **0.3B CC BY-NC 4.0 (phi thương mại)**; mẫu 3–5 s; watermark đầu ra bật sẵn; cần eSpeak NG (**giấy phép chưa kiểm**). Giọng có thể là dữ liệu nhạy cảm: chưa kiểm | 🟡 ❓ ⚖️ (F23) | Ghi đồng ý chủ giọng; không gỡ watermark; nhãn "AI" khi phát công khai; chặn bản NC ở bản thương mại | OS P5.23, P7.21 |
+| K2 | Phát trực tiếp, bình luận khán giả | Bình luận = dữ liệu bên thứ ba; **điều khoản bot/giọng tổng hợp từng nền tảng: chưa đọc** | ❓ ⚖️ (F24) | Không lưu danh tính, không ký ức dài hạn; mỗi nền tảng một dòng "đã đọc ngày …" mới được hỗ trợ | OS P5.25, P7.22 |
+| K3 | Lớp phủ game, chống gian lận, Cubiomes | **Đã tra:** Cubiomes thư viện **MIT** (đổi từ GPLv3 năm 2020), mô phỏng **Java Edition**; Cubiomes Viewer **GPL-3.0**. Điều khoản chống gian lận của từng game: chưa đọc | 🟡 ❓ ⚖️ (F25) | "Chơi sạch" mặc định; không đọc bộ nhớ; không chế độ né; cảnh báo | OS P5.24, P7.23 |
+| K4 | `.yuic` / `.yuik` | Bản chắt lọc là phái sinh của tài liệu nguồn; VRM/sprite/giọng có giấy phép riêng | ❓ ⚖️ (F26) | Cục bộ, không phân phối lại, hiện metadata giấy phép | OS P5.26, P7.24 |
+| K5 | AI tự chủ (phòng riêng), vi chỉnh | Miễn trừ giới hạn bởi luật bắt buộc; xoá ký ức không xoá được phần đã nằm trong adapter | ⚖️ (F27) | Mặc định tắt; xác nhận vật lý; nút dừng; nhật ký; rollback adapter | OS P5.22, P5.27, P7.25 |
+| K6 | Dữ liệu suy luận (cảm xúc, tải nhận thức) | Chưa kiểm luật | ❓ ⚖️ (F28) | Mặc định tắt, cục bộ, không lưu thô | OS P7.25 |
+| K7 | Thành phần AI khác (Viet-ASR, Silero VAD, YAMNet/BEATs-Lite, SmolVLM2-256M, Qwen3.5-0.8B) | Tư vấn ghi vài giấy phép; **chưa đọc bản gốc** | ❓ | Đọc từng bản gốc trước khi tích hợp (`THIRD-PARTY.md` §11) | OS P7.2 |
